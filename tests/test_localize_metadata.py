@@ -35,7 +35,7 @@ class LocalizeMetadataTests(unittest.TestCase):
         self.assertEqual(tm.call_count, 1)  # second hit served from the cache
         # The film's cover phrase rides along so the localized cover can be
         # re-titled with its translation.
-        self.assertEqual(tm.call_args.kwargs["cover_phrase"], "Original Title")
+        self.assertEqual(tm.call_args.kwargs["cover_phrase"], "Original *Title*")
         stored = json.loads((wd / "localize_scripts" / "pt.json").read_text())
         self.assertEqual(stored["title"], "Título PT")
         self.assertEqual(stored["cover_phrase"], "Frase *PT*")

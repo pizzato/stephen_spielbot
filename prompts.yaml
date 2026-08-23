@@ -817,7 +817,8 @@ translate_metadata:
       it punchy and roughly the same length (it must fit the same artwork), and
       if a word is wrapped in *asterisks* keep the asterisks around the
       corresponding translated word — they mark the accent colour, not
-      emphasis to reword.
+      emphasis to reword. Keep any line breaks it has (the same number of
+      lines, broken at the matching point).
 
     Respond with ONLY a JSON object:
     {"title": "...", "description": "...", "cover_phrase": "..."}.

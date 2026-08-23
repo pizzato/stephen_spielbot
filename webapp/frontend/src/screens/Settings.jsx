@@ -552,7 +552,7 @@ const CT_DEFAULTS = {
 function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
   const ct = { ...CT_DEFAULTS, ...(value || {}) }
   const set = (k, v) => onChange({ ...ct, [k]: v })
-  const [sample, setSample] = useState('The *Secret* Life of Deep Sea Giants')
+  const [sample, setSample] = useState('The Secret Life of Deep Sea Giants')
   const [portrait, setPortrait] = useState(false)
   const [preview, setPreview] = useState('')
   const [previewErr, setPreviewErr] = useState('')
@@ -632,12 +632,11 @@ function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
               </Field>
             </div>
             <div className="row gap-14 row--wrap">
-              <Field label="Accent words" hint="Which words get the accent colour and size — override per film by wrapping words in *asterisks* in its cover phrase.">
+              <Field label="Accent words" hint="Which word of a new film's title-derived cover phrase is wrapped in *asterisks* (the accent colour and size). Only marked words are accented — edit the film's phrase to move or remove them.">
                 <select className="select" value={ct.accent} onChange={(e) => set('accent', e.target.value)}>
                   <option value="none">None</option>
                   <option value="first_word">First word</option>
                   <option value="last_word">Last word</option>
-                  <option value="last_line">Last line</option>
                   <option value="longest_word">Longest word</option>
                 </select>
               </Field>
@@ -668,8 +667,8 @@ function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
             )}
           </div>
           <div className="stack gap-8" style={{ flex: '0 1 380px', minWidth: 260 }}>
-            <Field label="Preview text" hint="Sample only — real covers use each film's phrase.">
-              <input className="input" value={sample} maxLength={80} onChange={(e) => setSample(e.target.value)} />
+            <Field label="Preview text" hint="Sample only — real covers use each film's phrase. Without *asterisks* the accent rule marks a word; Enter forces a line break.">
+              <textarea className="textarea" rows={2} value={sample} maxLength={80} onChange={(e) => setSample(e.target.value)} />
             </Field>
             <Check checked={portrait} onChange={setPortrait} label="Portrait (Shorts)" />
             <div style={{ borderRadius: 'var(--r-md)', overflow: 'hidden', background: '#15171a', alignSelf: portrait ? 'center' : 'stretch', width: portrait ? 236 : undefined, aspectRatio: portrait ? '9 / 16' : '16 / 9' }}>

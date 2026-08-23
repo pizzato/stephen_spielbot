@@ -105,6 +105,8 @@ class CoverPhraseTests(unittest.TestCase):
     def test_derived_from_title_when_no_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(cover.cover_phrase_for(Path(tmp), "The Silent City: A Story"),
+                             "The Silent *City*")  # style rule written in as markup
+            self.assertEqual(cover.cover_phrase_for(Path(tmp), "The Silent City: A Story", "none"),
                              "The Silent City")
 
     def test_override_file_wins_and_is_capped(self):
@@ -118,7 +120,7 @@ class CoverPhraseTests(unittest.TestCase):
     def test_blank_override_falls_back_to_title(self):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "cover_phrase.txt").write_text("   \n")
-            self.assertEqual(cover.cover_phrase_for(Path(tmp), "Plain Title"), "Plain Title")
+            self.assertEqual(cover.cover_phrase_for(Path(tmp), "Plain Title"), "Plain *Title*")
 
 
 class CoverPhraseEndpointTests(unittest.TestCase):
@@ -134,21 +136,26 @@ class CoverPhraseEndpointTests(unittest.TestCase):
 
     def test_save_and_clear_round_trip(self):
         r = backend.save_cover_phrase(
-            backend.CoverPhraseBody(work_dir=str(self.wd), phrase="  SILENT\nCITY! "))
-        self.assertEqual(r["cover_phrase"], "SILENT CITY!")       # whitespace collapsed
-        self.assertEqual(r["cover_phrase_default"], "The Silent City")
-        self.assertEqual((self.wd / "cover_phrase.txt").read_text(), "SILENT CITY!")
+            backend.CoverPhraseBody(work_dir=str(self.wd), phrase="  SILENT  \r\n\n *CITY!* "))
+        self.assertEqual(r["cover_phrase"], "SILENT\n*CITY!*")   # spaces collapsed, break kept
+        self.assertEqual(r["cover_phrase_default"], "The Silent *City*")
+        self.assertEqual((self.wd / "cover_phrase.txt").read_text(), "SILENT\n*CITY!*")
 
         r = backend.save_cover_phrase(
             backend.CoverPhraseBody(work_dir=str(self.wd), phrase=""))
-        self.assertEqual(r["cover_phrase"], "The Silent City")    # back to derived
+        self.assertEqual(r["cover_phrase"], "The Silent *City*")  # back to derived
         self.assertFalse((self.wd / "cover_phrase.txt").exists())
 
     def test_saving_the_derived_phrase_clears_the_override(self):
         (self.wd / "cover_phrase.txt").write_text("OLD")
         backend.save_cover_phrase(
-            backend.CoverPhraseBody(work_dir=str(self.wd), phrase="The Silent City"))
+            backend.CoverPhraseBody(work_dir=str(self.wd), phrase="The Silent *City*"))
         self.assertFalse((self.wd / "cover_phrase.txt").exists())
+
+    def test_removing_the_accent_is_an_override(self):
+        backend.save_cover_phrase(
+            backend.CoverPhraseBody(work_dir=str(self.wd), phrase="The Silent City"))
+        self.assertEqual((self.wd / "cover_phrase.txt").read_text(), "The Silent City")
 
     def test_rejects_paths_outside_output_dir(self):
         with self.assertRaises(backend.HTTPException) as ctx:
