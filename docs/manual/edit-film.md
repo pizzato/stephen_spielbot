@@ -62,6 +62,14 @@ clips, so a film rendered without the style's
 fact, and one rendered with them can shed them. The choice is saved on the film, so
 every later rebuild (re-mix, re-voice, reassemble, localize) keeps it.
 
+One exception keeps your work: when the cut picked under [Versions](#upscale-video) is
+one a rebuild cannot reproduce — an [upscale](#upscale-video) or a
+[localized re-voicing](#localize) — the captions are drawn straight onto *that* cut,
+which keeps its resolution, and the burnt result is kept as a new version. Removing a
+burn always rebuilds from the scene clips (captions live in the pixels, so only a fresh
+picture is free of them), and the message says which picked cut that replaced — pick it
+again under Versions to get it back.
+
 The card also offers the caption file itself: **Download** hands you the SRT with
 timings — one button per language the film has (the original narration plus every
 saved [localization](#localize)), each timed to the published cut. It is the very
@@ -150,7 +158,7 @@ included — so the upscaled cut keeps the film's timing.
 
 The scene clips in the editor stay at the render size: the upscale is a *final version*,
 not a new set of scenes. Any later edit that rebuilds the film — a re-voiced or re-mixed
-song, burned-in subtitles, a trim, a re-shot scene — assembles from the render-size
+song, a trim, a re-shot scene — assembles from the render-size
 scenes again, so run **Upscale video** once more afterwards. The cached upscaled scenes
 make that quick: only scenes whose clip actually changed go back to the GPU (a new
 singer changes the audio mix, not the clips, so that is just the join), and the new
