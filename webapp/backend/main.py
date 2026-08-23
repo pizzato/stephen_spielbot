@@ -7169,6 +7169,7 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # settings, pre-filled so the form opens ready, and whether the
         # published cut carries them right now.
         "title_cards": _title_cards_form(wd, jc),
+        "title_cards_default_font": _title_cards_default_font(wd),
         "title_cards_applied": bool(_title_cards.applied_title_cards(wd, final_vid)),
         "title_card_images": _title_card_images(wd, jc),
         # Same publish/approval status the Films tab shows, so the review screen
@@ -8777,11 +8778,15 @@ def _title_cards_default_font(wd: Path) -> str:
 
 
 def _title_cards_form(wd: Path, jc: dict) -> dict:
-    """The saved title-card settings for the editor, with the font filled
-    from the style so the form opens ready."""
+    """The saved title-card settings for the editor; a card with no font of
+    its own shows the style's cover font, which is what it would render in."""
     cards = _title_cards.norm_title_cards(jc.get("title_cards"))
-    if not cards["font"]:
-        cards["font"] = _title_cards_default_font(wd)
+    default_font = None
+    for card in cards["cards"]:
+        if not card["font"]:
+            if default_font is None:
+                default_font = _title_cards_default_font(wd)
+            card["font"] = default_font
     return cards
 
 
@@ -8963,6 +8968,46 @@ def remix_title_card_image(body: TitleCardImageBody) -> dict:
     except Exception as e:
         raise HTTPException(400, f"Could not read that image: {e}")
     return {"ok": True, "card_id": card_id, "url": _busted_file_url(dest)}
+
+
+class TitleCardPreviewBody(BaseModel):
+    work_dir: str
+    card: dict
+
+
+@api.post("/api/remix/title-cards/preview")
+def remix_title_card_preview(body: TitleCardPreviewBody) -> Response:
+    """One card drawn by the exact code that renders the real thing, at the
+    film's aspect (a small frame keeps the round-trip snappy)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    card = _title_cards.norm_card(body.card)
+    # The real card is drawn at the final's own size, so preview at its aspect
+    # (the film's configured size when there is no final yet).
+    fw = fh = 0
+    final_path = gapp._final_path_for_work_dir(wd)
+    if final_path.exists():
+        try:
+            from pipeline.assembler import _get_video_dimensions
+            fw, fh = _get_video_dimensions(final_path)
+        except Exception:
+            fw = fh = 0
+    if not (fw and fh):
+        jc = _film_job_config(wd)
+        res_name = jc.get("resolution") or gapp.load_config().get("resolution", gapp._DEFAULT_RESOLUTION)
+        fw, fh = gapp._RESOLUTIONS.get(res_name, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
+    w = 480
+    h = max(2, round(w * fh / fw / 2) * 2)
+    with tempfile.TemporaryDirectory(prefix="titlecard-preview-") as td:
+        out = Path(td) / "card.png"
+        _title_cards.render_card(
+            out, w, h, card["text"] or _video_title_for(wd),
+            background=card["background"], color=card["color"],
+            image_path=_title_cards.card_image_path(wd, card["id"]),
+            font=card["font"] or _title_cards_default_font(wd),
+            text_color=card["text_color"], scale=card["scale"])
+        return Response(content=out.read_bytes(), media_type="image/png")
 
 
 @api.post("/api/remix/video-select")
