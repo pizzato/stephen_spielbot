@@ -66,8 +66,9 @@ The card also offers the caption file itself: **Download** hands you the SRT wit
 timings — one button per language the film has (the original narration plus every
 saved [localization](#localize)), each timed to the published cut. It is the very
 track publishing attaches, so it drops straight into YouTube Studio, a video editor,
-or any player that loads sidecar subtitles. The look of burned-in subtitles is set per
-style under [Settings → Subtitle style](settings.md#cover-first-frame).
+or any player that loads sidecar subtitles. The look of burned-in subtitles, and the
+timing of every track (minimum time on screen, two-line merging of short lines, a delay
+nudge), is set per style under [Settings → Subtitle style](settings.md#cover-first-frame).
 
 ### Titles & Credits
 

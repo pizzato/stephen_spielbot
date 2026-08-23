@@ -690,6 +690,7 @@ const SS_DEFAULTS = {
   font: '', scale: 1.0, bold: false, color: '#FFFFFF', position: 'bottom',
   align: 'center', outline: 1.0, outline_color: '#000000', shadow: false,
   card: false, card_color: '#000000', card_opacity: 0.55, margin: 4,
+  min_seconds: 2.5, delay: 0,
 }
 
 // Editor for a style's subtitle_style: controls beside a live preview frame
@@ -776,6 +777,16 @@ function SubtitleStyleEditor({ value, onChange, systemFonts, bundledFonts }) {
               <Field label="Outline colour">
                 <input className="input" type="color" value={st.outline_color}
                   onChange={(e) => set('outline_color', e.target.value)} style={{ maxWidth: 90, height: 38, padding: 4, cursor: 'pointer' }} />
+              </Field>
+            </div>
+            <div className="row gap-14 row--wrap">
+              <Field label="Minimum on screen" hint="Seconds. A shorter line joins the next one as a two-line caption, or is held longer. 0 = exactly as spoken or sung.">
+                <input className="input" type="number" min={0} max={10} step={0.5} value={st.min_seconds}
+                  onChange={(e) => set('min_seconds', +e.target.value)} style={{ maxWidth: 100 }} />
+              </Field>
+              <Field label="Delay" hint="Seconds to shift every caption later (negative = earlier) when the track reads early or late.">
+                <input className="input" type="number" min={-5} max={5} step={0.1} value={st.delay}
+                  onChange={(e) => set('delay', +e.target.value)} style={{ maxWidth: 100 }} />
               </Field>
             </div>
             <Check checked={!!st.bold} onChange={(v) => set('bold', v)} label="Bold" />

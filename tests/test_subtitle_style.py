@@ -102,3 +102,17 @@ class StylePlumbingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimingKeysTests(unittest.TestCase):
+    def test_defaults_and_clamps(self):
+        from pipeline.subtitle_style import norm_subtitle_style
+        d = norm_subtitle_style({})
+        self.assertEqual(d["min_seconds"], 2.5)
+        self.assertEqual(d["delay"], 0.0)
+        d = norm_subtitle_style({"min_seconds": 99, "delay": -9})
+        self.assertEqual(d["min_seconds"], 10)
+        self.assertEqual(d["delay"], -5)
+        d = norm_subtitle_style({"min_seconds": 0, "delay": "0.3"})
+        self.assertEqual(d["min_seconds"], 0)
+        self.assertEqual(d["delay"], 0.3)

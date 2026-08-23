@@ -1991,7 +1991,7 @@ def main(work_dir: Path) -> None:
             write_progress(status_file, 96, "Burning subtitles into the picture…")
             try:
                 from pipeline.captions import build_srt, burn_srt_into_video
-                srt_path = build_srt(work_dir)
+                srt_path = build_srt(work_dir, style=cfg.get("subtitle_style"))
                 if srt_path:
                     burn_srt_into_video(final_path, srt_path,
                                         style=cfg.get("subtitle_style"))

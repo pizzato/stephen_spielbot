@@ -317,6 +317,16 @@ def window_vocals(regions: list[tuple[float, float]], t0: float,
     return out
 
 
+def window_lines(spans: list[tuple[float, float]], t0: float,
+                 t1: float) -> list[list[float]]:
+    """The sung span of every line ``lines_in_window`` puts in [*t0*, *t1*),
+    clipped to the window, as offsets RELATIVE to t0 — one pair per line, in
+    the same order, so a scene's ``line_times`` line up with its ``sings``."""
+    return [[round(max(start, t0) - t0, 2), round(min(end, t1) - t0, 2)]
+            for start, end in spans
+            if min(end, t1) - max(start, t0) > 1.0 / FPS]
+
+
 def lines_in_window(lines: list[str], spans: list[tuple[float, float]],
                     t0: float, t1: float) -> list[str]:
     """The lyric lines whose sung span overlaps the window [*t0*, *t1*).

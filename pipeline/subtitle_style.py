@@ -39,6 +39,12 @@ DEFAULT_SUBTITLE_STYLE = {
     "card_color": "#000000",
     "card_opacity": 0.55,
     "margin": 4,                # distance from the edge, % of the picture height
+    # Timing (pipeline/captions.py): a cue shorter than min_seconds is merged
+    # with the next one on its scene into a two-line cue, or held longer;
+    # 0 = every line exactly as paced. delay shifts every cue later (seconds;
+    # negative = earlier) to nudge a track that reads early or late.
+    "min_seconds": 2.5,
+    "delay": 0.0,
 }
 
 # ASS numpad alignment: rows bottom/middle/top × columns left/centre/right.
@@ -62,6 +68,8 @@ def norm_subtitle_style(value) -> dict:
     d["outline"] = round(_clamp(src.get("outline", d["outline"]), 0, 4, d["outline"]), 1)
     d["card_opacity"] = round(_clamp(src.get("card_opacity", d["card_opacity"]), 0.05, 1.0, d["card_opacity"]), 2)
     d["margin"] = int(_clamp(src.get("margin", d["margin"]), 0, 40, d["margin"]))
+    d["min_seconds"] = round(_clamp(src.get("min_seconds", d["min_seconds"]), 0, 10, d["min_seconds"]), 2)
+    d["delay"] = round(_clamp(src.get("delay", d["delay"]), -5, 5, d["delay"]), 2)
     d["color"] = _hex_color(src.get("color"), d["color"])
     d["outline_color"] = _hex_color(src.get("outline_color"), d["outline_color"])
     d["card_color"] = _hex_color(src.get("card_color"), d["card_color"])

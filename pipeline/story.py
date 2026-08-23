@@ -799,6 +799,10 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
             extra["sings"] = "\n".join(
                 _song_timing.lines_in_window(lines, spans, t0, t1)).strip()
             extra["vocal_ranges"] = _song_timing.window_vocals(sung, t0, t1)
+            # When each ``sings`` line is heard, relative to the clip's own
+            # start — the caption track (pipeline/captions.py) dates its cues
+            # off these instead of pacing the lines evenly.
+            extra["line_times"] = _song_timing.window_lines(spans, t0, t1)
         else:
             extra["sings"] = "\n".join(lines[lo:hi]).strip()
 

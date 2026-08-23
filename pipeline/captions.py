@@ -147,7 +147,9 @@ def _lyric_cues(meta: dict, start: float,
     actually heard, measured off the track's vocal stem — so the lines are
     paced through the singing rather than the whole take, and an instrumental
     intro or break stays caption-free. Without ranges the whole take is
-    treated as sung."""
+    treated as sung. ``line_times`` (one [start, end] per line, stamped by
+    the same divide from the measured line spans) wins over both: each cue
+    then sits exactly where its line is sung."""
     lines = [l.strip() for l in str(meta.get("sings") or "").splitlines()
              if l.strip()]
     if not lines:
@@ -160,6 +162,18 @@ def _lyric_cues(meta: dict, start: float,
             continue
         if hi > lo:
             ranges.append((lo, hi))
+    times = []
+    for pair in (meta.get("line_times") or []):
+        try:
+            lo, hi = max(0.0, float(pair[0])), min(dur, float(pair[1]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        times.append((lo, max(hi, lo)))
+    if len(times) == len(lines):
+        # The divide measured (whisper-aligned, or energy-paced) when each
+        # line is heard — date the cues off that instead of re-pacing.
+        return [(start + lo, start + hi, line)
+                for (lo, hi), line in zip(times, lines)]
     if not ranges:
         ranges = [(0.0, dur)]
     voiced = sum(hi - lo for lo, hi in ranges)
@@ -172,6 +186,49 @@ def _lyric_cues(meta: dict, start: float,
                      start + _at_voiced(ranges, offset + span, end=True), line))
         offset += span
     return cues
+
+
+# A caption line longer than this wraps in the player, so two such cues
+# merged would stack to three or four lines — they are held instead.
+_MAX_LINE_CHARS = 42
+# Two cues further apart than this are not merged: the standing text would
+# bridge a real pause (an instrumental break) that should read clean.
+_MERGE_GAP = 1.5
+
+
+def _readable(cues: list[tuple[float, float, str]],
+              min_seconds: float) -> list[tuple[float, float, str]]:
+    """Hold every cue on screen for at least *min_seconds*.
+
+    Lyric lines and short sentences come out as one-second flashes nobody
+    can read. A short cue is first MERGED with the next one into a two-line
+    cue (each half one rendered line, so the stack never grows past two —
+    and never across a real pause, see _MERGE_GAP), and what still falls
+    short is EXTENDED — up to the next cue's start, so the track never
+    overlaps itself. Scene seams don't stop a merge: the timeline is one
+    continuous cut, and a song's line often straddles a seam."""
+    if min_seconds <= 0:
+        return list(cues)
+    out: list[tuple[float, float, str]] = []
+    i = 0
+    while i < len(cues):
+        start, end, text = cues[i]
+        i += 1
+        while end - start < min_seconds and i < len(cues):
+            nstart, nend, ntext = cues[i]
+            if (nstart - end > _MERGE_GAP
+                    or "\n" in text or "\n" in ntext
+                    or len(text) > _MAX_LINE_CHARS
+                    or len(ntext) > _MAX_LINE_CHARS):
+                break
+            text, end = f"{text}\n{ntext}", nend
+            i += 1
+        if end - start < min_seconds:
+            end = start + min_seconds
+            if i < len(cues):
+                end = min(end, cues[i][0])
+        out.append((start, max(end, start), text))
+    return out
 
 
 def _load_translations(work_dir: Path, lang: str) -> dict[int, str]:
@@ -210,8 +267,15 @@ def _scene_duration(work_dir: Path, sid: int, timing_lang: str | None) -> float:
 
 
 def build_srt(work_dir: Path, lang: str | None = None,
-              timing_lang: str | None = None, offset: float = 0.0) -> Path | None:
+              timing_lang: str | None = None, offset: float = 0.0,
+              style: dict | None = None) -> Path | None:
     """Write an SRT caption track for the film in *work_dir*.
+
+    ``style`` is the film's ``subtitle_style`` dict (pipeline/subtitle_style.py)
+    whose timing keys shape the track: ``min_seconds`` holds every cue on
+    screen at least that long (merging short neighbours into two-line cues,
+    see ``_readable``) and ``delay`` shifts the whole track. ``None`` keeps
+    the cues exactly as paced.
 
     ``offset`` shifts every cue later by that many seconds — the length of an
     opening title card prepended to the published cut (pipeline/title_cards.py).
@@ -286,14 +350,19 @@ def build_srt(work_dir: Path, lang: str | None = None,
     if not cues:
         return None
 
+    timed = _readable(cues, float((style or {}).get("min_seconds") or 0))
+    delay = float((style or {}).get("delay") or 0)
+    if delay:
+        timed = [(max(0.0, a + delay), max(0.0, b + delay), t) for a, b, t in timed]
+
     blocks = [
         f"{i}\n{_timestamp(start)} --> {_timestamp(end)}\n{text}\n"
-        for i, (start, end, text) in enumerate(cues, 1)
+        for i, (start, end, text) in enumerate(timed, 1)
     ]
     suffix = (f"_{lang}" if lang else "") + (f"_t-{timing_lang}" if timing_lang else "")
     out_path = work_dir / f"captions{suffix}.srt"
     out_path.write_text("\n".join(blocks), encoding="utf-8")
-    logger.info("Built %d caption cues → %s", len(cues), out_path)
+    logger.info("Built %d caption cues → %s", len(timed), out_path)
     return out_path
 
 
