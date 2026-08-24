@@ -531,6 +531,15 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                 f"{line['speaker']} says exactly, {line['delivery']}: \"{line['text']}\" "
                 f"{line['speaker']}'s lips close and all mouth movement stops the "
                 f"instant the line ends.")
+        # The clip renders longer than the words need, and the model pads the
+        # unclaimed tail with invented speech. A prose negative doesn't hold
+        # there; the positive end-state does — A/B'd on real takes 2026-08-24
+        # (scripts/h3_prompt_ab.py): gibberish tails on every take without it,
+        # gone with it.
+        spoken.append("After the final scripted line, no one speaks again for "
+                      "the rest of the clip: every mouth stays completely "
+                      "closed and still through to the last frame while the "
+                      "action simply continues.")
         sections.append("[DIALOGUE]\n" + "\n".join(spoken))
 
     # [SCREEN GEOGRAPHY] — place people in the frame before any action, with

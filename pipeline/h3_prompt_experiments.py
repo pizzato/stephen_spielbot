@@ -132,6 +132,8 @@ def apply_tail_silence(prompt: str, meta: dict) -> str:
     """
     if not _perf.norm_lines(meta.get("lines")) or not section(prompt, "DIALOGUE"):
         return prompt
+    if _TAIL_SILENCE.split(":")[0] in prompt:   # production carries it now
+        return prompt
     body = section(prompt, "DIALOGUE") + "\n" + _TAIL_SILENCE
     return _replace_section(prompt, "DIALOGUE", body)
 
