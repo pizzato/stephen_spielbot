@@ -80,16 +80,29 @@ def _reject_singing(meta: dict) -> None:
 # Experiment: dialogue markup  (<d>[English] … </d>)
 # ---------------------------------------------------------------------------
 
-def _markup_dialogue_lines(lines: list[dict]) -> list[str]:
+def speaker_ids(lines: list[dict]) -> dict[str, str]:
+    """Stable ``(S1)``-style speaker IDs in order of first line (official
+    base guide: subjects who speak use stable IDs such as (S1) and (S2))."""
+    sids: dict[str, str] = {}
+    for line in lines:
+        if line["speaker"] not in sids:
+            sids[line["speaker"]] = f"(S{len(sids) + 1})"
+    return sids
+
+
+def _markup_dialogue_lines(lines: list[dict], sids: dict | None = None) -> list[str]:
     """The [DIALOGUE] lines in H3's native markup.
 
     The ``<d>`` tag owns verbatim-ness (so "says exactly" relaxes to "says");
     the lips-close sentence is a separately proven instruction and stays.
+    With *sids*, each speaker carries their stable ``(S1)`` ID — the official
+    format's per-line voice binding.
     """
     out = []
     for line in lines:
+        sid = f" {sids[line['speaker']]}" if sids else ""
         out.append(
-            f"{line['speaker']} says, {line['delivery']}: "
+            f"{line['speaker']}{sid} says, {line['delivery']}: "
             f"<d>[English] {line['text']}</d> "
             f"{line['speaker']}'s lips close and all mouth movement stops the "
             f"instant the line ends.")
@@ -102,6 +115,25 @@ def apply_dialogue_markup(prompt: str, meta: dict) -> str:
         return prompt
     return _replace_section(prompt, "DIALOGUE",
                             "\n".join(_markup_dialogue_lines(lines)))
+
+
+_TAIL_SILENCE = ("After the final scripted line, no one speaks again for the "
+                 "rest of the clip: both mouths stay completely closed and "
+                 "still through to the last frame while the action simply "
+                 "continues.")
+
+
+def apply_tail_silence(prompt: str, meta: dict) -> str:
+    """An explicit end-state for the take's tail.
+
+    The clip renders longer than the words need, and H3 pads the unclaimed
+    tail with invented speech (the gibberish the render gate normally mutes).
+    Negatives don't hold there; this states the positive end-state instead.
+    """
+    if not _perf.norm_lines(meta.get("lines")) or not section(prompt, "DIALOGUE"):
+        return prompt
+    body = section(prompt, "DIALOGUE") + "\n" + _TAIL_SILENCE
+    return _replace_section(prompt, "DIALOGUE", body)
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +361,8 @@ def build_schema_prompt(meta: dict, *, style_note: str = "",
                         picture_names: list | None = None,
                         audio_names: list[str] | None = None,
                         labels: bool = False, markup: bool = False,
-                        reinforce: bool = False, positive: bool = False) -> str:
+                        reinforce: bool = False, positive: bool = False,
+                        sid: bool = False, tail: bool = False) -> str:
     """The scene in H3's native Ref2VA schema, content-parallel to baseline.
 
     Geography, camera and the preservation contract are lifted from
@@ -346,6 +379,7 @@ def build_schema_prompt(meta: dict, *, style_note: str = "",
                                  audio_names=audio_names)
     model = reference_model(picture_names or [], audio_names or [])
     lines = _perf.norm_lines(meta.get("lines"))
+    sids = speaker_ids(lines) if sid else {}
     seconds = _perf.render_seconds(meta)
     beats = _perf.norm_beats(meta.get("beats"), seconds)
     cast = [s["name"] for s in model["subjects"] if s["kind"] == "character"]
@@ -380,9 +414,18 @@ def build_schema_prompt(meta: dict, *, style_note: str = "",
         body.append(f"From {beat['t0']:g}s to {beat['t1']:g}s, "
                     f"{_sentence(beat['action'])}")
     if lines:
-        dlg = (_markup_dialogue_lines(lines) if markup
-               else section(base, "DIALOGUE").split("\n"))
+        if markup:
+            dlg = _markup_dialogue_lines(lines, sids or None)
+        else:
+            dlg = section(base, "DIALOGUE").split("\n")
+            if sids:
+                dlg = [next((line.replace(f"{n} says", f"{n} {t} says", 1)
+                             for n, t in sids.items()
+                             if line.startswith(f"{n} says")), line)
+                       for line in dlg]
         body.extend(dlg)
+        if tail:
+            body.append(_TAIL_SILENCE)
     camera = _perf._unterminated(meta.get("camera")) or \
         "locked off at chest height, slight handheld drift, no push, no zoom"
     body.append(f"The camera is {camera}.")
@@ -399,8 +442,20 @@ def build_schema_prompt(meta: dict, *, style_note: str = "",
     music = (f"N/A — the clip's own soundtrack is the provided music track. "
              f"{track}" if track else "N/A")
 
+    defs = _subject_definitions(model)
+    if sids:
+        # The official base guide's stable speaker IDs: bind each voice to its
+        # subject at definition time, then repeat the ID on every line.
+        for i, d in enumerate(defs):
+            for name, sid_tag in sids.items():
+                d = d.replace(f"is {name},", f"is {name} {sid_tag},")
+                d = d.replace(f"is {name}'s voice.",
+                              f"is the voice of {name} {sid_tag}; {name} "
+                              f"speaks only in this voice and no other voice "
+                              f"speaks {name}'s lines.")
+            defs[i] = d
     sections = [
-        "subject_definitions:\n" + "\n".join(_subject_definitions(model)),
+        "subject_definitions:\n" + "\n".join(defs),
         "summary:\n" + summary,
         "retention_analysis:\n" + "\n".join(_retention_analysis(model)),
         "detailed_description:\n[Shot 1] " + " ".join(x for x in body if x),
@@ -420,7 +475,11 @@ def build_schema_prompt(meta: dict, *, style_note: str = "",
 # ---------------------------------------------------------------------------
 
 VARIANTS = ("baseline", "positive-audio", "dialogue-markup", "schema",
-            "schema-labels", "schema-reinforce", "native-full")
+            "schema-labels", "schema-reinforce", "native-full",
+            # Round 2 — built from round 1's viewing notes: schema variants
+            # misbound speakers (no stable IDs), and every take babbled into
+            # its unclaimed tail.
+            "baseline-tail", "schema-sid", "native-v2")
 
 
 def build_variants(meta: dict, *, style_note: str = "",
@@ -440,6 +499,11 @@ def build_variants(meta: dict, *, style_note: str = "",
         "schema-reinforce": build_schema_prompt(meta, reinforce=True, **kw),
         "native-full": build_schema_prompt(meta, labels=True, markup=True,
                                            reinforce=True, positive=True, **kw),
+        "baseline-tail": apply_tail_silence(base, meta),
+        "schema-sid": build_schema_prompt(meta, sid=True, **kw),
+        "native-v2": build_schema_prompt(meta, labels=True, markup=True,
+                                         reinforce=True, positive=True,
+                                         sid=True, tail=True, **kw),
     }
 
 

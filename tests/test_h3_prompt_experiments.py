@@ -120,6 +120,27 @@ class VariantMatrixTests(unittest.TestCase):
         self.assertNotIn("no music", p)
         self.assertIn("Do not add subtitles", p)
 
+    def test_baseline_tail_adds_only_the_end_state(self):
+        p, base = self.v["baseline-tail"], self.v["baseline"]
+        self.assertIn("no one speaks again", p)
+        for name in ("REFERENCE USE", "SCREEN GEOGRAPHY", "NEGATIVES", "CAMERA"):
+            self.assertEqual(exp.section(p, name), exp.section(base, name))
+
+    def test_schema_sid_binds_every_speaker(self):
+        p = self.v["schema-sid"]
+        self.assertIn("MARA (S1), the person", p)
+        self.assertIn("ELLIS (S2), the person", p)
+        self.assertIn("MARA (S1) says exactly", p)
+        self.assertIn("speaks only in this voice", p)
+        # sid off leaves no IDs behind.
+        self.assertNotIn("(S1)", self.v["schema"])
+
+    def test_native_v2_composes_sid_labels_markup_tail(self):
+        p = self.v["native-v2"]
+        self.assertIn("<Subject 1> (S1) says", p)
+        self.assertIn("<d>[English]", p)
+        self.assertIn("no one speaks again", p)
+
     def test_singing_scenes_are_rejected(self):
         with self.assertRaises(ValueError):
             exp.build_variants({**self.demo["meta"], "singing": True})
