@@ -349,5 +349,41 @@ class EngagementChannelPathTests(unittest.TestCase):
         self.assertEqual(metrics.name, "metrics_UC9.json")
 
 
+class AuthFlowTimeoutTests(unittest.TestCase):
+    """The connect flow gives up instead of holding 'Waiting for Google…' forever."""
+
+    def _run_flow(self, run_local_server_effect):
+        flow_obj = mock.Mock()
+        flow_obj.run_local_server.side_effect = run_local_server_effect
+        installed = mock.Mock()
+        installed.from_client_secrets_file.return_value = flow_obj
+        secrets = Path(tempfile.mkdtemp()) / "client_secrets.json"
+        secrets.write_text("{}")
+        af = yt._AuthFlow()
+        with mock.patch.object(yt, "_google_imports",
+                               return_value=(None, None, installed, None, None)):
+            af.start(str(secrets))
+            af._thread.join(timeout=10)
+        return af, flow_obj
+
+    def test_timeout_produces_friendly_error_and_clears_running(self):
+        # The library surfaces a redirect timeout as an internal AttributeError;
+        # with the deadline already elapsed it must be translated + retryable.
+        with mock.patch.object(yt, "_AUTH_FLOW_TIMEOUT", 0.0):
+            af, flow_obj = self._run_flow(
+                AttributeError("'NoneType' object has no attribute 'replace'"))
+        self.assertFalse(af.running)
+        self.assertFalse(af.result["success"])
+        self.assertIn("Timed out", af.result["error"])
+        self.assertEqual(
+            flow_obj.run_local_server.call_args.kwargs["timeout_seconds"], 0.0)
+
+    def test_early_failure_keeps_original_error(self):
+        af, _ = self._run_flow(RuntimeError("bad client secrets"))
+        self.assertFalse(af.running)
+        self.assertFalse(af.result["success"])
+        self.assertIn("bad client secrets", af.result["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

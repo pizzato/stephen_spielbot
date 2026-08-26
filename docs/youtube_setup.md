@@ -74,6 +74,11 @@ Stephen Spielbot uses the YouTube Data API v3 to fetch channel comments and uplo
 5. Grant the requested permissions
 6. The channel appears in the Channels list
 
+If you don't finish the login (for example the window opened on the wrong
+machine — it always opens on the server, so connect from a browser on that
+machine, not over Tailscale), the flow gives up after **5 minutes** with a
+timeout error and the **Connect channel** button becomes clickable again.
+
 Each connected channel stores its own OAuth token under
 `~/.config/video-generator/` (`youtube_token_<key>.json`; the reserved "default"
 channel uses the legacy `youtube_token.json`) and refreshes automatically. You can
