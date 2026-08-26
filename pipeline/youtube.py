@@ -181,6 +181,12 @@ def check_auth_status(client_secrets_path: str, force: bool = False, channel: st
 
 # ── OAuth2 flow ───────────────────────────────────────────────────────────────
 
+# How long the local redirect server waits for Google before giving up, so an
+# abandoned login (e.g. the window opened on another machine) doesn't leave the
+# flow stuck on "Waiting for Google…" forever. Mirrors the X flow's 300s.
+_AUTH_FLOW_TIMEOUT = 300.0
+
+
 class _AuthFlow:
     def __init__(self):
         self.running = False
@@ -208,7 +214,19 @@ class _AuthFlow:
             try:
                 _Creds, _Req, InstalledAppFlow, build, _MFU = _google_imports()
                 flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
-                creds = flow.run_local_server(port=0, open_browser=True)
+                started = time.monotonic()
+                try:
+                    creds = flow.run_local_server(
+                        port=0, open_browser=True, timeout_seconds=_AUTH_FLOW_TIMEOUT)
+                except Exception as exc:
+                    # On timeout the library fails with an unhelpful internal
+                    # error (no redirect ever arrived) — translate it.
+                    if time.monotonic() - started >= _AUTH_FLOW_TIMEOUT:
+                        raise RuntimeError(
+                            f"Timed out after {int(_AUTH_FLOW_TIMEOUT // 60)} minutes waiting "
+                            "for the Google login — click Connect channel to try again."
+                        ) from exc
+                    raise
                 channel_id, channel_name = "", ""
                 try:
                     ytapi = build("youtube", "v3", credentials=creds)
