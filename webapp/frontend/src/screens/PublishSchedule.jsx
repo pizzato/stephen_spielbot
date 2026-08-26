@@ -45,7 +45,7 @@ const SORT_OPTIONS = [
 ]
 const validSort = (v) => (SORT_OPTIONS.some((o) => o.value === v) ? v : 'queue')
 
-export default function PublishSchedule({ go, meta = {} }) {
+export default function PublishSchedule({ go, meta = {}, showHistory }) {
   // Resolve a channel/account KEY to its friendly name (the rest of the app
   // shows names, not raw UC.../numeric ids).
   const chanName = (k) => (meta.config?.youtube_channels || []).find((c) => c.id === k)?.name || k
@@ -103,28 +103,27 @@ export default function PublishSchedule({ go, meta = {} }) {
     const plat = dest.slice(0, i), key = dest.slice(i + 1)
     return plat === 'yt' ? e.youtube?.channel === key : e.x?.account === key
   }
-  // Status buckets. A multi-platform entry can sit in several (done on YouTube
-  // while still queued on X), so this is a match, not a partition.
+  // Status buckets. A multi-platform entry can sit in several (queued on
+  // YouTube while errored on X), so this is a match, not a partition. Fully
+  // published/skipped entries never reach this view — they live on the
+  // Published tab.
   const inBucket = (e, bucket) => {
     const subs = [e.youtube, e.x].filter(Boolean)
     switch (bucket) {
       case 'queued': return !e.awaiting_approval && subs.some((s) => s.status === 'pending')
       case 'held': return !!e.awaiting_approval
       case 'publishing': return subs.some((s) => s.status === 'publishing')
-      case 'published': return subs.some((s) => s.status === 'done')
       case 'error': return subs.some((s) => s.status === 'error')
       default: return true
     }
   }
   const items = allItems.filter(matchesDest)
   const now = data.now || Date.now() / 1000
-  const isActive = (s) => s === 'pending' || s === 'publishing'
-  const activeItems = items.filter((e) => (isActive(e.youtube?.status) || isActive(e.x?.status)) && inBucket(e, statusFilter))
-  const doneItems = items.filter((e) => !isActive(e.youtube?.status) && !isActive(e.x?.status) && inBucket(e, statusFilter))
+  const activeItems = items.filter((e) => inBucket(e, statusFilter))
   const counts = {
     queued: items.filter((e) => e.youtube?.status === 'pending' || e.x?.status === 'pending').length,
     publishing: items.filter((e) => e.youtube?.status === 'publishing' || e.x?.status === 'publishing').length,
-    done: items.filter((e) => e.youtube?.status === 'done' || e.x?.status === 'done').length,
+    done: data.published_total || 0,
   }
   // Same option pattern as the Films list: counts on the dest-narrowed set,
   // zero-count buckets hidden unless currently selected.
@@ -133,7 +132,6 @@ export default function PublishSchedule({ go, meta = {} }) {
     { value: 'queued', label: 'Queued', n: 0 },
     { value: 'held', label: 'Held', n: 0 },
     { value: 'publishing', label: 'Publishing', n: 0 },
-    { value: 'published', label: 'Published', n: 0 },
     { value: 'error', label: 'Errors', n: 0 },
   ].map((o) => (o.value === 'all' ? o : { ...o, n: items.filter((e) => inBucket(e, o.value)).length }))
     .filter((o) => o.value === 'all' || o.n > 0 || o.value === statusFilter)
@@ -269,7 +267,7 @@ export default function PublishSchedule({ go, meta = {} }) {
 
         <Card span={4} className="reveal reveal-d1"><span className="label-sm">Queued</span><div className="metric mt-8">{counts.queued}</div><div className="muted" style={{ fontSize: 13 }}>waiting on cadence</div></Card>
         <Card span={4} className="reveal reveal-d2"><span className="label-sm">Publishing</span><div className="metric mt-8">{counts.publishing}</div><div className="muted" style={{ fontSize: 13 }}>uploading now</div></Card>
-        <Card span={4} className="reveal reveal-d3"><span className="label-sm">Published</span><div className="metric mt-8">{counts.done}</div><div className="muted" style={{ fontSize: 13 }}>released</div></Card>
+        <Card span={4} className="reveal reveal-d3"><span className="label-sm">Published</span><div className="metric mt-8">{counts.done}</div><div className="muted" style={{ fontSize: 13 }}>released — {showHistory ? <a href="#/publish" onClick={(ev) => { ev.preventDefault(); showHistory() }}>Published tab</a> : 'Published tab'}</div></Card>
 
         {loaded && allItems.length > 0 && (
           <div className="row center gap-10 row--wrap reveal" style={{ gridColumn: 'span 12' }}>
@@ -288,7 +286,6 @@ export default function PublishSchedule({ go, meta = {} }) {
           activeItems,
           'Nothing waiting. New finished videos appear here automatically; “Scan for unpublished” pulls in the backlog.',
           { extra: sortControl, noMove: sortBy !== 'queue' })}
-        {doneItems.length > 0 && section('History', 'Published, skipped or errored', doneItems, '')}
       </div>
     </div>
   )
