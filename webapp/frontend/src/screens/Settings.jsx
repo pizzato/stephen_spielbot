@@ -5,6 +5,141 @@ import SettingsAssets from './SettingsAssets.jsx'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
   globalAutomation, resolveAutomation, automationSource } from '../styleUtils.js'
 
+// ── Character turnaround sheet ───────────────────────────────────────────────
+// Several views of one character in one strip. The engine is picked HERE, per
+// generation, because the two trade off against each other: the image model
+// paints all four panels in seconds with a clean layout but only a likeness of
+// the face, while the camera orbit takes minutes and holds the real face (and
+// the real back of the head) through the turn. An orbit keeps its clip, so its
+// panels are frames the user can move — nobody has to accept the automatic pick.
+const SHEET_ENGINES = [
+  { key: 'image', label: 'Image model', hint: 'Seconds. Clean four-panel layout; the face is a likeness, and the back view is invented.' },
+  { key: 'orbit', label: 'Camera orbit', hint: 'Minutes on a worker. Films the character turning, so the face and the back of the head are really theirs — pick the frames afterwards.' },
+]
+
+function SheetPanelPicker({ clipUrl, duration, panels, busy, onApply, onCancel }) {
+  // One <video> per panel, each seeked to its own timestamp: the browser draws
+  // the frame, so scrubbing costs nothing and the preview is exactly the frame
+  // the backend will cut. Only Apply goes to the server.
+  const [times, setTimes] = useState(() => (panels?.length ? panels : [0]).map(Number))
+  const refs = useRef([])
+  useEffect(() => {
+    times.forEach((t, i) => {
+      const v = refs.current[i]
+      if (v && Number.isFinite(t) && Math.abs(v.currentTime - t) > 0.01) v.currentTime = t
+    })
+  }, [times])
+  const setAt = (i, t) => setTimes(times.map((old, j) => (j === i ? t : old)))
+  const addPanel = () => setTimes([...times, Math.min(duration || 0, (times[times.length - 1] || 0) + 0.5)])
+  const dropPanel = (i) => setTimes(times.filter((_, j) => j !== i))
+  const max = Math.max(0.1, (duration || 0) - 0.05)
+  return (
+    <div className="stack gap-12">
+      <span className="muted" style={{ fontSize: 12 }}>
+        Drag each panel to the frame you want — the sheet is stitched left to right in this order. No re-render: these are frames of the orbit already filmed.
+      </span>
+      <div className="row gap-8 row--wrap">
+        {times.map((t, i) => (
+          <div key={i} style={{ width: 168 }}>
+            <video ref={(el) => { refs.current[i] = el }} src={clipUrl} preload="auto" muted playsInline
+              style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', background: '#000' }}
+              onLoadedMetadata={(e) => { e.currentTarget.currentTime = t }} />
+            <input type="range" min={0} max={max} step={0.02} value={Math.min(t, max)} disabled={busy}
+              style={{ width: '100%' }} onChange={(e) => setAt(i, Number(e.target.value))} />
+            <div className="row gap-8" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="muted" style={{ fontSize: 11 }}>Panel {i + 1} · {t.toFixed(2)}s</span>
+              {times.length > 1 && <a role="button" tabIndex={0} className="muted" style={{ fontSize: 11 }}
+                onClick={() => dropPanel(i)}>Remove</a>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="row gap-8">
+        <Button variant="primary" icon="check" disabled={busy} onClick={() => onApply(times)}>
+          {busy ? 'Stitching…' : 'Use these frames'}
+        </Button>
+        {times.length < 8 && <Button variant="ghost" icon="plus" disabled={busy} onClick={addPanel}>Add panel</Button>}
+        <Button variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  )
+}
+
+function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
+  const [sheet, setSheet] = useState(initial || { status: 'none' })
+  const [engine, setEngine] = useState('image')
+  const [busy, setBusy] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [err, setErr] = useState('')
+  const rendering = sheet.status === 'rendering'
+  // A render outlives the request that started it, so poll until it lands.
+  useEffect(() => {
+    if (!rendering) return undefined
+    const id = setInterval(async () => {
+      try { setSheet((await api.characterSheet(char.id)).sheet) } catch { /* transient */ }
+    }, 4000)
+    return () => clearInterval(id)
+  }, [rendering, char.id])
+
+  const run = async (fn) => {
+    setBusy(true); setErr('')
+    try { setSheet((await fn()).sheet) } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  const build = () => run(() => api.buildCharacterSheet(char.id, engine, ''))
+  const apply = (times) => run(async () => {
+    const r = await api.pickCharacterSheetPanels(char.id, times)
+    setPicking(false)
+    return r
+  })
+
+  return (
+    <div className="stack gap-8" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <div className="row gap-8" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+        <span className="label-sm">Turnaround sheet</span>
+        {sheet.status === 'ready' && <span className="muted" style={{ fontSize: 11 }}>
+          {sheet.engine === 'orbit' ? 'From a camera orbit' : 'From the image model'}
+        </span>}
+      </div>
+      {disabled
+        ? <span className="muted" style={{ fontSize: 12 }}><Icon name="circle-info" /> {disabledNote}</span>
+        : (<>
+          {sheet.sheet_url && !rendering && (
+            <img src={sheet.sheet_url} alt="" onClick={() => onLightbox(sheet.sheet_url)}
+              style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', cursor: 'zoom-in' }} />
+          )}
+          {rendering && <span className="muted" style={{ fontSize: 12 }}>
+            <Icon name="spinner" /> Building the sheet{sheet.engine === 'orbit' ? ' — a camera orbit takes a few minutes on a worker' : '…'}
+          </span>}
+          {sheet.status === 'error' && sheet.error && <Banner kind="error">{sheet.error}</Banner>}
+          {err && <Banner kind="error">{err}</Banner>}
+          {picking
+            ? <SheetPanelPicker clipUrl={sheet.clip_url} duration={sheet.duration} panels={sheet.panels}
+                busy={busy} onApply={apply} onCancel={() => setPicking(false)} />
+            : (
+              <div className="row gap-8 row--wrap" style={{ alignItems: 'center' }}>
+                <select className="input" style={{ width: 150 }} value={engine} disabled={busy || rendering}
+                  onChange={(e) => setEngine(e.target.value)}>
+                  {SHEET_ENGINES.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
+                </select>
+                <Button variant="ghost" icon="wand-magic-sparkles" disabled={busy || rendering || !char.ref_image}
+                  onClick={build}>{sheet.status === 'ready' ? 'Build again' : 'Build sheet'}</Button>
+                {sheet.has_clip && sheet.status === 'ready' && !rendering &&
+                  <Button variant="ghost" icon="film" disabled={busy} onClick={() => setPicking(true)}>Adjust frames</Button>}
+                {sheet.status === 'ready' && !rendering &&
+                  <Button variant="ghost" icon="trash" disabled={busy}
+                    onClick={() => run(() => api.clearCharacterSheet(char.id))}>Remove sheet</Button>}
+              </div>
+            )}
+          <span className="muted" style={{ fontSize: 11.5 }}>
+            {char.ref_image
+              ? SHEET_ENGINES.find((e) => e.key === engine)?.hint
+              : 'Add a reference image first — the sheet is built from it.'}
+          </span>
+        </>)}
+    </div>
+  )
+}
+
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
 
@@ -1251,6 +1386,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [charBusy, setCharBusy] = useState('')  // character id with an image op in flight
   const [charBust, setCharBust] = useState(0)   // cache-bust token for character thumbnails
   const [charLightbox, setCharLightbox] = useState(null)  // character being viewed full-res
+  const [sheetLightbox, setSheetLightbox] = useState(null)  // turnaround sheet being viewed full-res
   const [charScope, setCharScope] = useState('')          // Characters tab: selected home ('' = Global)
   const [autoScope, setAutoScope] = useState('')          // Automation tab: selected scope ('' = Global)
   const [error, setError] = useState('')
@@ -2906,6 +3042,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
                     onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
                     aspect="1 / 1" busy={charBusy === c.id || dirty} />
+                  <CharacterSheet char={c} initial={c.sheet} disabled={dirty}
+                    disabledNote="Unsaved edits — Save settings to build a sheet."
+                    onLightbox={(url) => setSheetLightbox(url)} />
                 </div>
               ) : (
                 <span className="muted" style={{ fontSize: 12 }}>Save settings, then upload or generate a reference image that pins this character's look (FLUX.2 only).</span>
@@ -2998,6 +3137,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   title={c.name || 'Character'} onClose={() => setCharLightbox(null)} />
               )
             })()}
+            {sheetLightbox && (
+              <ImageLightbox fallback={sheetLightbox} title="Turnaround sheet"
+                onClose={() => setSheetLightbox(null)} />
+            )}
           </>)
         })()}
 

@@ -1306,6 +1306,105 @@ def characters_portrait(body: CharacterPortrait) -> dict:
     return _character_response(cfg)
 
 
+# ── Character turnaround sheets ──────────────────────────────────────────────
+# Several views of one character in one strip, built by whichever engine the
+# user picks AT GENERATION TIME (see gapp.generate_character_sheet). An orbit
+# sheet keeps its clip, so its panels can be re-picked frame by frame without
+# another render. Rendering runs on a daemon thread — the orbit takes minutes
+# and an HTTP request has no business holding that open — and the UI polls
+# GET /api/characters/sheet until the status leaves "rendering".
+
+
+class CharacterSheet(BaseModel):
+    char_id: str
+    engine: str = "image"          # "image" (one pass) | "orbit" (H3 frames)
+    extra_prompt: str = ""
+
+
+class CharacterSheetPanels(BaseModel):
+    char_id: str
+    times: list[float]
+
+
+_sheet_jobs: set[str] = set()      # char_ids with a sheet render in flight
+_sheet_lock = threading.Lock()
+
+
+def _sheet_payload(char_id: str) -> dict:
+    """Sheet state plus the URLs of the artefacts, cache-busted by mtime so a
+    re-picked sheet actually reloads in the browser."""
+    state = dict(gapp.character_sheet_state(char_id))
+    _, sheet, clip, _ = gapp._sheet_paths(char_id)
+    state["sheet_url"] = _busted_file_url(sheet) if sheet.exists() else ""
+    state["clip_url"] = _busted_file_url(clip) if clip.exists() else ""
+    with _sheet_lock:
+        if char_id in _sheet_jobs:
+            state["status"] = "rendering"
+    return {"ok": True, "sheet": state}
+
+
+def _sheet_in_background(char_id: str, engine: str, extra_prompt: str, name: str) -> None:
+    """Daemon-thread target: build one character's sheet, tracked so the
+    Activity screen shows the worker is busy (an orbit holds it for minutes)."""
+    try:
+        with _track_op(f"Building {name}'s character sheet",
+                       "camera orbit" if engine == "orbit" else "image model"):
+            gapp.generate_character_sheet(char_id, engine, extra_prompt)
+    except Exception:
+        gapp.logger.warning("Character sheet failed for %s", char_id, exc_info=True)
+    finally:
+        with _sheet_lock:
+            _sheet_jobs.discard(char_id)
+
+
+@api.post("/api/characters/sheet")
+def characters_sheet(body: CharacterSheet) -> dict:
+    """Start a sheet render and return immediately; poll for the result."""
+    if body.engine not in gapp.SHEET_ENGINES:
+        raise HTTPException(400, f"Unknown sheet engine {body.engine!r}.")
+    try:
+        char = gapp._find_character(gapp.load_config(), body.char_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not char.get("ref_image"):
+        raise HTTPException(400, "This character needs a reference image before a sheet can be built.")
+    with _sheet_lock:
+        if body.char_id in _sheet_jobs:
+            raise HTTPException(409, "A sheet is already being built for this character.")
+        _sheet_jobs.add(body.char_id)
+    threading.Thread(
+        target=_sheet_in_background,
+        args=(body.char_id, body.engine, body.extra_prompt, char.get("name") or "the character"),
+        daemon=True).start()
+    return _sheet_payload(body.char_id)
+
+
+@api.get("/api/characters/sheet")
+def characters_sheet_state(char_id: str = Query(...)) -> dict:
+    return _sheet_payload(char_id)
+
+
+@api.post("/api/characters/sheet/panels")
+def characters_sheet_panels(body: CharacterSheetPanels) -> dict:
+    """Re-stitch an orbit sheet from hand-picked frames of its own clip."""
+    with _sheet_lock:
+        if body.char_id in _sheet_jobs:
+            raise HTTPException(409, "This character's sheet is still being built.")
+    try:
+        gapp.repick_character_sheet(body.char_id, body.times)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    return _sheet_payload(body.char_id)
+
+
+@api.post("/api/characters/sheet/clear")
+def characters_sheet_clear(body: CharacterRef) -> dict:
+    gapp.clear_character_sheet(body.char_id)
+    return _sheet_payload(body.char_id)
+
+
 # ── Per-script characters (main-character consistency) ───────────────────────
 # A script carries its OWN cast, identified by the LLM at generation time and
 # living in the work dir (not the global catalogue). The editor's Characters tab

@@ -83,6 +83,12 @@ export const api = {
   selectCharacterImage: (charId, versionId) => req('POST', '/characters/image/select', { char_id: charId, version_id: versionId }),
   deleteCharacterImage: (charId, versionId) => req('POST', '/characters/image/delete', { char_id: charId, version_id: versionId }),
   generateCharacterPortrait: (charId, extraPrompt) => req('POST', '/characters/portrait', { char_id: charId, extra_prompt: extraPrompt || '' }),
+  // Turnaround sheets: the engine is chosen per generation, and an orbit sheet's
+  // panels can be re-picked from its kept clip without another render.
+  characterSheet: (charId) => req('GET', `/characters/sheet?char_id=${encodeURIComponent(charId)}`),
+  buildCharacterSheet: (charId, engine, extraPrompt) => req('POST', '/characters/sheet', { char_id: charId, engine, extra_prompt: extraPrompt || '' }),
+  pickCharacterSheetPanels: (charId, times) => req('POST', '/characters/sheet/panels', { char_id: charId, times }),
+  clearCharacterSheet: (charId) => req('POST', '/characters/sheet/clear', { char_id: charId }),
 
   // Per-script characters (main-character consistency). Job-scoped: they live in
   // the script's own work dir, separate from the global catalogue above. Each
