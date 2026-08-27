@@ -112,6 +112,7 @@ field. These engines ship:
 | **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (4 steps instead of 15) on the full non-pruned transformer — measured ~1.9× faster per scene | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 | **MiniMax H3 33B Ref2VA** (opt-in) | Not a scene I2V engine: takes character portraits and voice clips instead of a first frame and generates picture + spoken dialogue together. Only [performance films](performance_films.md) use it | MiniMax H3 Community License |
 | **MiniMax H3 33B Ref2VA Turbo** (opt-in) | The same, with the distilled few-step LoRA — measured ~2.3× faster (10.2 min vs 22.9 min for a 10 s scene at 704×1280 on a GB10) | MiniMax H3 Community License (LoRA itself Apache-2.0) |
+| **MiniMax H3 33B Ref2VA Turbo (LightX2V)** (opt-in) | The same again, on LightX2V's 4-step LoRA distilled **on Ref2VA** rather than on ordinary scenes — measured 2× faster than the default w4a8 at equal spoken accuracy, without the over-sharpened distillation look. Softer than the base engine | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 
 LTX 2.5 notes:
 
@@ -272,7 +273,19 @@ huggingface-cli download Kijai/MiniMax-H3-experimental minimax_h3_ref2va_pruned_
 # performance films — minimax-h3-ref (pruned) and minimax-h3-ref-turbo (full):
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+
+# performance films — minimax-h3-ref-turbo-lx2v (same full DiT, Ref2VA-trained LoRA):
+huggingface-cli download lightx2v/Minimax-h3-Turbo minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors --local-dir models/loras --local-dir-use-symlinks False
 ```
+
+!!! note "That last LoRA needs its keys renamed"
+    LightX2V ship generic-ComfyUI key names (`diffusion_model.blocks.N.…`) and
+    the H3 turbo node maps bare ones (`blocks.N.…`). Loaded as downloaded it
+    matches nothing and the scene renders at 4 steps with **no LoRA applied** —
+    no error, just a bad take. Installing from Settings → Infrastructure does
+    the rename for you; by hand, run `h3_ref2v_lx2v_fixup` from
+    `scripts/download_models.sh`, which rewrites the header and drops the
+    original.
 
 ## Music engines (per style)
 

@@ -185,7 +185,21 @@ class ReferenceEngineRegistryTests(unittest.TestCase):
         self.assertIn("ltx25", i2v)
         self.assertNotIn("ltx23", i2v)
         self.assertEqual(ref, {"minimax-h3-ref", "minimax-h3-ref-turbo",
-                               "minimax-h3-ref-w4a8"})
+                               "minimax-h3-ref-turbo-lx2v", "minimax-h3-ref-w4a8"})
+
+    def test_lightx2v_reference_turbo_rides_the_converted_lora(self):
+        # LightX2V's Ref2VA LoRA ships with generic-ComfyUI key names, which
+        # MiniMaxH3TurboLoRA cannot map — scripts/download_models.sh strips the
+        # prefix on install. So the file the engine LOADS is derived and must not
+        # be expected in the download list; the file it is derived FROM must be.
+        eng = engines.resolve_reference({}, "minimax-h3-ref-turbo-lx2v")
+        files = {m["file"] for m in eng["models"]}
+        self.assertNotIn(eng["lora"], files)
+        self.assertIn(eng["lora_source"], files)
+        self.assertNotIn("pruned", eng["unet"])
+        self.assertEqual(eng["workflow"], "h3_ref2v_turbo.json")
+        # Opt-in only: one scene at one seed is not grounds to move the default.
+        self.assertNotEqual(engines.DEFAULT_REFERENCE_ENGINE, eng["key"])
 
     def test_reference_workflows_exist_and_are_wired(self):
         import json

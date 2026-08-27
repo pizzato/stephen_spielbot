@@ -371,6 +371,66 @@ VIDEO_ENGINES: dict[str, dict] = {
                    "minimax_h3_turbo_4step_ckpt500.safetensors", "models/loras"),
         ],
     },
+    "minimax-h3-ref-turbo-lx2v": {
+        "key": "minimax-h3-ref-turbo-lx2v",
+        "label": "MiniMax H3 33B Ref2VA Turbo (LightX2V)",
+        "sub": "Faster Ref2VA · Ref2VA-trained 4-step LoRA · softer than base · restricted license",
+        "family": "minimax",
+        "reference": True,
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        # Same graph and base as minimax-h3-ref-turbo; the LoRA is the difference.
+        # ckpt500 is an FL2VA/T2VA distill pointed at Ref2VA, which is where its
+        # over-sharpened look comes from; LightX2V publish one trained ON Ref2VA.
+        # Measured on s1, one acted 14 s scene (704×1280, 345 frames, same seed,
+        # two speakers, two portraits + two voice refs) against the other two
+        # reference engines:
+        #   w4a8 (default)  40.2 min · speech 0.938 · edge energy 3.40
+        #   ref-turbo       19.7 min · speech 0.969 · edge energy 5.16  ← the crunch
+        #   this engine     19.6 min · speech 0.969 · edge energy 2.76
+        # So: half the wall clock of w4a8 at equal-or-better spoken accuracy, and
+        # the distillation crunch is gone. It errs SOFT rather than sharp, and
+        # drifted further from the reference wardrobe than w4a8 did — one scene at
+        # one seed, which is why this is opt-in and w4a8 stays the default.
+        "workflow": "h3_ref2v_turbo.json",
+        "steps": 4,
+        "lease_seconds": 14400,
+        # Non-pruned DiT as with ref-turbo. This LoRA does not adapt adaln_proj at
+        # all (so the pruned bases would not break it), but it was distilled on the
+        # full checkpoint and that is what the measurement above used.
+        "unet": "minimax_h3_ref2va_int8_convrot.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        # DERIVED from the downloaded file, not downloaded under this name:
+        # LightX2V ship generic-ComfyUI keys (diffusion_model.blocks.N…) while
+        # MiniMaxH3TurboLoRA builds its key map from bare module names, so the
+        # prefix is stripped at install time (scripts/download_models.sh). Loaded
+        # unstripped the node matches nothing and silently renders 4 steps with no
+        # LoRA at all, so the installer writes this name only after converting.
+        "lora": "minimax_h3_ref2v_turbo_4step_v0.1_h3node.safetensors",
+        "lora_source": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "requires_node": "MiniMaxH3TurboSampler",
+        "probe": ("UNETLoader", "unet_name", "minimax_h3_ref2va_int8_convrot.safetensors"),
+        "models": [
+            _model("Comfy-Org/MiniMax-H3",
+                   "diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_fp16.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+            _model("lightx2v/Minimax-h3-Turbo",
+                   "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+                   "models/loras"),
+        ],
+    },
     "minimax-h3-ref-w4a8": {
         "key": "minimax-h3-ref-w4a8",
         "label": "MiniMax H3 33B Ref2VA W4A8",

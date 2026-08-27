@@ -107,6 +107,56 @@ download() {
     echo "  [done] $filename ($size)"
 }
 
+# ── LightX2V Ref2VA turbo LoRA: rename its keys for the H3 turbo node ─────────
+# LightX2V ship generic-ComfyUI keys (diffusion_model.blocks.N.…) while
+# ComfyUI-MiniMax-H3-Turbo's loader builds its key map from bare module names
+# (blocks.N.…). Left unstripped the node matches NOTHING and the render quietly
+# produces 4 steps with no LoRA at all, so the converted file is the only one
+# kept. Renaming keys leaves the tensor payload untouched — this rewrites the
+# safetensors header and streams the data block through, so no torch needed.
+h3_ref2v_lx2v_fixup() {
+    local raw="$COMFY_DIR/models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+    local out="$COMFY_DIR/models/loras/minimax_h3_ref2v_turbo_4step_v0.1_h3node.safetensors"
+
+    [[ -f "$raw" ]] || return 0
+    if [[ -f "$out" ]]; then
+        echo "  [skip] $(basename "$out") (already converted)"
+        rm -f "$raw"
+        return 0
+    fi
+
+    echo "  [convert] $(basename "$raw") → $(basename "$out")"
+    if ! python3 - "$raw" "$out.part" <<'PY'
+import json, shutil, sys
+
+PREFIX = "diffusion_model."
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, "rb") as f:
+    header = json.loads(f.read(int.from_bytes(f.read(8), "little")))
+    meta = dict(header.pop("__metadata__", {}))
+    if not header or not all(k.startswith(PREFIX) for k in header):
+        sys.exit("unexpected key layout — refusing to convert")
+    out = {k[len(PREFIX):]: v for k, v in header.items()}
+    meta["converted_from"] = "lightx2v/Minimax-h3-Turbo minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16"
+    meta["conversion"] = "stripped 'diffusion_model.' key prefix for ComfyUI-MiniMax-H3-Turbo"
+    out["__metadata__"] = meta
+    blob = json.dumps(out).encode()
+    blob += b" " * (-len(blob) % 8)          # keep the data block 8-byte aligned
+    with open(dst, "wb") as g:
+        g.write(len(blob).to_bytes(8, "little"))
+        g.write(blob)
+        shutil.copyfileobj(f, g, 1024 * 1024)
+PY
+    then
+        echo "  [warn] LoRA key conversion failed — minimax-h3-ref-turbo-lx2v will not work"
+        rm -f "$out.part"
+        return 0
+    fi
+    mv "$out.part" "$out"
+    rm -f "$raw"
+    echo "  [done] $(basename "$out") ($(du -sh "$out" | cut -f1))"
+}
+
 # ── Targeted per-engine download (Settings "Download" button) ─────────────────
 # ENGINE_MODELS="repo|remote|dir;repo|remote|dir;…" downloads just those files,
 # reusing the resolved hf CLI + download() (skip-if-present + split_files flatten),
@@ -120,6 +170,7 @@ if [[ -n "${ENGINE_MODELS:-}" ]]; then
         IFS='|' read -r _repo _remote _dir <<< "$_spec"
         download "$_repo" "$_remote" "$_dir"
     done
+    h3_ref2v_lx2v_fixup   # no-op unless that LoRA is one of the files above
     echo "✅ Engine model download complete."
     exit 0
 fi
