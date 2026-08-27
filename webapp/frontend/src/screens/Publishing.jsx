@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react'
 import { Segmented } from '../components.jsx'
 import PublishSchedule from './PublishSchedule.jsx'
+import PublishApprovals from './PublishApprovals.jsx'
 import PublishHistory from './PublishHistory.jsx'
 import Publish from './Publish.jsx'
 
-// Top-level "Publishing" page: the scheduled publish queue, the published
-// history, and the manual per-film publisher, as three tabs. Deep links to a
-// specific film (#/publish/<slug>, e.g. the "Publish" button on Films/Queue)
-// open the manual tab with that film selected; otherwise it opens on the
-// schedule.
+// Top-level "Publishing" page: the scheduled publish queue, the approval
+// inbox, the published history, and the manual per-film publisher, as tabs.
+// Deep links to a specific film (#/publish/<slug>, e.g. the "Publish" button
+// on Films/Queue) open the manual tab with that film selected; otherwise it
+// opens on the schedule.
 const TABS = [
   { value: 'schedule', label: 'Schedule' },
+  { value: 'approvals', label: 'Approvals' },
   { value: 'history', label: 'Published' },
   { value: 'manual', label: 'Publish a film' },
 ]
@@ -34,7 +36,8 @@ export default function Publishing({ go, meta, initialWorkDir }) {
         <Segmented options={TABS} value={tab} onChange={setTab} />
       </div>
 
-      {tab === 'schedule' && <PublishSchedule go={go} meta={meta} showHistory={() => setTab('history')} />}
+      {tab === 'schedule' && <PublishSchedule go={go} meta={meta} showHistory={() => setTab('history')} showApprovals={() => setTab('approvals')} />}
+      {tab === 'approvals' && <PublishApprovals meta={meta} />}
       {tab === 'history' && <PublishHistory meta={meta} />}
       {tab === 'manual' && <Publish initialWorkDir={initialWorkDir} go={go} />}
     </div>
