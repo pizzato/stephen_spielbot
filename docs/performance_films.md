@@ -438,6 +438,7 @@ film can hold two kinds of scene:
 |---|---|---|
 | `minimax-h3-ref-w4a8` (default) | ~6.6 min per 10 s scene | 4-bit weights, **15 real steps** — turbo's speed without the distillation look. Needs ComfyUI ≥ 0.31.0 |
 | `minimax-h3-ref-turbo` | ~6 min | Distilled 4-step LoRA on the full 34 GB checkpoint — fastest, but over-saturated and over-sharpened |
+| `minimax-h3-ref-turbo-lx2v` | half of w4a8 | LightX2V's 4-step LoRA on the same 34 GB checkpoint, this one distilled **on Ref2VA** — no distillation crunch, but softer than the base and looser on reference wardrobe |
 | `minimax-h3-ref` | ~23 min | 15 steps + EasyCache on the 21 GB pruned checkpoint — the fidelity reference |
 
 Measured on a DGX Spark GB10, same shot and seed throughout (704×1280): edge
@@ -445,6 +446,14 @@ energy 4.2 for w4a8 against turbo's 5.5 (and 6.1 at 8 steps), with the base
 engine at 4.4 — the "over-sharpened" look is the distillation, not the step
 count, and w4a8 avoids it at turbo's wall clock. Download them from
 Settings → Infrastructure like any other engine; see [models](models.md).
+
+`minimax-h3-ref-turbo-lx2v` was measured separately, on one 14 s two-speaker
+acted scene at one seed (704×1280, 345 frames): **19.6 min against w4a8's 40.2**,
+spoken-line accuracy 0.969 against 0.938, edge energy 2.76 against w4a8's 3.40
+and `ref-turbo`'s 5.16. The crunch that rules out `ref-turbo` comes from a LoRA
+distilled for ordinary scenes and pointed at Ref2VA; this one was trained on
+Ref2VA and does not show it. It errs soft instead, and drifted further from the
+reference wardrobe than w4a8 did — hence opt-in, with w4a8 still the default.
 
 **Sampling steps** is ONE knob beneath both pickers: it overrides the step count of every
 MiniMax H3 render in the style — narrated-scene I2V and acted-scene Ref2VA alike. 0 keeps
