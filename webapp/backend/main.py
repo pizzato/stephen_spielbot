@@ -12360,9 +12360,9 @@ def _ordered_publish_queue(cfg: dict, q: list[dict]) -> list[dict]:
 
 def _publish_entry_active(e: dict) -> bool:
     """True while an entry still belongs on the Publishing queue view — a
-    release waiting/in flight, or an error to look at. Fully terminal
-    (published/skipped) entries are history, served by /api/publish/history."""
-    return any((e.get(p) or {}).get("status") in ("pending", "publishing", "error")
+    release waiting or in flight. Everything terminal (published, skipped,
+    errored out) is history, served by /api/publish/history."""
+    return any((e.get(p) or {}).get("status") in ("pending", "publishing")
                for p in ("youtube", "x"))
 
 
@@ -12430,9 +12430,9 @@ def publish_queue_list() -> dict:
 
 @api.get("/api/publish/history")
 def publish_history_list() -> dict:
-    """Terminal publish-queue entries — the published (and skipped) record,
-    newest first. Split out of /api/publish/queue so the queue view stays
-    light; the Publishing page shows these on its own Published tab."""
+    """Terminal publish-queue entries — the published (and skipped or errored)
+    record, newest first. Split out of /api/publish/queue so the queue view
+    stays light; the Publishing page shows these on its own Published tab."""
     _reconcile_publish_queue()
     hist = [e for e in pq.load_queue() if not _publish_entry_active(e)]
 
@@ -15899,6 +15899,13 @@ def _reconcile_publish_queue() -> None:
         except Exception:
             meta = None
         yt_sub, x_sub = e.get("youtube") or {}, e.get("x") or {}
+        if meta is None and e.get("work_dir") and p.exists():
+            # job.json unreadable but the directory is there — a transient read
+            # (e.g. racing a job.json rewrite), not a deletion. Stamping 'work
+            # dir missing' here is how entries for live films got stuck in
+            # error forever. Touch nothing this pass.
+            keep.append(e)
+            continue
         if meta is None:
             # The film's files are gone (deleted by hand, or before the delete
             # endpoints closed entries out). Keep the entry only for what still
@@ -15926,6 +15933,22 @@ def _reconcile_publish_queue() -> None:
                     changed = True
             continue
         keep.append(e)
+        # A 'work dir missing' error on a film whose dir is readable is
+        # disproven — the dir came back (a re-render reusing the name) or the
+        # stamp was a transient read failure. Nothing ever published → close as
+        # skipped so it leaves the schedule; ids in job.json → it did publish.
+        for sub, id_key, meta_id, meta_url in (
+                (yt_sub, "video_id", "youtube_video_id", "youtube_url"),
+                (x_sub, "tweet_id", "x_tweet_id", "x_url")):
+            if not (sub.get("status") == "error" and sub.get("error") == "work dir missing"):
+                continue
+            if meta.get(meta_id):
+                sub.update(status="done", url=meta.get(meta_url), error=None,
+                           published_at=sub.get("released_at") or time.time())
+                sub[id_key] = meta.get(meta_id)
+            else:
+                sub.update(status="skipped", error=None)
+            changed = True
         # The publish target is resolved live at upload time (_claim_and_post_*),
         # so re-resolve it here while the release is still ahead of us. An entry
         # enqueued before its style had its own channel froze the first-channel
