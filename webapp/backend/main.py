@@ -12358,15 +12358,26 @@ def _ordered_publish_queue(cfg: dict, q: list[dict]) -> list[dict]:
     return items
 
 
+def _publish_entry_active(e: dict) -> bool:
+    """True while an entry still belongs on the Publishing queue view — a
+    release waiting or in flight. Everything terminal (published, skipped,
+    errored out) is history, served by /api/publish/history."""
+    return any((e.get(p) or {}).get("status") in ("pending", "publishing")
+               for p in ("youtube", "x"))
+
+
 @api.get("/api/publish/queue")
 def publish_queue_list() -> dict:
     cfg = gapp.load_config()
     _reconcile_publish_queue()
     q = pq.load_queue()
     now = time.time()
+    # Cadence summaries need the WHOLE queue (done history seeds the clocks),
+    # but the view — and the per-entry scoring below — only pays for the
+    # entries still in play; published/skipped history has its own endpoint.
     chans, accts = _publish_cadence_status(cfg, q, now)
     skip_comment = bool(cfg.get("publish_schedule_skip_comment_requests", True))
-    ordered = _ordered_publish_queue(cfg, q)
+    ordered = _ordered_publish_queue(cfg, [e for e in q if _publish_entry_active(e)])
     for e in ordered:          # ensure interest/views chips render for every entry
         _publish_entry_scores(e, cfg)
         # Surface the approval hold so the UI can mark it instead of showing it as
@@ -12407,11 +12418,31 @@ def publish_queue_list() -> dict:
                 best = (proj, e)
     if best is not None:
         best[1]["is_next"] = True
+    published_total = sum(1 for e in q if any(
+        (e.get(p) or {}).get("status") == "done" for p in ("youtube", "x")))
     return {"items": ordered, "channels": chans, "accounts": accts,
             "enabled": bool(cfg.get("publish_schedule_enabled")),
             "skip_comment": skip_comment,
             "sort": cfg.get("publish_sort_order") or "queue",
+            "published_total": published_total,
             "now": now}
+
+
+@api.get("/api/publish/history")
+def publish_history_list() -> dict:
+    """Terminal publish-queue entries — the published (and skipped or errored)
+    record, newest first. Split out of /api/publish/queue so the queue view
+    stays light; the Publishing page shows these on its own Published tab."""
+    _reconcile_publish_queue()
+    hist = [e for e in pq.load_queue() if not _publish_entry_active(e)]
+
+    def _ts(e: dict) -> float:
+        subs = (e.get("youtube") or {}, e.get("x") or {})
+        return max([s.get("published_at") or s.get("released_at") or 0 for s in subs]
+                   + [e.get("updated_at") or e.get("created_at") or 0])
+
+    hist.sort(key=_ts, reverse=True)
+    return {"items": hist, "now": time.time()}
 
 
 @api.get("/api/publish/clock")
@@ -15834,12 +15865,32 @@ def _youtube_channel_connected(channel: str) -> bool:
         return True
 
 
+def _publish_sub_droppable(sub: dict, plat: str, cfg: dict, now: float) -> bool:
+    """True when a platform sub of a deleted film can be forgotten: nothing was
+    published, and any release attempt is past its channel/account's cadence
+    spacing — so dropping it can't refund a slot and burst-release the backlog
+    (the 2026-08-21 bug _seed_last_releases guards against)."""
+    if sub.get("status") == "done":
+        return False
+    ts = sub.get("released_at") or sub.get("published_at") or 0
+    if not ts or sub.get("status") not in ("publishing", "error"):
+        return True   # never released — seeds no clock
+    listed, keyf = (("youtube_channels", "channel") if plat == "youtube"
+                    else ("x_accounts", "account"))
+    iv = _interval_minutes_for(cfg, listed, sub.get(keyf) or "")
+    return (now - ts) >= iv * 60
+
+
 def _reconcile_publish_queue() -> None:
     """Sync each entry's platform sub-state from job.json — the async upload
-    threads write youtube_video_id / x_tweet_id when they finish — error out
-    entries whose work dir vanished, and re-pend uploads stuck mid-flight so the
-    governor stops waiting on a release that already died."""
+    threads write youtube_video_id / x_tweet_id when they finish — drop entries
+    whose work dir vanished (a deleted film isn't news; only real published
+    history and releases still holding a cadence slot are kept), and re-pend
+    uploads stuck mid-flight so the governor stops waiting on a release that
+    already died."""
+    cfg = gapp.load_config()
     q = pq.load_queue()
+    keep: list[dict] = []
     changed = False
     for e in q:
         p = Path(e.get("work_dir", ""))
@@ -15848,12 +15899,56 @@ def _reconcile_publish_queue() -> None:
         except Exception:
             meta = None
         yt_sub, x_sub = e.get("youtube") or {}, e.get("x") or {}
+        if meta is None and e.get("work_dir") and p.exists():
+            # job.json unreadable but the directory is there — a transient read
+            # (e.g. racing a job.json rewrite), not a deletion. Stamping 'work
+            # dir missing' here is how entries for live films got stuck in
+            # error forever. Touch nothing this pass.
+            keep.append(e)
+            continue
         if meta is None:
-            for sub in (yt_sub, x_sub):
+            # The film's files are gone (deleted by hand, or before the delete
+            # endpoints closed entries out). Keep the entry only for what still
+            # matters: a published upload (history), or a fresh release attempt
+            # whose cadence slot must stay spent. Everything else is noise.
+            now = time.time()
+            has_done = any(s.get("status") == "done" for s in (yt_sub, x_sub))
+            if not has_done and all(
+                    _publish_sub_droppable(s, plat, cfg, now)
+                    for s, plat in ((yt_sub, "youtube"), (x_sub, "x"))):
+                changed = True
+                continue
+            keep.append(e)
+            for sub, plat in ((yt_sub, "youtube"), (x_sub, "x")):
+                droppable = _publish_sub_droppable(sub, plat, cfg, now)
                 if sub.get("status") in ("pending", "publishing"):
-                    sub.update(status="error", error="work dir missing")
+                    if droppable:
+                        sub.update(status="skipped")
+                    else:
+                        sub.update(status="error", error="work dir missing")
+                    changed = True
+                elif (sub.get("status") == "error" and droppable
+                        and sub.get("error") == "work dir missing"):
+                    sub.update(status="skipped", error=None)
                     changed = True
             continue
+        keep.append(e)
+        # A 'work dir missing' error on a film whose dir is readable is
+        # disproven — the dir came back (a re-render reusing the name) or the
+        # stamp was a transient read failure. Nothing ever published → close as
+        # skipped so it leaves the schedule; ids in job.json → it did publish.
+        for sub, id_key, meta_id, meta_url in (
+                (yt_sub, "video_id", "youtube_video_id", "youtube_url"),
+                (x_sub, "tweet_id", "x_tweet_id", "x_url")):
+            if not (sub.get("status") == "error" and sub.get("error") == "work dir missing"):
+                continue
+            if meta.get(meta_id):
+                sub.update(status="done", url=meta.get(meta_url), error=None,
+                           published_at=sub.get("released_at") or time.time())
+                sub[id_key] = meta.get(meta_id)
+            else:
+                sub.update(status="skipped", error=None)
+            changed = True
         # The publish target is resolved live at upload time (_claim_and_post_*),
         # so re-resolve it here while the release is still ahead of us. An entry
         # enqueued before its style had its own channel froze the first-channel
@@ -15912,7 +16007,7 @@ def _reconcile_publish_queue() -> None:
                 sub.update(status="pending", task_id=None, released_at=None, attempts=attempts)
             changed = True
     if changed:
-        pq.save_queue(q)
+        pq.save_queue(keep)
 
 
 def _finalize_publish_entry_on_delete(work_dir) -> None:
@@ -15920,11 +16015,11 @@ def _finalize_publish_entry_on_delete(work_dir) -> None:
 
     Deleting the local film doesn't undo an upload that already went out, so a
     released platform keeps its history: sync the ids the async upload wrote
-    into job.json while the dir is still readable and mark the sub done. An
-    entry that was never released has nothing left to publish — drop it.
-    Without this the dangling row went 'error: work dir missing' with its
-    video id lost alongside job.json, showing a successful upload as a
-    failure."""
+    into job.json while the dir is still readable and mark the sub done.
+    Everything else leaves the queue with the film — except a release attempt
+    still inside its cadence spacing, which is kept (as an error) so deleting
+    a film right after its release can't refund the slot and burst-release
+    the backlog."""
     try:
         entry = pq.item_by_work_dir(str(work_dir))
         if not entry:
@@ -15933,16 +16028,12 @@ def _finalize_publish_entry_on_delete(work_dir) -> None:
             meta = json.loads((Path(work_dir) / "job.json").read_text())
         except Exception:
             meta = {}
-        released = False
         for plat, id_key, meta_id, meta_url in (
                 ("youtube", "video_id", "youtube_video_id", "youtube_url"),
                 ("x", "tweet_id", "x_tweet_id", "x_url")):
             sub = entry.get(plat) or {}
-            if not sub.get("released_at") and sub.get("status") != "done":
-                continue  # never released — nothing to preserve
-            released = True
-            if sub.get("status") not in ("pending", "publishing"):
-                continue  # already terminal — keep as recorded
+            if not sub.get("released_at") or sub.get("status") not in ("pending", "publishing"):
+                continue  # never released, or already terminal — keep as recorded
             if meta.get(meta_id):
                 sub.update(status="done", url=meta.get(meta_url),
                            published_at=sub.get("released_at") or time.time())
@@ -15950,12 +16041,16 @@ def _finalize_publish_entry_on_delete(work_dir) -> None:
             else:
                 sub.update(status="error", error="film deleted during upload")
             entry[plat] = sub
-        if released:
+        cfg = gapp.load_config()
+        now = time.time()
+        if any((entry.get(plat) or {}).get("status") == "done"
+               or not _publish_sub_droppable(entry.get(plat) or {}, plat, cfg, now)
+               for plat in ("youtube", "x")):
             # A platform still waiting its turn can never publish now — close it
             # as skipped rather than letting it decay to 'work dir missing'.
             for plat in ("youtube", "x"):
                 sub = entry.get(plat) or {}
-                if sub.get("status") == "pending" and not sub.get("released_at"):
+                if sub.get("status") == "pending":
                     sub.update(status="skipped")
                     entry[plat] = sub
             pq.update_item(entry["id"], youtube=entry.get("youtube"), x=entry.get("x"))
