@@ -384,6 +384,7 @@ export const api = {
   // publish scheduler — a publish queue decoupled from rendering. Finished
   // videos are released to YouTube/X on each channel/account's own cadence.
   publishQueue: () => req('GET', '/publish/queue'),
+  publishHistory: () => req('GET', '/publish/history'),
   publishScan: () => req('POST', '/publish/scan'),
   publishRemove: (id, platform) => req('POST', '/publish/remove', { id, platform: platform || '' }),
   publishNow: (id) => req('POST', '/publish/now', { id }),

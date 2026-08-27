@@ -560,8 +560,9 @@ class DeleteFinalizesPublishEntryTests(TempConfigCase):
         self.assertEqual(backend.pq.load_queue(), [])
 
     def test_deleted_mid_upload_keeps_the_release_on_the_clock(self):
-        # Released but no id yet: the entry errors out, but keeps released_at
-        # so the cadence still counts the attempt.
+        # Released but no id yet, on a channel with a cadence: the entry errors
+        # out, but keeps released_at so the cadence still counts the attempt.
+        self.write_config({"youtube_channels": [{"id": "chan", "publish_per_day": 1}]})
         rel = time.time() - 30
         (self.wd / "job.json").write_text('{"status": "done"}')
         self._queue({"status": "publishing", "released_at": rel})
@@ -571,6 +572,131 @@ class DeleteFinalizesPublishEntryTests(TempConfigCase):
         self.assertEqual(e["youtube"]["released_at"], rel)
         last = backend._seed_last_releases([e], {}, time.time())
         self.assertEqual(last[("youtube", "chan")], rel)
+
+    def test_deleted_mid_upload_without_cadence_is_dropped(self):
+        # No videos-per-day throttle on the channel means the attempt holds no
+        # slot — nothing published, so the entry leaves with the film.
+        (self.wd / "job.json").write_text('{"status": "done"}')
+        self._queue({"status": "publishing", "released_at": time.time() - 30})
+        self._delete()
+        self.assertEqual(backend.pq.load_queue(), [])
+
+
+class DeletedWorkDirReconcileTests(TempConfigCase):
+    """Films whose work dir vanished outside the delete endpoints (deleted by
+    hand, or queued before the endpoints closed entries out) used to sit in the
+    queue forever as 'error: work dir missing'. Reconciliation now drops them —
+    the film is gone, there's nothing to publish and nothing worth reporting —
+    keeping only real published history and release attempts still spending a
+    cadence slot."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH",
+                              Path(self._tmp.name) / "publish_queue.json")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _entry(self, yt: dict, x: dict | None = None) -> dict:
+        return {"id": "e1", "work_dir": str(self.output_dir / "gone"), "title": "T",
+                "source": "manual", "created_at": 1.0, "youtube": yt,
+                "x": x or {"enabled": False, "account": "", "status": "skipped"}}
+
+    def test_pending_entry_for_deleted_film_is_dropped(self):
+        backend.pq.save_queue([self._entry(
+            {"enabled": True, "channel": "chan", "status": "pending"})])
+        backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue(), [])
+
+    def test_legacy_work_dir_missing_error_is_dropped(self):
+        # The rows this change is for: erred out long ago by an older
+        # reconcile, film gone, nothing ever published.
+        backend.pq.save_queue([self._entry(
+            {"enabled": True, "channel": "chan", "status": "error",
+             "error": "work dir missing"})])
+        backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue(), [])
+
+    def test_published_history_survives_with_sibling_skipped(self):
+        backend.pq.save_queue([self._entry(
+            {"enabled": True, "channel": "chan", "status": "done", "video_id": "v",
+             "released_at": 5.0, "published_at": 5.0},
+            {"enabled": True, "account": "acct", "status": "pending"})])
+        backend._reconcile_publish_queue()
+        e = backend.pq.load_queue()[0]
+        self.assertEqual(e["youtube"]["status"], "done")
+        self.assertEqual(e["x"]["status"], "skipped")
+
+    def test_recent_release_holds_its_slot_until_the_cadence_passes(self):
+        # A release attempt inside its channel's spacing must survive (as an
+        # error) so _seed_last_releases still counts the spent slot; once the
+        # spacing has passed it stops mattering and the entry drops.
+        self.write_config({"youtube_channels": [{"id": "chan", "publish_per_day": 1}]})
+        recent = {"enabled": True, "channel": "chan", "status": "publishing",
+                  "released_at": time.time() - 60}
+        backend.pq.save_queue([self._entry(dict(recent))])
+        backend._reconcile_publish_queue()
+        e = backend.pq.load_queue()[0]
+        self.assertEqual(e["youtube"]["status"], "error")
+        self.assertEqual(e["youtube"]["error"], "work dir missing")
+        backend.pq.save_queue([self._entry(
+            dict(recent, released_at=time.time() - 3 * 86400))])
+        backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue(), [])
+
+    def test_entry_split_between_queue_and_history_views(self):
+        # Only waiting/in-flight entries belong on the queue view; done,
+        # skipped AND errored-out entries are all history.
+        active = self._entry({"enabled": True, "channel": "chan", "status": "pending"})
+        done = self._entry({"enabled": True, "channel": "chan", "status": "done",
+                            "video_id": "v", "published_at": 5.0})
+        errored = self._entry({"enabled": True, "channel": "chan", "status": "error",
+                               "error": "upload failed"})
+        self.assertTrue(backend._publish_entry_active(active))
+        self.assertFalse(backend._publish_entry_active(done))
+        self.assertFalse(backend._publish_entry_active(errored))
+
+    def _existing(self, yt: dict, job: str = '{"status": "done"}') -> dict:
+        wd = self.output_dir / "still-here"
+        wd.mkdir(exist_ok=True)
+        (wd / "job.json").write_text(job)
+        e = self._entry(yt)
+        e["work_dir"] = str(wd)
+        return e
+
+    def test_unreadable_job_json_with_dir_present_is_left_alone(self):
+        # A transient job.json read failure (e.g. racing a rewrite) must not be
+        # mistaken for a deleted film — that's how entries for live films got
+        # permanently stamped 'work dir missing'.
+        backend.pq.save_queue([self._existing(
+            {"enabled": True, "channel": "chan", "status": "pending"},
+            job="{not json")])
+        backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue()[0]["youtube"]["status"], "pending")
+
+    def test_stale_missing_error_on_existing_film_closes_as_skipped(self):
+        # The dir is back (re-render reusing the name, or the stamp was a
+        # transient read failure): the recorded error is disproven, and nothing
+        # was published — off the schedule as skipped.
+        backend.pq.save_queue([self._existing(
+            {"enabled": True, "channel": "chan", "status": "error",
+             "error": "work dir missing"})])
+        backend._reconcile_publish_queue()
+        sub = backend.pq.load_queue()[0]["youtube"]
+        self.assertEqual(sub["status"], "skipped")
+        self.assertIsNone(sub["error"])
+
+    def test_stale_missing_error_with_upload_ids_becomes_done(self):
+        backend.pq.save_queue([self._existing(
+            {"enabled": True, "channel": "chan", "status": "error",
+             "error": "work dir missing", "released_at": 5.0},
+            job='{"status": "done", "youtube_video_id": "vid1", '
+                '"youtube_url": "https://youtu.be/vid1"}')])
+        backend._reconcile_publish_queue()
+        sub = backend.pq.load_queue()[0]["youtube"]
+        self.assertEqual(sub["status"], "done")
+        self.assertEqual(sub["video_id"], "vid1")
+        self.assertEqual(sub["published_at"], 5.0)
 
 
 if __name__ == "__main__":

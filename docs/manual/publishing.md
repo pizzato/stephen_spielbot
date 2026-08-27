@@ -2,7 +2,9 @@
 
 `#/publish` — one film: `#/publish/<film>`
 
-Two tabs: **Schedule** (the publish queue) and **Publish a film** (the upload form).
+Four tabs: **Schedule** (only the videos actually scheduled to release),
+**Approvals** (films held for the approval gate), **Published** (everything
+already released), and **Publish a film** (the upload form).
 
 Before anything can post, connect a channel — see [YouTube setup](../youtube_setup.md) and
 [X setup](../x_setup.md).
@@ -75,19 +77,24 @@ What happens to the queue depends on
 
 The last two are mutually exclusive.
 
+The tab carries only videos genuinely scheduled to go out — queued or uploading.
+Films held for approval are on the [Approvals tab](#approvals); everything
+finished with — published, skipped, or errored out — is on the
+[Published tab](#published).
+
 ### The counters
 
-**Queued** (waiting on cadence) · **Publishing** (uploading now) · **Published**
-(released).
+**Queued** (waiting on cadence) · **Publishing** (uploading now) · **Awaiting
+approval** and **Published** (each linking to its tab).
 
 ### Filters
 
-Below the counters, a segmented status filter — **Queued**, **Held** (awaiting approval),
-**Publishing**, **Published**, **Errors**, each with a count — and a **channel/account**
+Below the counters, a segmented status filter — **Queued**, **Publishing**, each with a
+count — and a **channel/account**
 dropdown (shown once the queue spans more than one destination). Filters combine and
-narrow both sections; the counters follow the channel filter. A film heading to two
-platforms can match several status buckets at once — done on YouTube while still queued
-on X. Filters live in the URL (`#/publish?status=queued&dest=…`), so Back returns to the
+narrow the list; the counters follow the channel filter. A film heading to two
+platforms can match both buckets at once — queued on YouTube while uploading
+to X. Filters live in the URL (`#/publish?status=queued&dest=…`), so Back returns to the
 same filtered view. They are view-only — unlike the sort, they never change what the
 scheduler releases.
 
@@ -109,30 +116,45 @@ still waiting moves with it; already-published entries keep the channel they wen
 **Scan for unpublished** pulls in the backlog — every finished film that never made it into
 the queue. **Cadence settings** jumps to Settings.
 
-### History
-
-Published, skipped, and errored entries.
-
-Every release attempt counts against the cadence — even one that later errors — so a
-failure can't make the scheduler release the next film early. Deleting a film in
-[Films](films.md) closes out its queue entry: if it already published, the entry stays
-here as published (deleting the local film doesn't remove the upload); if it was still
-waiting, it leaves the queue.
-
 ### Comment requests
 
 By default, videos made from an approved [viewer request](community.md) **skip the
 schedule** and post immediately, so the requester isn't left waiting on cadence. Turn that
 off in Settings if you'd rather they queue like everything else.
 
-### Approval gate
+---
 
-With *Require approval before publishing* on, finished films are held until you approve
-them — in [Films](films.md), or right on this Schedule tab, where a held entry shows an
-**Awaiting approval** chip with an inline **Approve** button — the scheduler won't
-release an unapproved film. Comment-
-requested videos still post automatically.
+## Approvals
+
+With *Require approval before publishing* on
+([Settings → Automation](settings.md#publishing-schedule)), finished films are held here —
+and in [Films](films.md), which has the same gate — until you approve them; the scheduler
+won't release an unapproved film. **Approve** moves the film to the Schedule tab, where it
+releases on its channel/account cadence. Comment-requested videos still post
+automatically.
 
 There's a deliberate escape hatch: *…but let automation publish them without waiting for
 approval* releases films on cadence while still showing them as unapproved. Turning it back
 off re-holds anything not yet published.
+
+---
+
+## Published
+
+The record of everything finished with — published, skipped, or errored out — newest
+first, on its own tab so the Schedule view only loads what's still in play. Each entry
+shows where and when it went out, with a link to the upload. **Remove** only forgets the
+record — it never takes an upload down.
+
+Every release attempt counts against the cadence — even one that later errors — so a
+failure can't make the scheduler release the next film early.
+
+### Deleted films
+
+Deleting a film — in [Films](films.md), or by removing its folder by hand — takes it out
+of the publish queue with it: entries still waiting (and their approvals) just leave, and
+a stale *work dir missing* error never sticks around — including on a film whose folder
+came back (a re-render reusing the name), where the disproven error clears itself. Only
+what actually mattered survives: a platform that already published stays on this tab
+(deleting the local film doesn't remove the upload), and a release attempt still inside
+its channel's cadence spacing keeps its slot spent so the next film isn't released early.
