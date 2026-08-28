@@ -445,7 +445,9 @@ Measured on a DGX Spark GB10, same shot and seed throughout (704×1280): edge
 energy 4.2 for w4a8 against turbo's 5.5 (and 6.1 at 8 steps), with the base
 engine at 4.4 — the "over-sharpened" look is the distillation, not the step
 count, and w4a8 avoids it at turbo's wall clock. Download them from
-Settings → Infrastructure like any other engine; see [models](models.md).
+**Settings → Infrastructure → Acted-scene models** (none are part of the bulk
+install — MiniMax H3's license restricts where it may be used, so installing
+is an explicit per-engine choice); see [models](models.md).
 
 `minimax-h3-ref-turbo-lx2v` was measured separately, on one 14 s two-speaker
 acted scene at one seed (704×1280, 345 frames): **19.6 min against w4a8's 40.2**,

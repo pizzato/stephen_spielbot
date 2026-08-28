@@ -5729,6 +5729,16 @@ def list_engines() -> dict:
             has_node = comfy_node_exists(probe_url, node)
             if has_node is not True:
                 return has_node
+        # The probe names the engine's UNET, which LoRA engines share with their
+        # non-LoRA siblings — so a missing LoRA file (e.g. the converted LightX2V
+        # one that only the installer writes) would still read "installed" and
+        # the render would fail workflow validation. Any stock lora loader's
+        # enum lists the same models/loras folder, so check membership there.
+        if ok and e.get("lora"):
+            has_lora = engine_model_present(
+                probe_url, ("LoraLoaderModelOnly", "lora_name", e["lora"]))
+            if has_lora is not True:
+                return has_lora
         return ok
 
     return {
