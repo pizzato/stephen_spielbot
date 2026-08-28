@@ -244,6 +244,12 @@ Speed knobs that sit outside the engine picker:
 
 Ref2VA notes ([performance films](performance_films.md)):
 
+- Download any of them per worker from **Settings → Infrastructure →
+  Acted-scene models** — they are deliberately not part of the bulk install
+  (the MiniMax H3 license restricts where the model may be used, so
+  installing is an explicit choice). The manual commands below are the
+  no-UI fallback.
+
 - The Ref2VA checkpoints are siblings of the I2V ones at the same sizes and
   quantisation, sharing the encoder and both VAEs — so adding them costs one
   21 GB download (or 34 GB for the turbo variant), not a second full stack.
