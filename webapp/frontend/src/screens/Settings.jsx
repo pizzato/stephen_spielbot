@@ -2180,6 +2180,46 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
 
+          {/* ── Acted-scene models (Ref2VA engines) ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm">Acted-scene models</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>pick per style under <strong>Styles</strong> · download here</span>
+            </div>
+            <div className="stack gap-10 mt-16">
+              {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
+              {(engineInfo?.reference_engines || []).map((e) => {
+                const avail = engineInfo?.video_availability?.[e.key]
+                const ins = engInstall[e.key]
+                const running = ins?.status === 'running'
+                return (
+                  <div key={e.key} className="row center between" style={{ borderTop: '1px solid var(--line)', paddingTop: 10, gap: 12 }}>
+                    <div className="grow">
+                      <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 600 }}>{e.label}</span>
+                        {avail === true && <Chip tone="ok" dot>installed</Chip>}
+                        {avail === false && <Chip tone="warn">not installed</Chip>}
+                        {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
+                      </div>
+                      <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
+                      {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
+                      {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
+                      {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                    </div>
+                    {e.downloadable && (
+                      <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
+                        disabled={running || avail === true}
+                        onClick={() => installEngine(e.key)}>
+                        {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
+              <div className="field__hint">Ref2VA engines render acted (dialogue) scenes from character portraits and cast voices — see the docs' performance films page. None are part of the bulk install: MiniMax H3's license restricts where it may be used, so downloading is an explicit choice. The LightX2V turbo download also converts the LoRA's key names on install — without that step the LoRA would silently not apply.</div>
+            </div>
+          </Card>
+
           {/* ── Music models (engines) ── */}
           <Card span={12} className="reveal reveal-d2">
             <div className="row center between">
