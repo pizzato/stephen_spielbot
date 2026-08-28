@@ -837,6 +837,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         setting: s.setting ?? null, camera: s.camera ?? null,
         soundscape: s.soundscape ?? null, cast: s.cast ?? null,
         beats: s.beats ?? null, seconds: s.seconds ?? null,
+        no_wardrobe: !!s.no_wardrobe,
       })
       // The server rebuilt the prompt (and narration) from the fields — adopt
       // its copy so the read-only prompt on screen is exactly what renders.

@@ -14,7 +14,7 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   r.readAsDataURL(file)
 })
 
-function AssetCard({ a, styles, onPatch, onRemove, onImage, onUpload }) {
+function AssetCard({ a, styles, onPatch, onRemove, onImage, onSheet, onUpload }) {
   const [busy, setBusy] = useState('')
   const run = async (what, fn) => {
     setBusy(what)
@@ -75,6 +75,13 @@ function AssetCard({ a, styles, onPatch, onRemove, onImage, onUpload }) {
           label={a.has_image ? 'Regenerate image' : 'Generate image'} busyLabel="Painting…"
           busy={busy === 'gen'} disabled={!!busy}
           onRegen={(instr) => run('gen', () => onImage(instr))} />
+        {a.kind === 'wardrobe' && (a.character || '').trim() && (<>
+          <GuidedRegenButton block size="sm" variant="ghost" icon="person-rays"
+            label="Worn sheet" busyLabel="Painting…" busy={busy === 'worn'} disabled={!!busy}
+            onRegen={(instr) => run('worn', () => onImage(instr, true))} />
+          <Button block size="sm" variant="ghost" icon="id-badge" disabled={!!busy}
+            onClick={() => run('gen', () => onSheet())}>Use character's sheet</Button>
+        </>)}
       </div>
     </Card>
   )
@@ -99,9 +106,14 @@ export default function SettingsAssets({ styles = [] }) {
   const add = (kind) => persist([...assets, {
     name: kind === 'wardrobe' ? 'New outfit' : 'New location', kind, description: '', style: '',
   }])
-  const genImage = async (id, instr) => {
+  const genImage = async (id, instr, worn) => {
     const a = assets.find((x) => x.id === id)
-    setAssets((await api.generateAssetImage(id, a?.style || '', instr)).assets || [])
+    setAssets((await api.generateAssetImage(id, a?.style || '', instr, worn)).assets || [])
+  }
+  const sheetImage = async (id) => {
+    const a = assets.find((x) => x.id === id)
+    const r = await api.assetFromCharacterSheet(id, a?.style || '')
+    setAssets(r.assets || [])
   }
   const upload = async (id, filename, data) => {
     setAssets((await api.uploadAssetImage(id, filename, data)).assets || [])
@@ -128,7 +140,8 @@ export default function SettingsAssets({ styles = [] }) {
         <AssetCard key={a.id} a={a} styles={styles}
           onPatch={(body) => patch(a.id, body)}
           onRemove={() => remove(a.id)}
-          onImage={(instr) => genImage(a.id, instr)}
+          onImage={(instr, worn) => genImage(a.id, instr, worn)}
+          onSheet={() => sheetImage(a.id)}
           onUpload={(fn, data) => upload(a.id, fn, data)} />
       ))}
       {!assets.length && (

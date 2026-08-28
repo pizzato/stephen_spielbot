@@ -245,6 +245,7 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "setting": meta.get("setting", ""),
         "camera": meta.get("camera", ""),
         "soundscape": meta.get("soundscape", ""),
+        "no_wardrobe": bool(meta.get("no_wardrobe")),
         "cast": meta.get("cast", []),
         # Normalized (a prose string becomes one whole-take beat): the editor
         # maps over these, and the renderer normalizes identically.
@@ -4418,6 +4419,9 @@ class AssetImageBody(BaseModel):
     asset_id: str
     style_name: str = ""
     extra_prompt: str = ""
+    # Paint a wardrobe asset as a turnaround sheet of its character WEARING the
+    # outfit (portrait-conditioned), instead of the default empty-garments flat lay.
+    worn: bool = False
 
 
 class AssetUploadBody(BaseModel):
@@ -4451,7 +4455,8 @@ def save_assets(body: AssetsBody) -> dict:
 def generate_asset_image(body: AssetImageBody) -> dict:
     try:
         with _track_op("Painting a reference image", body.asset_id):
-            cfg = gapp.generate_asset_image(body.asset_id, body.style_name, body.extra_prompt)
+            cfg = gapp.generate_asset_image(body.asset_id, body.style_name, body.extra_prompt,
+                                            worn=body.worn)
     except ValueError as e:
         raise HTTPException(404, str(e))
     except Exception as e:
@@ -4490,6 +4495,7 @@ class VisualUpdate(BaseModel):
 
 class VisualImageBody(BaseModel):
     extra_prompt: str = ""
+    worn: bool = False    # wardrobe only: worn turnaround sheet, not a flat lay
 
 
 def _visual_to_json(wd: Path, v: dict) -> dict:
@@ -4637,12 +4643,35 @@ def generate_script_visual_image(job_id: str, visual_id: str, body: VisualImageB
     _, _, _, style_name, _ = _script_source_meta(job_id, wd.name)
     try:
         with _track_op("Painting a reference image", wd.name):
-            gapp.generate_script_visual_image(wd, visual_id, style_name, body.extra_prompt)
+            gapp.generate_script_visual_image(wd, visual_id, style_name, worn=body.worn,
+                                              extra_prompt=body.extra_prompt)
     except ValueError as e:
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(503, f"Image generation failed: {str(e).splitlines()[0][:200]}")
     return _visuals_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/image/from-character-sheet")
+def script_visual_from_character_sheet(job_id: str, visual_id: str) -> dict:
+    """Copy the wardrobe visual's character's turnaround sheet in as its image."""
+    wd = _job_wd_or_404(job_id)
+    _, _, _, style_name, _ = _script_source_meta(job_id, wd.name)
+    try:
+        gapp.script_visual_use_character_sheet(wd, visual_id, style_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _visuals_ok(wd)
+
+
+@api.post("/api/assets/image/from-character-sheet")
+def asset_from_character_sheet(body: AssetImageBody) -> dict:
+    """Copy the wardrobe asset's character's turnaround sheet in as its image."""
+    try:
+        cfg = gapp.asset_use_character_sheet(body.asset_id, body.style_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _assets_payload(cfg)
 
 
 @api.get("/api/scripts/performance")
@@ -4737,6 +4766,7 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             "setting": meta.get("setting") or "",
             "camera": meta.get("camera") or "",
             "soundscape": meta.get("soundscape") or "",
+            "no_wardrobe": bool(meta.get("no_wardrobe")),
             "cast": cast,
             "beats": performance_mode.norm_beats(
                 meta.get("beats"), float(meta.get("seconds") or performance_mode.SCENE_SECONDS)),
@@ -5162,6 +5192,9 @@ class SceneUpdate(BaseModel):
     # Editing these is how an acted scene is written; the prompt follows.
     setting: str | None = None
     camera: str | None = None
+    # Acted scenes: True renders this scene from portraits only (every wardrobe
+    # reference stands down); False/None restores the film's wardrobe.
+    no_wardrobe: bool | None = None
     soundscape: str | None = None
     cast: list | None = None
     beats: list | None = None
@@ -5273,6 +5306,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                     meta[field] = text
                 else:
                     meta.pop(field, None)
+        if body.no_wardrobe is not None:
+            if body.no_wardrobe:
+                meta["no_wardrobe"] = True
+            else:
+                meta.pop("no_wardrobe", None)
         if body.cast is not None:
             meta["cast"] = [str(n).strip() for n in body.cast if str(n).strip()]
         if body.beats is not None:

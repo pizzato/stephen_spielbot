@@ -130,6 +130,16 @@ tassels are locked solid") makes it *dress* the character in them, and the stagi
 quote the clip's real length — H3 rounds a requested duration up to its own frame grid,
 and seconds written for a shorter clip land the closing push-in on top of the front view.
 
+### Sheets as wardrobe locks
+
+A sheet's strongest measured use is as a **wardrobe reference** in acted films: outfit
+text alone holds the *idea* of a costume but re-tailors the garment scene by scene,
+while a sheet under the `wardrobe` picture role holds the exact garments (and never
+leaked a second person in testing — the role bounds it to the clothes and demotes the
+portrait to face-only). Wardrobe artifacts and catalogue outfits can copy a character's
+sheet in directly, or paint a film-specific **worn sheet** of the character in a
+described costume — see [Performance films](performance_films.md).
+
 ### Storage and endpoints
 
 Sheets live beside the reference images, one directory per character:

@@ -160,6 +160,18 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
             busy={busy === 'img'} disabled={!!busy}
             onRegen={(instr) => run('img', () => api.generateVisualImage(jobId, v.id, instr))} />
         )}
+        {/* Wardrobe with a character: a WORN turnaround sheet locks the exact
+            garments across scenes (measured: text alone re-tailors the outfit
+            every scene), and the character's own sheet can be copied in. */}
+        {v.kind === 'wardrobe' && (v.character || '').trim() && (<>
+          <GuidedRegenButton block size="sm" variant="ghost" icon="person-rays"
+            label="Worn sheet" busyLabel="Painting…"
+            busy={busy === 'worn'} disabled={!!busy}
+            onRegen={(instr) => run('worn', () => api.generateVisualImage(jobId, v.id, instr, true))} />
+          <Button block size="sm" variant="ghost" icon="id-badge" disabled={!!busy}
+            onClick={() => run('img', () => api.visualFromCharacterSheet(jobId, v.id))}>
+            Use character's sheet</Button>
+        </>)}
       </div>
     </Card>
   )

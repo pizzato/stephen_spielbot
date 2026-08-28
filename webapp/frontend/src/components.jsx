@@ -356,6 +356,12 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
                 onChange={(e) => onChange({ soundscape: e.target.value }, false)} onBlur={commit} />
             </Field>
           </div>
+          {/* Wardrobe references (film visuals / catalogue outfits) normally
+              dress the cast; this scene can opt back to the portraits' own
+              clothes — a flashback or a costume change inside one film. */}
+          <Check checked={!!scene.no_wardrobe}
+            onChange={(v) => onChange({ no_wardrobe: v }, true)}
+            label="Portrait clothes only — ignore wardrobe references in this scene" />
         </>
       )}
 

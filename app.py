@@ -2733,6 +2733,53 @@ def _norm_assets(raw) -> list[dict]:
     return out
 
 
+def _catalogue_character_named(cfg: dict, style_name: str, name: str) -> dict | None:
+    """The style-visible catalogue character a wardrobe reference names, or None.
+    Matched on name or alias, case-insensitively — the wardrobe's `character`
+    field stores a display name, not an id."""
+    want = (name or "").strip().lower()
+    if not want:
+        return None
+    for c in _style_characters(cfg, style_name):
+        names = [c.get("name") or ""] + list(c.get("aliases") or [])
+        if want in (n.strip().lower() for n in names if n):
+            return c
+    return None
+
+
+def _paint_worn_wardrobe(cfg: dict, style_name: str, char: dict, outfit: str,
+                         out: Path, portrait: Path | None = None) -> None:
+    """Paint a wardrobe reference as a turnaround sheet of the character WEARING
+    the outfit (portrait as reference conditioning), instead of the default
+    empty-garments flat lay. Measured (2026-08-28): a worn sheet under the
+    `wardrobe` picture role held one costume across four H3 scenes where the
+    same outfit in TEXT was re-tailored every scene — and it never leaked a
+    second person, because the role bounds it to the garments."""
+    ref = portrait or _character_image_path(char.get("ref_image"))
+    if not ref or not ref.exists():
+        raise ValueError(
+            f"{char.get('name') or 'The character'} has no reference image — a worn "
+            "sheet is painted from it. Upload or generate their look first.")
+    combined = _compose_visual_style("", cfg, style_name)
+    who = ", ".join(x for x in (char.get("name"), char.get("description")) if x)
+    extra = f" They wear {outfit.strip().rstrip('.')}." if (outfit or "").strip() else ""
+    prompt = prompt_store.user("character_sheet_image",
+                               style_line=f"{combined}. " if combined else "",
+                               who=who, panels=SHEET_PANELS, extra=extra)
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    urls = _preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No cluster workers reachable to generate this image.")
+    pool = WorkerPool(urls)
+    url = pool.acquire()
+    try:
+        generate_with_engine(engine, prompt, out, width=SHEET_IMAGE_SIZE[0],
+                             height=SHEET_IMAGE_SIZE[1], reference_images=[ref],
+                             comfy_url=url)
+    finally:
+        pool.release(url)
+
+
 def style_assets(cfg: dict, style_name: str = "") -> list[dict]:
     """Catalogue assets visible to a style — same rule as _style_characters."""
     requested = (style_name or "").strip()
@@ -2755,14 +2802,30 @@ def save_assets(assets) -> dict:
     return load_config()
 
 
-def generate_asset_image(asset_id: str, style_name: str = "", extra_prompt: str = "") -> dict:
+def generate_asset_image(asset_id: str, style_name: str = "", extra_prompt: str = "",
+                         worn: bool = False) -> dict:
     """Paint a catalogue asset's reference image (same framing rules as a
-    per-script one: the space or the garments, never people)."""
+    per-script one: the space or the garments, never people). *worn* paints a
+    wardrobe asset as a turnaround sheet of its character WEARING the outfit
+    instead — it needs the asset to name a character with a look image."""
     cfg = load_config()
     assets = _norm_assets(cfg.get("assets"))
     asset = next((a for a in assets if a.get("id") == asset_id), None)
     if asset is None:
         raise ValueError(f"Unknown asset {asset_id!r}.")
+    if worn:
+        if asset["kind"] != "wardrobe":
+            raise ValueError("Only a wardrobe asset can be painted as a worn sheet.")
+        char = _catalogue_character_named(cfg, style_name or asset.get("style") or "",
+                                         asset.get("character"))
+        if char is None:
+            raise ValueError("Set the asset's character first — the worn sheet is "
+                             "painted onto them.")
+        out = _assets_dir() / f"{asset['id']}.png"
+        outfit = " ".join(x for x in (asset.get("description"), (extra_prompt or "").strip()) if x)
+        _paint_worn_wardrobe(cfg, style_name or asset.get("style") or "", char, outfit, out)
+        asset["ref_image"] = out.name
+        return save_assets(assets)
     if asset["kind"] == "wardrobe":
         subject, framing = (f"{asset['name']}: {asset.get('description') or 'an outfit'}",
                             "the garments alone laid flat on a plain neutral background, "
@@ -3012,6 +3075,7 @@ def _script_visual_image_path(work_dir, filename: str) -> Path | None:
 
 
 def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
+                                 worn: bool = False,
                                  extra_prompt: str = "") -> list[dict]:
     """Render a visual's reference image in the film's own look.
 
@@ -3025,6 +3089,30 @@ def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
     vis = next((v for v in visuals if v.get("id") == visual_id), None)
     if vis is None:
         raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+
+    if worn:
+        if vis["kind"] != "wardrobe":
+            raise ValueError("Only a wardrobe visual can be painted as a worn sheet.")
+        # The film's own cast first (their look belongs to this film), then the
+        # catalogue — same shadowing order the scene resolver uses.
+        want = (vis.get("character") or "").strip().lower()
+        char = next((c for c in _read_script_characters(work_dir)
+                     if (c.get("name") or "").strip().lower() == want), None)
+        portrait = (_script_character_image_path(work_dir, char.get("ref_image"))
+                    if char else None)
+        if char is None or not (portrait and portrait.exists()):
+            char = _catalogue_character_named(cfg, style_name, vis.get("character"))
+            portrait = None      # falls back to the catalogue look inside the painter
+        if char is None:
+            raise ValueError("Set the visual's character first — the worn sheet is "
+                             "painted onto them.")
+        d = _script_visuals_dir(work_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        out = d / f"{vis['id']}.png"
+        outfit = " ".join(x for x in (vis.get("description"), (extra_prompt or "").strip()) if x)
+        _paint_worn_wardrobe(cfg, style_name, char, outfit, out, portrait=portrait)
+        vis["ref_image"] = out.name
+        return write_script_visuals(work_dir, visuals)
 
     if vis["kind"] == "wardrobe":
         subject = f"{vis['name']}: {vis.get('description') or 'an outfit'}"
@@ -3055,6 +3143,54 @@ def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
         pool.release(url)
     vis["ref_image"] = out.name
     return write_script_visuals(work_dir, visuals)
+
+
+def wardrobe_from_character_sheet(cfg: dict, style_name: str, character: str) -> Path:
+    """The character's turnaround sheet, for reuse as a wardrobe reference.
+    Raises with a pointed message when the character or the sheet is missing."""
+    char = _catalogue_character_named(cfg, style_name, character)
+    if char is None:
+        raise ValueError("Set the character first — the sheet to copy is theirs.")
+    _, sheet, _, _ = _sheet_paths(char.get("id", ""))
+    if not sheet.exists():
+        raise ValueError(f"{char.get('name')} has no turnaround sheet yet — build one "
+                         "under Settings → Characters first.")
+    return sheet
+
+
+def script_visual_use_character_sheet(work_dir, visual_id: str, style_name: str) -> list[dict]:
+    """Copy the visual's character's sheet in as this film's wardrobe reference."""
+    work_dir = Path(work_dir)
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    if vis["kind"] != "wardrobe":
+        raise ValueError("Only a wardrobe visual can take a character sheet.")
+    sheet = wardrobe_from_character_sheet(load_config(), style_name, vis.get("character"))
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{vis['id']}.png"
+    shutil.copyfile(sheet, out)
+    vis["ref_image"] = out.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def asset_use_character_sheet(asset_id: str, style_name: str = "") -> dict:
+    """Copy the asset's character's sheet in as the catalogue wardrobe reference."""
+    cfg = load_config()
+    assets = _norm_assets(cfg.get("assets"))
+    asset = next((a for a in assets if a.get("id") == asset_id), None)
+    if asset is None:
+        raise ValueError(f"Unknown asset {asset_id!r}.")
+    if asset["kind"] != "wardrobe":
+        raise ValueError("Only a wardrobe asset can take a character sheet.")
+    sheet = wardrobe_from_character_sheet(cfg, style_name or asset.get("style") or "",
+                                          asset.get("character"))
+    out = _assets_dir() / f"{asset['id']}.png"
+    shutil.copyfile(sheet, out)
+    asset["ref_image"] = out.name
+    return save_assets(assets)
 
 
 def set_script_visual_image(work_dir, visual_id: str, raw: bytes) -> list[dict]:
@@ -4021,6 +4157,10 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
     # at 4+ the weakest dropped), so the frame supersedes it.
     for vis in scene_visuals(work_dir, scene_id, meta.get("cast"), cfg, style_name):
         if frame is not None and vis["kind"] == "location":
+            continue
+        # The scene said "portrait only": every wardrobe reference stands down
+        # and the cast portraits keep their full clothing authority.
+        if vis["kind"] == "wardrobe" and meta.get("no_wardrobe"):
             continue
         pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
                          "kind": vis["kind"], "character": vis.get("character", ""),
