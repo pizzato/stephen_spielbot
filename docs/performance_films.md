@@ -369,6 +369,20 @@ prompt in the user's own words (*"the characters copy this dance's movements"*):
 image or video it replaces the default *match it exactly* authority line, so a reference
 can direct the performance instead of just appearing in it.
 
+**Wardrobe as a worn sheet.** A wardrobe reference is painted as empty garments by
+default, but a wardrobe artifact (or catalogue outfit) that names a character offers two
+stronger options. **Worn sheet** paints a turnaround of that character *wearing* the
+outfit — portrait-conditioned, so the face matches — which locks the exact garments
+across scenes: measured on H3, the same outfit written in *text* stays "an emerald
+jacket" but is re-tailored in every scene (cravat becomes jabot, braid becomes leaf
+embroidery), while a worn sheet holds one costume. **Use character's sheet** copies the
+character's own [turnaround sheet](characters.md#turnaround-sheets) in instead. The
+usual cascade applies: a catalogue outfit reaches every film in its scope, a film's own
+artifact of the same name shadows it, the artifact's *Used in* list scopes it to chosen
+scenes — and an acted scene can opt out entirely with **Portrait clothes only** (scene
+editor), which stands every wardrobe reference down and returns clothing authority to
+the portraits (a flashback, or a costume change inside one film).
+
 **Soundtrack artifacts.** An **audio** artifact is not a reference picture: the whole
 track is **pinned into the H3 generation** of every acted take it applies to
 (audio-driven generation, the same mechanism that powers

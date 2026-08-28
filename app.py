@@ -54,13 +54,17 @@ from pipeline.llm import generate_video_prompt, generate_video_suggestions
 import pipeline.youtube as yt
 import pipeline.x as xt
 from pipeline.comfyui import (
+    H3_FPS,
+    generate_video_h3_ref,
     generate_with_engine,
+    h3_frame_count,
     ltx_dimensions,
 )
 from pipeline.orchestrator import DurableStore
 from pipeline.worker_pool import WorkerPool, idle_workers
 from pipeline import ui_activity
 from pipeline import image_history
+from pipeline import prompts as prompt_store
 from pipeline import engines
 from pipeline.cover_typography import DEFAULT_COVER_TYPOGRAPHY
 from pipeline.subtitle_style import DEFAULT_SUBTITLE_STYLE
@@ -1710,7 +1714,8 @@ def public_config(cfg: dict) -> dict:
     # Copies (never the persisted dicts), and _norm_characters drops it on save.
     root = _global_char_hist_root()
     safe["characters"] = [
-        {**c, "history": image_history.char_history(root, c.get("id", ""))}
+        {**c, "history": image_history.char_history(root, c.get("id", "")),
+         "sheet": character_sheet_state(c.get("id", ""))}
         for c in (cfg.get("characters") or [])
     ]
     return safe
@@ -2728,6 +2733,53 @@ def _norm_assets(raw) -> list[dict]:
     return out
 
 
+def _catalogue_character_named(cfg: dict, style_name: str, name: str) -> dict | None:
+    """The style-visible catalogue character a wardrobe reference names, or None.
+    Matched on name or alias, case-insensitively — the wardrobe's `character`
+    field stores a display name, not an id."""
+    want = (name or "").strip().lower()
+    if not want:
+        return None
+    for c in _style_characters(cfg, style_name):
+        names = [c.get("name") or ""] + list(c.get("aliases") or [])
+        if want in (n.strip().lower() for n in names if n):
+            return c
+    return None
+
+
+def _paint_worn_wardrobe(cfg: dict, style_name: str, char: dict, outfit: str,
+                         out: Path, portrait: Path | None = None) -> None:
+    """Paint a wardrobe reference as a turnaround sheet of the character WEARING
+    the outfit (portrait as reference conditioning), instead of the default
+    empty-garments flat lay. Measured (2026-08-28): a worn sheet under the
+    `wardrobe` picture role held one costume across four H3 scenes where the
+    same outfit in TEXT was re-tailored every scene — and it never leaked a
+    second person, because the role bounds it to the garments."""
+    ref = portrait or _character_image_path(char.get("ref_image"))
+    if not ref or not ref.exists():
+        raise ValueError(
+            f"{char.get('name') or 'The character'} has no reference image — a worn "
+            "sheet is painted from it. Upload or generate their look first.")
+    combined = _compose_visual_style("", cfg, style_name)
+    who = ", ".join(x for x in (char.get("name"), char.get("description")) if x)
+    extra = f" They wear {outfit.strip().rstrip('.')}." if (outfit or "").strip() else ""
+    prompt = prompt_store.user("character_sheet_image",
+                               style_line=f"{combined}. " if combined else "",
+                               who=who, panels=SHEET_PANELS, extra=extra)
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    urls = _preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No cluster workers reachable to generate this image.")
+    pool = WorkerPool(urls)
+    url = pool.acquire()
+    try:
+        generate_with_engine(engine, prompt, out, width=SHEET_IMAGE_SIZE[0],
+                             height=SHEET_IMAGE_SIZE[1], reference_images=[ref],
+                             comfy_url=url)
+    finally:
+        pool.release(url)
+
+
 def style_assets(cfg: dict, style_name: str = "") -> list[dict]:
     """Catalogue assets visible to a style — same rule as _style_characters."""
     requested = (style_name or "").strip()
@@ -2750,14 +2802,30 @@ def save_assets(assets) -> dict:
     return load_config()
 
 
-def generate_asset_image(asset_id: str, style_name: str = "", extra_prompt: str = "") -> dict:
+def generate_asset_image(asset_id: str, style_name: str = "", extra_prompt: str = "",
+                         worn: bool = False) -> dict:
     """Paint a catalogue asset's reference image (same framing rules as a
-    per-script one: the space or the garments, never people)."""
+    per-script one: the space or the garments, never people). *worn* paints a
+    wardrobe asset as a turnaround sheet of its character WEARING the outfit
+    instead — it needs the asset to name a character with a look image."""
     cfg = load_config()
     assets = _norm_assets(cfg.get("assets"))
     asset = next((a for a in assets if a.get("id") == asset_id), None)
     if asset is None:
         raise ValueError(f"Unknown asset {asset_id!r}.")
+    if worn:
+        if asset["kind"] != "wardrobe":
+            raise ValueError("Only a wardrobe asset can be painted as a worn sheet.")
+        char = _catalogue_character_named(cfg, style_name or asset.get("style") or "",
+                                         asset.get("character"))
+        if char is None:
+            raise ValueError("Set the asset's character first — the worn sheet is "
+                             "painted onto them.")
+        out = _assets_dir() / f"{asset['id']}.png"
+        outfit = " ".join(x for x in (asset.get("description"), (extra_prompt or "").strip()) if x)
+        _paint_worn_wardrobe(cfg, style_name or asset.get("style") or "", char, outfit, out)
+        asset["ref_image"] = out.name
+        return save_assets(assets)
     if asset["kind"] == "wardrobe":
         subject, framing = (f"{asset['name']}: {asset.get('description') or 'an outfit'}",
                             "the garments alone laid flat on a plain neutral background, "
@@ -3007,6 +3075,7 @@ def _script_visual_image_path(work_dir, filename: str) -> Path | None:
 
 
 def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
+                                 worn: bool = False,
                                  extra_prompt: str = "") -> list[dict]:
     """Render a visual's reference image in the film's own look.
 
@@ -3020,6 +3089,30 @@ def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
     vis = next((v for v in visuals if v.get("id") == visual_id), None)
     if vis is None:
         raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+
+    if worn:
+        if vis["kind"] != "wardrobe":
+            raise ValueError("Only a wardrobe visual can be painted as a worn sheet.")
+        # The film's own cast first (their look belongs to this film), then the
+        # catalogue — same shadowing order the scene resolver uses.
+        want = (vis.get("character") or "").strip().lower()
+        char = next((c for c in _read_script_characters(work_dir)
+                     if (c.get("name") or "").strip().lower() == want), None)
+        portrait = (_script_character_image_path(work_dir, char.get("ref_image"))
+                    if char else None)
+        if char is None or not (portrait and portrait.exists()):
+            char = _catalogue_character_named(cfg, style_name, vis.get("character"))
+            portrait = None      # falls back to the catalogue look inside the painter
+        if char is None:
+            raise ValueError("Set the visual's character first — the worn sheet is "
+                             "painted onto them.")
+        d = _script_visuals_dir(work_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        out = d / f"{vis['id']}.png"
+        outfit = " ".join(x for x in (vis.get("description"), (extra_prompt or "").strip()) if x)
+        _paint_worn_wardrobe(cfg, style_name, char, outfit, out, portrait=portrait)
+        vis["ref_image"] = out.name
+        return write_script_visuals(work_dir, visuals)
 
     if vis["kind"] == "wardrobe":
         subject = f"{vis['name']}: {vis.get('description') or 'an outfit'}"
@@ -3050,6 +3143,54 @@ def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
         pool.release(url)
     vis["ref_image"] = out.name
     return write_script_visuals(work_dir, visuals)
+
+
+def wardrobe_from_character_sheet(cfg: dict, style_name: str, character: str) -> Path:
+    """The character's turnaround sheet, for reuse as a wardrobe reference.
+    Raises with a pointed message when the character or the sheet is missing."""
+    char = _catalogue_character_named(cfg, style_name, character)
+    if char is None:
+        raise ValueError("Set the character first — the sheet to copy is theirs.")
+    _, sheet, _, _ = _sheet_paths(char.get("id", ""))
+    if not sheet.exists():
+        raise ValueError(f"{char.get('name')} has no turnaround sheet yet — build one "
+                         "under Settings → Characters first.")
+    return sheet
+
+
+def script_visual_use_character_sheet(work_dir, visual_id: str, style_name: str) -> list[dict]:
+    """Copy the visual's character's sheet in as this film's wardrobe reference."""
+    work_dir = Path(work_dir)
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    if vis["kind"] != "wardrobe":
+        raise ValueError("Only a wardrobe visual can take a character sheet.")
+    sheet = wardrobe_from_character_sheet(load_config(), style_name, vis.get("character"))
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{vis['id']}.png"
+    shutil.copyfile(sheet, out)
+    vis["ref_image"] = out.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def asset_use_character_sheet(asset_id: str, style_name: str = "") -> dict:
+    """Copy the asset's character's sheet in as the catalogue wardrobe reference."""
+    cfg = load_config()
+    assets = _norm_assets(cfg.get("assets"))
+    asset = next((a for a in assets if a.get("id") == asset_id), None)
+    if asset is None:
+        raise ValueError(f"Unknown asset {asset_id!r}.")
+    if asset["kind"] != "wardrobe":
+        raise ValueError("Only a wardrobe asset can take a character sheet.")
+    sheet = wardrobe_from_character_sheet(cfg, style_name or asset.get("style") or "",
+                                          asset.get("character"))
+    out = _assets_dir() / f"{asset['id']}.png"
+    shutil.copyfile(sheet, out)
+    asset["ref_image"] = out.name
+    return save_assets(assets)
 
 
 def set_script_visual_image(work_dir, visual_id: str, raw: bytes) -> list[dict]:
@@ -3383,6 +3524,217 @@ def generate_character_portrait(char_id: str, extra_prompt: str = "") -> dict:
     save_config(cfg)
     image_history.char_record(_global_char_hist_root(), char_id, out)
     return load_config()
+
+
+# ── Character turnaround sheets ──────────────────────────────────────────────
+# A sheet is several views of one character in a single strip. Which engine
+# builds it is chosen per generation, because the two fail in OPPOSITE
+# directions: the style's image engine paints every panel in one pass (seconds,
+# clean layout, four distinct views) but only approximates a real face, while H3
+# Ref2VA films the camera turning around the character (minutes, the odd video
+# artefact, sometimes a lazy turn) and the face survives the rotation. The orbit
+# CLIP is kept next to the sheet so its panels can be re-picked by hand
+# (repick_character_sheet) without paying for a second render.
+
+SHEET_PANELS = 4
+SHEET_IMAGE_SIZE = (2048, 1024)     # one row of SHEET_PANELS full-body views
+SHEET_ORBIT_SIZE = (704, 1280)      # portrait — a standing character, head to toe
+# H3 rounds a requested length up to its own frame grid, so the orbit's real
+# seconds are derived from the frame count rather than assumed.
+SHEET_ORBIT_SECONDS = 4.0
+# Where the turn ends and the push-in to a face close-up begins, as a fraction
+# of the clip, and the default panel times as fractions of the whole clip.
+SHEET_ORBIT_END = 0.70
+_SHEET_DEFAULT_TIMES = (0.03, 0.24, 0.45, 0.66)
+SHEET_ENGINES = ("image", "orbit")
+
+
+def _character_sheet_dir(char_id: str) -> Path:
+    """Per-character sheet directory (basename-only id guards traversal)."""
+    return _characters_dir() / "sheets" / Path(str(char_id or "")).name
+
+
+def _sheet_paths(char_id: str) -> tuple[Path, Path, Path, Path]:
+    d = _character_sheet_dir(char_id)
+    return d, d / "sheet.png", d / "orbit.mp4", d / "sheet.json"
+
+
+def character_sheet_state(char_id: str) -> dict:
+    """What the Settings UI needs to draw one character's sheet: status, which
+    engine built it, the panel times of the last stitch and the orbit's length.
+
+    Unreadable or missing metadata reads as "no sheet" instead of raising — this
+    is called for every character on every config fetch, and one half-written
+    file must not break the whole payload.
+    """
+    _, sheet, clip, meta = _sheet_paths(char_id)
+    state = {"status": "none", "engine": "", "panels": [], "duration": 0.0, "error": ""}
+    try:
+        stored = json.loads(meta.read_text())
+        if isinstance(stored, dict):
+            state.update({k: stored[k] for k in state if k in stored})
+    except (OSError, ValueError):
+        pass
+    if state["status"] == "ready" and not sheet.exists():
+        state["status"] = "none"
+    state["has_clip"] = clip.exists()
+    return state
+
+
+def _write_sheet_state(char_id: str, **fields) -> dict:
+    """Merge *fields* into the character's sheet metadata and persist it."""
+    d, _, _, meta = _sheet_paths(char_id)
+    d.mkdir(parents=True, exist_ok=True)
+    state = character_sheet_state(char_id)
+    state.update(fields)
+    state.pop("has_clip", None)
+    meta.write_text(json.dumps(state, indent=2))
+    return character_sheet_state(char_id)
+
+
+def _stitch_sheet(clip: Path, times: list[float], out: Path) -> Path:
+    """Grab one frame per timestamp and lay them left to right into *out*."""
+    import subprocess
+
+    from PIL import Image
+
+    from pipeline.assembler import _resolve_media_tool
+    ffmpeg = _resolve_media_tool("ffmpeg")
+    panels = []
+    for i, t in enumerate(times):
+        frame = clip.with_name(f"panel_{i}.png")
+        proc = subprocess.run(
+            [ffmpeg, "-y", "-v", "error", "-ss", f"{max(0.0, float(t)):.3f}",
+             "-i", str(clip), "-frames:v", "1", str(frame)],
+            capture_output=True, text=True)
+        if proc.returncode != 0 or not frame.exists():
+            raise RuntimeError(f"Could not read frame at {t:.2f}s ({proc.stderr.strip()[:120]}).")
+        panels.append(frame)
+    images = [Image.open(p).convert("RGB") for p in panels]
+    try:
+        canvas = Image.new("RGB", (sum(i.width for i in images),
+                                   max(i.height for i in images)), "white")
+        x = 0
+        for im in images:
+            canvas.paste(im, (x, 0))
+            x += im.width
+        canvas.save(out)
+    finally:
+        for im in images:
+            im.close()
+    return out
+
+
+def _clip_duration(clip: Path) -> float:
+    """Length of a rendered clip in seconds (0.0 when ffprobe won't say)."""
+    import subprocess
+
+    from pipeline.assembler import _resolve_media_tool
+    proc = subprocess.run(
+        [_resolve_media_tool("ffprobe"), "-v", "quiet", "-print_format", "json",
+         "-show_format", str(clip)], capture_output=True, text=True)
+    try:
+        return float(json.loads(proc.stdout)["format"]["duration"])
+    except (ValueError, KeyError, TypeError):
+        return 0.0
+
+
+def generate_character_sheet(char_id: str, engine: str = "image",
+                             extra_prompt: str = "") -> dict:
+    """Build a turnaround sheet for a catalogue character and record it.
+
+    *engine* is ``"image"`` (the owning style's image engine paints the whole
+    strip) or ``"orbit"`` (H3 Ref2VA films a turn; the panels are its frames).
+    Both anchor on the character's reference image, so one is required. The
+    sheet is stored beside that reference and never becomes it — promoting a
+    panel stays the user's call. Returns the new sheet state; raises RuntimeError
+    when no worker is reachable, and stamps the failure into the state so the UI
+    can show what went wrong instead of spinning forever.
+    """
+    if engine not in SHEET_ENGINES:
+        raise ValueError(f"Unknown sheet engine {engine!r}.")
+    cfg = load_config()
+    char = _find_character(cfg, char_id)
+    ref = _character_image_path(char.get("ref_image"))
+    if not ref or not ref.exists():
+        raise ValueError("This character needs a reference image before a sheet can be built.")
+    style_name = char.get("style") or cfg.get("default_style") or ""
+    settings = style_settings(cfg, style_name)
+    look = _compose_visual_style("", cfg, style_name)
+    style_line = f"{look}. " if look else ""
+    who = ", ".join(p for p in (char.get("name"), char.get("description")) if p)
+    extra = f" {extra_prompt.strip()}" if (extra_prompt or "").strip() else ""
+    d, sheet, clip, _ = _sheet_paths(char_id)
+    d.mkdir(parents=True, exist_ok=True)
+
+    worker_urls = _preview_worker_urls()
+    if not worker_urls:
+        raise RuntimeError("No cluster workers reachable to build a character sheet.")
+    pool = WorkerPool(worker_urls)
+    _write_sheet_state(char_id, status="rendering", engine=engine, error="")
+    url = pool.acquire()
+    try:
+        if engine == "orbit":
+            eng = engines.resolve_reference(cfg, settings.get("reference_engine"))
+            # The prompt quotes the clip's REAL seconds: H3 rounds the request up
+            # to its frame grid, and staging written for a shorter clip lands the
+            # push-in on top of the front view.
+            duration = h3_frame_count(SHEET_ORBIT_SECONDS) / H3_FPS
+            width, height = SHEET_ORBIT_SIZE
+            prompt = prompt_store.user(
+                "character_sheet_orbit", style_line=style_line, who=who, extra=extra,
+                orbit_end=f"{duration * SHEET_ORBIT_END:.1f}", duration=f"{duration:.1f}")
+            generate_video_h3_ref(eng, prompt, [ref], clip, width=width, height=height,
+                                  duration_seconds=SHEET_ORBIT_SECONDS, comfy_url=url)
+            duration = _clip_duration(clip) or duration
+            times = [round(duration * f, 2) for f in _SHEET_DEFAULT_TIMES]
+            _stitch_sheet(clip, times, sheet)
+            state = _write_sheet_state(char_id, status="ready", engine=engine,
+                                       panels=times, duration=round(duration, 2))
+        else:
+            eng = engines.resolve(cfg, settings.get("image_engine"))
+            width, height = SHEET_IMAGE_SIZE
+            prompt = prompt_store.user("character_sheet_image", style_line=style_line,
+                                       who=who, extra=extra, panels=SHEET_PANELS)
+            clip.unlink(missing_ok=True)   # an image sheet has no frames to re-pick
+            generate_with_engine(eng, prompt, sheet, width=width, height=height,
+                                 reference_images=[ref], comfy_url=url)
+            state = _write_sheet_state(char_id, status="ready", engine=engine,
+                                       panels=[], duration=0.0)
+    except Exception as exc:
+        _write_sheet_state(char_id, status="error", error=str(exc)[:300])
+        raise
+    finally:
+        pool.release(url)
+    return state
+
+
+def repick_character_sheet(char_id: str, times: list[float]) -> dict:
+    """Re-stitch an orbit sheet from different frames of the clip already
+    rendered — no worker, no GPU, no second take. Times are seconds into the
+    clip; they are clamped to its length and kept in the order given, so the
+    user decides both which frames and what order the panels run in."""
+    _, sheet, clip, _ = _sheet_paths(char_id)
+    if not clip.exists():
+        raise ValueError("This character has no orbit clip to pick frames from.")
+    picks = [float(t) for t in (times or [])]
+    if not 1 <= len(picks) <= 8:
+        raise ValueError("Pick between 1 and 8 frames.")
+    duration = _clip_duration(clip)
+    if duration:
+        picks = [min(max(0.0, t), max(0.0, duration - 0.05)) for t in picks]
+    _stitch_sheet(clip, picks, sheet)
+    return _write_sheet_state(char_id, status="ready", engine="orbit",
+                              panels=[round(t, 2) for t in picks],
+                              duration=round(duration, 2), error="")
+
+
+def clear_character_sheet(char_id: str) -> dict:
+    """Delete a character's sheet, its orbit clip and its metadata."""
+    d = _character_sheet_dir(char_id)
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
+    return character_sheet_state(char_id)
 
 
 def _generate_script_portrait(work_dir: Path, cfg: dict, style_name: str, char: dict,
@@ -3805,6 +4157,10 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
     # at 4+ the weakest dropped), so the frame supersedes it.
     for vis in scene_visuals(work_dir, scene_id, meta.get("cast"), cfg, style_name):
         if frame is not None and vis["kind"] == "location":
+            continue
+        # The scene said "portrait only": every wardrobe reference stands down
+        # and the cast portraits keep their full clothing authority.
+        if vis["kind"] == "wardrobe" and meta.get("no_wardrobe"):
             continue
         pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
                          "kind": vis["kind"], "character": vis.get("character", ""),

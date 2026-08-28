@@ -245,6 +245,7 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "setting": meta.get("setting", ""),
         "camera": meta.get("camera", ""),
         "soundscape": meta.get("soundscape", ""),
+        "no_wardrobe": bool(meta.get("no_wardrobe")),
         "cast": meta.get("cast", []),
         # Normalized (a prose string becomes one whole-take beat): the editor
         # maps over these, and the renderer normalizes identically.
@@ -1304,6 +1305,105 @@ def characters_portrait(body: CharacterPortrait) -> dict:
     except RuntimeError as e:
         raise HTTPException(503, str(e))
     return _character_response(cfg)
+
+
+# ── Character turnaround sheets ──────────────────────────────────────────────
+# Several views of one character in one strip, built by whichever engine the
+# user picks AT GENERATION TIME (see gapp.generate_character_sheet). An orbit
+# sheet keeps its clip, so its panels can be re-picked frame by frame without
+# another render. Rendering runs on a daemon thread — the orbit takes minutes
+# and an HTTP request has no business holding that open — and the UI polls
+# GET /api/characters/sheet until the status leaves "rendering".
+
+
+class CharacterSheet(BaseModel):
+    char_id: str
+    engine: str = "image"          # "image" (one pass) | "orbit" (H3 frames)
+    extra_prompt: str = ""
+
+
+class CharacterSheetPanels(BaseModel):
+    char_id: str
+    times: list[float]
+
+
+_sheet_jobs: set[str] = set()      # char_ids with a sheet render in flight
+_sheet_lock = threading.Lock()
+
+
+def _sheet_payload(char_id: str) -> dict:
+    """Sheet state plus the URLs of the artefacts, cache-busted by mtime so a
+    re-picked sheet actually reloads in the browser."""
+    state = dict(gapp.character_sheet_state(char_id))
+    _, sheet, clip, _ = gapp._sheet_paths(char_id)
+    state["sheet_url"] = _busted_file_url(sheet) if sheet.exists() else ""
+    state["clip_url"] = _busted_file_url(clip) if clip.exists() else ""
+    with _sheet_lock:
+        if char_id in _sheet_jobs:
+            state["status"] = "rendering"
+    return {"ok": True, "sheet": state}
+
+
+def _sheet_in_background(char_id: str, engine: str, extra_prompt: str, name: str) -> None:
+    """Daemon-thread target: build one character's sheet, tracked so the
+    Activity screen shows the worker is busy (an orbit holds it for minutes)."""
+    try:
+        with _track_op(f"Building {name}'s character sheet",
+                       "camera orbit" if engine == "orbit" else "image model"):
+            gapp.generate_character_sheet(char_id, engine, extra_prompt)
+    except Exception:
+        gapp.logger.warning("Character sheet failed for %s", char_id, exc_info=True)
+    finally:
+        with _sheet_lock:
+            _sheet_jobs.discard(char_id)
+
+
+@api.post("/api/characters/sheet")
+def characters_sheet(body: CharacterSheet) -> dict:
+    """Start a sheet render and return immediately; poll for the result."""
+    if body.engine not in gapp.SHEET_ENGINES:
+        raise HTTPException(400, f"Unknown sheet engine {body.engine!r}.")
+    try:
+        char = gapp._find_character(gapp.load_config(), body.char_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not char.get("ref_image"):
+        raise HTTPException(400, "This character needs a reference image before a sheet can be built.")
+    with _sheet_lock:
+        if body.char_id in _sheet_jobs:
+            raise HTTPException(409, "A sheet is already being built for this character.")
+        _sheet_jobs.add(body.char_id)
+    threading.Thread(
+        target=_sheet_in_background,
+        args=(body.char_id, body.engine, body.extra_prompt, char.get("name") or "the character"),
+        daemon=True).start()
+    return _sheet_payload(body.char_id)
+
+
+@api.get("/api/characters/sheet")
+def characters_sheet_state(char_id: str = Query(...)) -> dict:
+    return _sheet_payload(char_id)
+
+
+@api.post("/api/characters/sheet/panels")
+def characters_sheet_panels(body: CharacterSheetPanels) -> dict:
+    """Re-stitch an orbit sheet from hand-picked frames of its own clip."""
+    with _sheet_lock:
+        if body.char_id in _sheet_jobs:
+            raise HTTPException(409, "This character's sheet is still being built.")
+    try:
+        gapp.repick_character_sheet(body.char_id, body.times)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    return _sheet_payload(body.char_id)
+
+
+@api.post("/api/characters/sheet/clear")
+def characters_sheet_clear(body: CharacterRef) -> dict:
+    gapp.clear_character_sheet(body.char_id)
+    return _sheet_payload(body.char_id)
 
 
 # ── Per-script characters (main-character consistency) ───────────────────────
@@ -4319,6 +4419,9 @@ class AssetImageBody(BaseModel):
     asset_id: str
     style_name: str = ""
     extra_prompt: str = ""
+    # Paint a wardrobe asset as a turnaround sheet of its character WEARING the
+    # outfit (portrait-conditioned), instead of the default empty-garments flat lay.
+    worn: bool = False
 
 
 class AssetUploadBody(BaseModel):
@@ -4352,7 +4455,8 @@ def save_assets(body: AssetsBody) -> dict:
 def generate_asset_image(body: AssetImageBody) -> dict:
     try:
         with _track_op("Painting a reference image", body.asset_id):
-            cfg = gapp.generate_asset_image(body.asset_id, body.style_name, body.extra_prompt)
+            cfg = gapp.generate_asset_image(body.asset_id, body.style_name, body.extra_prompt,
+                                            worn=body.worn)
     except ValueError as e:
         raise HTTPException(404, str(e))
     except Exception as e:
@@ -4391,6 +4495,7 @@ class VisualUpdate(BaseModel):
 
 class VisualImageBody(BaseModel):
     extra_prompt: str = ""
+    worn: bool = False    # wardrobe only: worn turnaround sheet, not a flat lay
 
 
 def _visual_to_json(wd: Path, v: dict) -> dict:
@@ -4538,12 +4643,35 @@ def generate_script_visual_image(job_id: str, visual_id: str, body: VisualImageB
     _, _, _, style_name, _ = _script_source_meta(job_id, wd.name)
     try:
         with _track_op("Painting a reference image", wd.name):
-            gapp.generate_script_visual_image(wd, visual_id, style_name, body.extra_prompt)
+            gapp.generate_script_visual_image(wd, visual_id, style_name, worn=body.worn,
+                                              extra_prompt=body.extra_prompt)
     except ValueError as e:
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(503, f"Image generation failed: {str(e).splitlines()[0][:200]}")
     return _visuals_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/image/from-character-sheet")
+def script_visual_from_character_sheet(job_id: str, visual_id: str) -> dict:
+    """Copy the wardrobe visual's character's turnaround sheet in as its image."""
+    wd = _job_wd_or_404(job_id)
+    _, _, _, style_name, _ = _script_source_meta(job_id, wd.name)
+    try:
+        gapp.script_visual_use_character_sheet(wd, visual_id, style_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _visuals_ok(wd)
+
+
+@api.post("/api/assets/image/from-character-sheet")
+def asset_from_character_sheet(body: AssetImageBody) -> dict:
+    """Copy the wardrobe asset's character's turnaround sheet in as its image."""
+    try:
+        cfg = gapp.asset_use_character_sheet(body.asset_id, body.style_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _assets_payload(cfg)
 
 
 @api.get("/api/scripts/performance")
@@ -4638,6 +4766,7 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             "setting": meta.get("setting") or "",
             "camera": meta.get("camera") or "",
             "soundscape": meta.get("soundscape") or "",
+            "no_wardrobe": bool(meta.get("no_wardrobe")),
             "cast": cast,
             "beats": performance_mode.norm_beats(
                 meta.get("beats"), float(meta.get("seconds") or performance_mode.SCENE_SECONDS)),
@@ -5063,6 +5192,9 @@ class SceneUpdate(BaseModel):
     # Editing these is how an acted scene is written; the prompt follows.
     setting: str | None = None
     camera: str | None = None
+    # Acted scenes: True renders this scene from portraits only (every wardrobe
+    # reference stands down); False/None restores the film's wardrobe.
+    no_wardrobe: bool | None = None
     soundscape: str | None = None
     cast: list | None = None
     beats: list | None = None
@@ -5174,6 +5306,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                     meta[field] = text
                 else:
                     meta.pop(field, None)
+        if body.no_wardrobe is not None:
+            if body.no_wardrobe:
+                meta["no_wardrobe"] = True
+            else:
+                meta.pop("no_wardrobe", None)
         if body.cast is not None:
             meta["cast"] = [str(n).strip() for n in body.cast if str(n).strip()]
         if body.beats is not None:

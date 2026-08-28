@@ -103,6 +103,56 @@ placeholder with no UI.
   `/api/characters/image`, `.../image/clear`, `.../image/select`,
   `/api/characters/portrait`.
 
+## Turnaround sheets
+
+A **turnaround sheet** is several views of one character — front, three-quarter, side,
+back — in a single strip, built from that character's reference image. It is a reference
+*for you*: nothing in the pipeline consumes it automatically, and it never replaces the
+character's reference image.
+
+Which engine builds it is chosen **per generation**, on the character's card, because the
+two fail in opposite directions:
+
+| Engine | How | Cost | Strength | Weakness |
+| --- | --- | --- | --- | --- |
+| **Image model** | The owning style's image engine paints the whole strip in one pass, with the reference as FLUX.2 reference conditioning | seconds | Clean layout, four distinct views every time | The face is a likeness, not the person; the back view is invented (a robot can grow human hair) |
+| **Camera orbit** | H3 Ref2VA films the character turning; the panels are frames of that clip | minutes on a worker | The face — and the real back of the head — survive the turn | Sometimes a lazy turn, occasional video artefacts, and the model may re-dress the character mid-clip |
+
+An orbit **keeps its clip**, so its panels can be re-picked afterwards: **Adjust frames**
+shows one seekable preview per panel, and dragging a slider moves that panel to a
+different frame. Applying re-stitches the strip with ffmpeg — no worker, no second
+render. Panels are cut in the order shown, and a sheet can carry between 1 and 8 of them.
+
+Both prompts live in [`prompts.yaml`](manual/prompts.md) as `character_sheet_image` and
+`character_sheet_orbit`, so the staging is editable. Two traps are baked into the orbit
+prompt's notes: naming garments while telling the model to hold still ("cloaks, straps,
+tassels are locked solid") makes it *dress* the character in them, and the staging must
+quote the clip's real length — H3 rounds a requested duration up to its own frame grid,
+and seconds written for a shorter clip land the closing push-in on top of the front view.
+
+### Sheets as wardrobe locks
+
+A sheet's strongest measured use is as a **wardrobe reference** in acted films: outfit
+text alone holds the *idea* of a costume but re-tailors the garment scene by scene,
+while a sheet under the `wardrobe` picture role holds the exact garments (and never
+leaked a second person in testing — the role bounds it to the clothes and demotes the
+portrait to face-only). Wardrobe artifacts and catalogue outfits can copy a character's
+sheet in directly, or paint a film-specific **worn sheet** of the character in a
+described costume — see [Performance films](performance_films.md).
+
+### Storage and endpoints
+
+Sheets live beside the reference images, one directory per character:
+`~/.config/video-generator/characters/sheets/<char_id>/` holding `sheet.png`, the orbit's
+`orbit.mp4` (orbit only) and `sheet.json` (status, engine, panel times, clip length).
+Removing a sheet deletes the directory. The state rides along with every character in the
+config payload, so the Settings UI knows what exists without asking.
+
+Rendering happens on a daemon thread — an orbit outlives any HTTP request — and the UI
+polls until the status leaves `rendering`. Endpoints: `POST /api/characters/sheet`
+(start; `engine` is `image` or `orbit`), `GET /api/characters/sheet?char_id=…` (poll),
+`POST /api/characters/sheet/panels` (re-pick frames), `POST /api/characters/sheet/clear`.
+
 ## Casting is opt-in, by name
 
 A style's catalogue is what a film *may* use, not what it *will* use. Script generation

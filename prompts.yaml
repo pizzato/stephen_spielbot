@@ -871,3 +871,31 @@ cover_negative_notext:
     is composited in afterwards, so ANY text the model paints is unwanted).
   value: |
     text, letters, words, numbers, writing, captions, subtitles, typography, lettering, signage, poster text, watermark, logo, blurry, low resolution, messy layout, too much clutter, distorted faces, deformed hands, boring flat lighting, plain background
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Character turnaround sheets — several views of one character in one strip
+# ═════════════════════════════════════════════════════════════════════════════
+
+character_sheet_image:
+  description: |
+    Painted in ONE pass by the style's image engine, with the character's
+    reference image as FLUX.2 reference conditioning. `style_line` carries the
+    owning style's visual look so the sheet matches the films the character
+    appears in; `who` is the name plus canonical appearance; `panels` is how
+    many views to lay out. The engine invents the far side of the character —
+    that is the trade against the orbit sheet, which turns the real one.
+  user: |
+    ${style_line}Character turnaround reference sheet: ${panels} full-body views of the SAME character, evenly spaced side by side in a single row on a plain neutral grey background — front view, three-quarter view, side profile, and back view. The same person in every panel: identical face, hair, clothing, colours and proportions, and the clothing must not change between panels. The back view shows the BACK of this character's own head and body — same hair, same material, same costume as the front. Relaxed A-pose, arms slightly away from the body, neutral expression, even flat studio lighting, no shadows, no text, no labels, no border. The character is ${who}.${extra}
+
+character_sheet_orbit:
+  description: |
+    Staging for the H3 Ref2VA orbit whose FRAMES become the sheet's panels. The
+    camera turns around a frozen character; the panels are sampled from the turn
+    and the tail is a push-in to a face close-up. `orbit_end` and `duration` are
+    stamped from the clip's real length — H3 rounds the requested seconds up, and
+    a prompt quoting the wrong seconds puts the push-in over the front view.
+    Keep the motion-freeze wording generic: naming garments ("cloaks, straps,
+    tassels") makes the model DRESS the character in them.
+  user: |
+    ${style_line}<Picture 1> defines the character's face, hair, build and clothing exactly — ignore its background, its crop and its framing, and show the character at full length. The character is ${who}.${extra} Studio turnaround. Neutral flat grey backdrop, uniform tone, no gradient, no floor line, no shadows. Full-body wide shot: the whole character is inside the frame from head to toe, the feet are visible, camera at chest height. The character stands still in a relaxed A-pose, arms slightly away from the body, neutral expression. Nothing moves and nothing changes — the pose, the hair and the clothing stay exactly as they are, no wardrobe changes, no added garments, jewellery, weapons or props. Seconds 0 to ${orbit_end}: the camera orbits 180 degrees at a fixed speed, starting behind the character, moving left, ending front-facing. Seconds ${orbit_end} to ${duration}: whip pan, then push in to a close-up of the face and shoulders. Fixed-speed camera move, no zoom, no dolly, no tilt, no roll, no handheld, no motion blur. Sharp facial detail. Silent, nobody speaks.

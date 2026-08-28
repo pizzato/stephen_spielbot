@@ -83,6 +83,12 @@ export const api = {
   selectCharacterImage: (charId, versionId) => req('POST', '/characters/image/select', { char_id: charId, version_id: versionId }),
   deleteCharacterImage: (charId, versionId) => req('POST', '/characters/image/delete', { char_id: charId, version_id: versionId }),
   generateCharacterPortrait: (charId, extraPrompt) => req('POST', '/characters/portrait', { char_id: charId, extra_prompt: extraPrompt || '' }),
+  // Turnaround sheets: the engine is chosen per generation, and an orbit sheet's
+  // panels can be re-picked from its kept clip without another render.
+  characterSheet: (charId) => req('GET', `/characters/sheet?char_id=${encodeURIComponent(charId)}`),
+  buildCharacterSheet: (charId, engine, extraPrompt) => req('POST', '/characters/sheet', { char_id: charId, engine, extra_prompt: extraPrompt || '' }),
+  pickCharacterSheetPanels: (charId, times) => req('POST', '/characters/sheet/panels', { char_id: charId, times }),
+  clearCharacterSheet: (charId) => req('POST', '/characters/sheet/clear', { char_id: charId }),
 
   // Per-script characters (main-character consistency). Job-scoped: they live in
   // the script's own work dir, separate from the global catalogue above. Each
@@ -220,13 +226,15 @@ export const api = {
   // Catalogue assets: locations and wardrobe reusable across films.
   listAssets: () => req('GET', '/assets'),
   saveAssets: (assets) => req('POST', '/assets', { assets }),
-  generateAssetImage: (assetId, styleName, extraPrompt) => req('POST', '/assets/image', { asset_id: assetId, style_name: styleName || '', extra_prompt: extraPrompt || '' }),
+  generateAssetImage: (assetId, styleName, extraPrompt, worn) => req('POST', '/assets/image', { asset_id: assetId, style_name: styleName || '', extra_prompt: extraPrompt || '', worn: !!worn }),
+  assetFromCharacterSheet: (assetId, styleName) => req('POST', '/assets/image/from-character-sheet', { asset_id: assetId, style_name: styleName || '' }),
   uploadAssetImage: (assetId, filename, data) => req('POST', '/assets/upload', { asset_id: assetId, filename, data }),
   listVisuals: (jobId) => req('GET', `/jobs/${jobId}/visuals`),
   addVisual: (jobId, body) => req('POST', `/jobs/${jobId}/visuals`, body),
   updateVisual: (jobId, id, body) => req('PUT', `/jobs/${jobId}/visuals/${id}`, body),
   deleteVisual: (jobId, id) => req('DELETE', `/jobs/${jobId}/visuals/${id}`),
-  generateVisualImage: (jobId, id, extraPrompt) => req('POST', `/jobs/${jobId}/visuals/${id}/image`, { extra_prompt: extraPrompt || '' }),
+  generateVisualImage: (jobId, id, extraPrompt, worn) => req('POST', `/jobs/${jobId}/visuals/${id}/image`, { extra_prompt: extraPrompt || '', worn: !!worn }),
+  visualFromCharacterSheet: (jobId, id) => req('POST', `/jobs/${jobId}/visuals/${id}/image/from-character-sheet`),
   visualFromUrl: (jobId, visualId, url) => req('POST', `/jobs/${jobId}/visuals/${visualId}/from-url`, { url }),
   uploadVisualImage: (jobId, id, filename, data) => req('POST', `/jobs/${jobId}/visuals/${id}/upload`, { filename, data }),
   // Copy an existing script into a fresh work dir to render again, leaving the

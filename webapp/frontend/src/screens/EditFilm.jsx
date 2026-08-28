@@ -91,7 +91,7 @@ function SceneCard({
     mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
     setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
     cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
-    singing: !!scene.singing,
+    singing: !!scene.singing, no_wardrobe: !!scene.no_wardrobe,
   })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
@@ -126,6 +126,7 @@ function SceneCard({
     setSceneType({
       mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
       setting: s.setting || '', camera: s.camera || '', soundscape: s.soundscape || '',
+      no_wardrobe: !!s.no_wardrobe,
       cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
       singing: !!s.singing,
     })
@@ -146,6 +147,7 @@ function SceneCard({
         setting: st.setting ?? null, camera: st.camera ?? null,
         soundscape: st.soundscape ?? null, cast: st.cast ?? null,
         beats: st.beats ?? null, seconds: st.seconds ?? null,
+        no_wardrobe: !!st.no_wardrobe,
       })
     } catch (e) {
       setError(e.message)
