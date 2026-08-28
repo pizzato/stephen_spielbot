@@ -123,7 +123,7 @@ shows one seekable preview per panel, and dragging a slider moves that panel to 
 different frame. Applying re-stitches the strip with ffmpeg — no worker, no second
 render. Panels are cut in the order shown, and a sheet can carry between 1 and 8 of them.
 
-Both prompts live in [`prompts.yaml`](prompts.md) as `character_sheet_image` and
+Both prompts live in [`prompts.yaml`](manual/prompts.md) as `character_sheet_image` and
 `character_sheet_orbit`, so the staging is editable. Two traps are baked into the orbit
 prompt's notes: naming garments while telling the model to hold still ("cloaks, straps,
 tassels are locked solid") makes it *dress* the character in them, and the staging must
