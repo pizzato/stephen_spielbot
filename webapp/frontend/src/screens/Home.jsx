@@ -23,7 +23,7 @@ export default function Home({ go }) {
   })
 
   useEffect(() => {
-    api.listJobs().then((d) => setFilms(d.finished || [])).catch(() => {})
+    api.listJobs().then((d) => setFilms((d.finished || []).filter((f) => !f.archived))).catch(() => {})
     api.getQueue().then((d) => setQueueCount((d.queue || []).filter((q) => q.status === 'pending').length)).catch(() => {})
   }, [])
 
@@ -182,7 +182,7 @@ export default function Home({ go }) {
             {films.slice(0, 5).map((r, i) => (
               <a key={i} className="stream-entry" onClick={(e) => { e.preventDefault(); go('library') }} href="#">
                 <span className="stream-ico" style={{ background: 'var(--ok-soft)', color: 'var(--ok)' }}><Icon name="circle-check" /></span>
-                <div className="grow"><span className="stream-title">{r.label}</span></div>
+                <div className="grow"><span className="stream-title">{r.title || r.label}</span></div>
                 <Icon name="chevron-right" style={{ color: 'var(--ink-4)', fontSize: 12 }} />
               </a>
             ))}

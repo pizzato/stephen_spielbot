@@ -297,6 +297,8 @@ export const api = {
   markJobSeen: (workDir) => req('POST', '/jobs/seen', { work_dir: workDir }),
 
   listJobs: () => req('GET', '/jobs'),
+  // Library metadata for one film: { work_dir, title?, starred?, archived? }.
+  setFilmMeta: (body) => req('POST', '/films/meta', body),
   deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   applyRemix: (body) => req('POST', '/remix', body),

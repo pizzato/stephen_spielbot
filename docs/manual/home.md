@@ -26,8 +26,8 @@ concurrent operation grouped by film rather than the top few.
 
 ## Recent films
 
-The five most recently finished films, newest first. **All films →** opens
-[Films](films.md).
+The five most recently finished films, newest first — [archived](films.md#the-cards)
+films are skipped. **All films →** opens [Films](films.md).
 
 ## The tiles
 

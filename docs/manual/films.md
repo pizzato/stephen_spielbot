@@ -22,11 +22,13 @@ approval filters.
 
 | Filter | Meaning |
 |---|---|
-| **All** | Everything finished |
+| **All** | Everything finished (except archived) |
+| **★ Starred** | Films you starred |
 | **Needs approval** | Held by the [publish approval gate](settings.md#publishing-schedule) |
 | **Approved** | Approved, waiting on cadence or a manual publish |
 | **Published** | Live somewhere |
 | **Not published** | Finished, no approval gate, not published |
+| **Archived** | Archived films — hidden from every other view |
 
 Next to it, **channel** and **style** dropdowns narrow the library to one channel or one
 style profile; they only appear once your films span more than one. Filters combine —
@@ -42,6 +44,9 @@ approval**, **Approved**, or **New** for a film you haven't opened yet. Its reso
 in the opposite corner, which is how two renders of the same script
 ([Render at another size](edit-film.md#render-at-another-size)) tell themselves apart.
 
+The **star** next to the title marks a favourite — starred films get their own **★
+Starred** filter. Click it again to unstar.
+
 Published films list their destinations as chips (YouTube, X, with the channel name) that
 link straight to the live post.
 
@@ -49,8 +54,20 @@ link straight to the live post.
 |---|---|
 | **Edit** | Opens [Edit film](edit-film.md) — also what clicking the card does |
 | **New version** | Clones the film into a fresh work folder, so you can re-render variations without overwriting |
+| **Rename** (pen) | Edits the film's display title in place — Enter saves, Esc cancels |
+| **Archive** (box) | Tucks the film away under the **Archived** filter without deleting anything; **Unarchive** brings it back |
 | **Approve** | Releases a held film to publish on its normal schedule |
 | **Publish** | Opens [Publishing](publishing.md) for this film |
+
+!!! note "What renaming changes"
+    Renaming sets the film's *display title* — the name on the card and the title used
+    when publishing (the same one the [Publishing](publishing.md) screen edits). The work
+    folder and the final video file keep their original names, so published links, deep
+    links and the durable job record are untouched.
+
+Archived films stay on disk untouched — they just leave the default view, the Home
+screen's recent list, and the auto-publish sweep (a film already queued for publishing
+keeps its queue entry). Unarchive at any time from the **Archived** filter.
 
 !!! note "New version vs re-render"
     **New version** duplicates into a *new* work folder, and so does
