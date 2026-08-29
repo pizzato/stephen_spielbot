@@ -82,8 +82,8 @@ assembled H3 text, exactly as a dialogue scene shows it, editable as a pinned ov
 
 A performed silent scene also carries the same staging a spoken take gets — numbered
 reference slots, the prompt, the rendered take and its re-shoots — marked *silent* and
-without the dialogue editor: on the Script editor it sits on the scene's own card, and on
-a film's edit screen in the **Acted scenes** view.
+without the dialogue editor. In both the Script editor and a film's edit screen it sits
+on the scene's own card, in order beside every other kind of scene.
 
 Nothing else about the scene changes: it is still silent by contract. The prompt says so
 outright, and the same gate that watches an establishing wide transcribes the take and
