@@ -403,6 +403,7 @@ function SceneCard({
   const selectedTake = videoHistory?.versions?.find((v) => v.id === videoHistory.selected)
   const videoUrl = selectedTake ? fileUrl(selectedTake.path) : scene.video_url
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
+  const actedShape = hasActedShape(sceneType.mode, actedSilent, sceneType.singing)
 
   return (
     <>
@@ -663,7 +664,7 @@ function SceneCard({
                   a render input — it can be painted, replaced (upload/paste)
                   or removed at will; narrated scenes keep the same painters. */}
               <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
-                label={isActedMode(sceneType.mode) ? (previewUrl ? 'First frame' : 'Add first frame') : 'Image'}
+                label={actedShape ? (previewUrl ? 'First frame' : 'Add first frame') : 'Image'}
                 busyLabel="Rendering…" busy={busy === 'image'}
                 onRegen={(instr) => rerender('image', instr)} chips={REGEN_CHIPS.image} align="left" />
               <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !previewUrl}
@@ -683,12 +684,12 @@ function SceneCard({
               <Button variant="ghost" icon="paste" size="sm" disabled={isRendering}
                 title="Use the image on the clipboard as this scene's initial frame"
                 onClick={pasteFrame}>Paste</Button>
-              {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && previewUrl && (
+              {actedShape && previewUrl && (
                 <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering}
                   title="Delete the first-frame image — the next shoot renders from portraits and visuals only"
                   onClick={removeFirstFrame}>Remove first frame</Button>
               )}
-              {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && (
+              {actedShape && (
                 <GuidedRegenButton variant="ghost" icon="rotate-right" size="sm"
                   label="Re-generate scene" busyLabel="Rewriting…"
                   busy={busy === 'rewrite'} disabled={isRendering}
@@ -700,7 +701,7 @@ function SceneCard({
                   onRegen={rewriteActed} align="left" />
               )}
               <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
-                label={isActedMode(sceneType.mode) ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
+                label={actedShape ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
                 onRegen={(instr) => rerender('video', instr)} chips={REGEN_CHIPS.video} align="left" />
               <Button variant="ghost" icon="scissors" size="sm" disabled={isRendering || !videoUrl}
                 title="Cut the tail off this scene's clip — the untrimmed take is kept"
@@ -710,7 +711,7 @@ function SceneCard({
               {/* Only offered where it can actually work: an acted take whose
                   motion context is still on a worker and still matches the clip
                   in the cut (scene.can_continue). */}
-              {isActedMode(sceneType.mode) && scene.can_continue && (
+              {actedShape && scene.can_continue && (
                 <Button variant="ghost" icon="forward-step" size="sm" disabled={isRendering || !videoUrl}
                   title="Shoot a few more seconds carrying on from the last frame — same take, no cut"
                   onClick={() => { setContErr(''); setCont(true) }}>
@@ -779,7 +780,7 @@ function SceneCard({
               </div>
             )}
 
-            {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && !acted && (
+            {actedShape && !acted && (
               <div className="muted mt-16" style={{ fontSize: 12.5 }}>
                 This scene uses an acted take. Its resolved cast and artifact references appear here once the scene is saved.
               </div>
