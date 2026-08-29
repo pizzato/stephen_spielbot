@@ -1,79 +1,14 @@
 import { useEffect, useState } from 'react'
-import { api, fileUrl } from '../api.js'
-import { Card, Button, Banner, Icon, GuidedRegenButton, ActedPrompt, VideoVersionStrip, voiceLabel } from '../components.jsx'
+import { api } from '../api.js'
+import { Card, Button, Banner, GuidedRegenButton, ActedPrompt } from '../components.jsx'
+import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, ActedTakes } from '../acted.jsx'
 
 // Performance films are conditioned on CHARACTERS, not on a scene still, and the
 // prompt refers to them by slot number ("<Picture 1>", "<Audio 1>"). Showing the
 // prompt alone would leave you guessing which reference each number is, so every
 // scene shows its slots as the thing itself: the portrait that IS Picture 1, the
-// voice clip that IS Audio 1. Everything for a scene sits in one card — no tab
-// hopping between the script, the characters and the voices.
-
-function CastMember({ c, picture, audio, jobId, voiceOpts, voiceMeta, onChanged }) {
-  const [busy, setBusy] = useState('')
-  const run = async (what, fn) => {
-    setBusy(what)
-    try { await fn(); await onChanged() } finally { setBusy('') }
-  }
-  // A catalogue character is shared with every other film that uses it, so it is
-  // edited in Settings rather than silently rewritten from one film's screen.
-  const editable = c.editable && jobId
-
-  return (
-    <div className="stack gap-8" style={{ width: 230, minWidth: 0 }}>
-      <div className="row gap-8 center">
-        <span className="label-sm">{picture ? `Picture ${picture.slot}` : 'No picture'}</span>
-        {audio && <span className="label-sm">· Audio {audio.slot}</span>}
-      </div>
-      {c.image_url
-        ? <img src={c.image_url} alt={c.name}
-            style={{ width: 104, height: 104, objectFit: 'cover', borderRadius: 10,
-                     border: '1px solid var(--line, #ddd)' }} />
-        : <div style={{ width: 104, height: 104, borderRadius: 10, display: 'flex',
-                        alignItems: 'center', justifyContent: 'center',
-                        background: 'var(--well, rgba(127,127,127,.10))',
-                        border: '1px dashed var(--line, #ccc)' }}>
-            <Icon name="user" style={{ color: 'var(--ink-3)', fontSize: 22 }} />
-          </div>}
-      <div>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</span>
-        {c.scope === 'catalogue' && <span className="muted" style={{ fontSize: 11.5 }}> · catalogue</span>}
-      </div>
-
-      {editable ? (
-        <GuidedRegenButton block size="sm" variant="ghost" icon="rotate-right"
-          label={c.has_image ? 'Regenerate look' : 'Generate look'} busyLabel="Painting…"
-          busy={busy === 'look'} disabled={!!busy}
-          onRegen={(instr) => run('look', () => api.generateScriptCharacterPortrait(jobId, c.id, instr))} />
-      ) : (
-        <span className="muted" style={{ fontSize: 11.5 }}>
-          {c.scope === 'catalogue' ? 'Look and voice come from your catalogue — change them in Settings → Characters.'
-            : 'Not in this script\u2019s cast or your catalogue.'}
-        </span>
-      )}
-
-      {c.speaks && (
-        <label className="stack gap-4">
-          <span className="label-sm">Voice</span>
-          <select className="input" value={c.voice || ''} disabled={!editable || !!busy}
-            onChange={(e) => run('voice', () => api.updateScriptCharacter(jobId, c.id, { voice: e.target.value }))}>
-            <option value="">Let the model invent it</option>
-            {/* The assigned voice always appears, even when the library list
-                hasn't loaded — otherwise the select silently shows "invent"
-                for a character that HAS a voice. */}
-            {c.voice && !voiceOpts.includes(c.voice) && <option value={c.voice}>{c.voice}</option>}
-            {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
-          </select>
-          {!c.voice && (
-            <span className="muted" style={{ fontSize: 11.5 }}>
-              No reference — the model picks a voice, and it changes between scenes.
-            </span>
-          )}
-        </label>
-      )}
-    </div>
-  )
-}
+// voice clip that IS Audio 1 — via the staging blocks in acted.jsx, shared with
+// the Script editor's scene cards so the two screens can never drift apart.
 
 
 // The dialogue and the assembled prompt are editable in place. Lines are staged
@@ -176,16 +111,9 @@ function SceneEditor({ scene, jobId, onSaved }) {
 
 
 function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onChanged, songUrl = '' }) {
-  const [reshoot, setReshoot] = useState('')
-  const [takeBusy, setTakeBusy] = useState(false)
   const [regen, setRegen] = useState('')  // '' | 'busy' | an error message
-  const rerender = async (instruction) => {
-    setReshoot('busy')
-    try {
-      await api.rerenderFilmScene(workDir, scene.id, 'video', instruction)
-      setReshoot('queued')
-    } catch (e) { setReshoot(e.message) }
-  }
+  const [opErr, setOpErr] = useState('')
+  const [opBusy, setOpBusy] = useState(false)
   // The LLM rewrite of the whole scene, offered beside the re-shoot: rewrite
   // the take, then shoot it again. Singing scenes lead with the one instruction
   // music videos keep needing — a beat where the cast should NOT be miming the
@@ -210,11 +138,12 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
   const regenHint = scene.silent
     ? 'Re-generate rewrites the whole take — action, setting, camera — and rebuilds the prompt. It stays silent.'
     : 'Re-generate rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.'
-  // Every re-shoot is kept as a take; flipping swaps the canonical final, so
-  // Reassemble picks up whichever take is selected.
-  const takeOp = async (fn) => {
-    setTakeBusy(true)
-    try { await fn(); await onChanged() } catch (e) { setReshoot(e.message) } finally { setTakeBusy(false) }
+  // A take-op failure (e.g. removing the first frame) must be visible even
+  // before the scene has a rendered take.
+  const removeFrame = async () => {
+    setOpBusy(true); setOpErr('')
+    try { await api.removeScenePreview(jobId, scene.id); await onChanged() }
+    catch (e) { setOpErr(e.message) } finally { setOpBusy(false) }
   }
   return (
     <Card span={12} className="stack gap-16">
@@ -230,76 +159,24 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
         </span>
       </div>
 
-      {scene.has_video && (
-        <div className="stack gap-8">
-          <video controls preload="metadata" src={scene.video_url}
-            style={{ width: '100%', maxWidth: 360, borderRadius: 10, background: '#000' }} />
-          {/* The take on screen was shot from the text below — after an edit it
-              is stale until the scene is shot again. */}
-          <div className="row gap-8 center row--wrap">
-            <GuidedRegenButton size="sm" variant="ghost" icon="clapperboard"
-              label="Shoot this scene again" busyLabel="Queued…"
-              busy={reshoot === 'busy'} disabled={reshoot === 'busy'}
-              onRegen={rerender} />
-            {regenButton}
-            {reshoot === 'queued' && (
-              <span className="muted" style={{ fontSize: 12 }}>Re-rendering — watch it in Activity.</span>
-            )}
-            {reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
-              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
-            )}
-            {regen && regen !== 'busy' && (
-              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{regen}</span>
-            )}
-          </div>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {regenHint} Then shoot the scene again to film the new take.
-          </span>
-          <VideoVersionStrip versions={scene.video_history?.versions}
-            selected={scene.video_history?.selected}
-            onSelect={(vid) => takeOp(() => api.selectFilmVideo(workDir, scene.id, vid))}
-            onDelete={(vid) => takeOp(() => api.deleteFilmVideo(workDir, scene.id, vid))}
-            aspect="9 / 16" busy={takeBusy || reshoot === 'busy'}
-            label="Takes" hint="every re-shoot is kept — click to use" />
-        </div>
-      )}
+      <ActedTakes scene={scene} workDir={workDir} onChanged={onChanged}
+        rewriteButton={regenButton}
+        hint={`${regenHint} Then shoot the scene again to film the new take.`} />
 
       {/* No take yet: the rewrite is still offered (there is nothing to
-          re-shoot), and a take-op failure (e.g. removing the first frame)
-          must be visible even before the scene has a rendered take — the
-          block above only exists once there is a video. */}
+          re-shoot). */}
       {!scene.has_video && (
         <div className="stack gap-8">
-          <div className="row gap-8 center row--wrap">
-            {regenButton}
-            {reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
-              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
-            )}
-            {regen && regen !== 'busy' && (
-              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{regen}</span>
-            )}
-          </div>
+          <div className="row gap-8 center row--wrap">{regenButton}</div>
           <span className="muted" style={{ fontSize: 12 }}>{regenHint}</span>
         </div>
       )}
-
-      {/* ── The take's SOUNDTRACK input: the stretch of the film's song this
-             scene is generated against (audio-driven H3). Playable directly —
-             the #t media fragment plays exactly the pinned window. ── */}
-      {scene.song_window && songUrl && (
-        <div className="stack gap-6">
-          <span className="label-sm">
-            Soundtrack · {Number(scene.song_window[0]).toFixed(1)}s–{Number(scene.song_window[1]).toFixed(1)}s of the film's song
-          </span>
-          <audio controls preload="none" style={{ width: '100%', height: 32 }}
-            src={`${songUrl}#t=${scene.song_window[0]},${scene.song_window[1]}`} />
-          <span className="muted" style={{ fontSize: 12 }}>
-            Pinned into this take — the performance is generated to match this exact
-            slice. The take above carries it too, so it can be watched against its
-            own music, and it plays under the scene in the final film.
-          </span>
-        </div>
+      {regen && regen !== 'busy' && (
+        <span style={{ fontSize: 12, color: 'var(--danger)' }}>{regen}</span>
       )}
+      {opErr && <span style={{ fontSize: 12, color: 'var(--danger)' }}>{opErr}</span>}
+
+      <SoundtrackSlice window={scene.song_window} songUrl={songUrl} />
 
       {/* ── Cast: each numbered slot IS the portrait / the voice clip, and the
              look and voice are set right here rather than in another tab. ── */}
@@ -310,46 +187,13 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
             picture={scene.pictures.find((p) => p.name === c.name)}
             jobId={jobId} voiceOpts={voiceOpts} voiceMeta={voiceMeta} onChanged={onChanged} />
         ))}
-        {/* The scene's other references — location, wardrobe, continuity — as
-            small pictures, so every <Picture N> the take renders from is
-            visible on the card, not just the people. */}
         {scene.pictures.filter((p) => p.kind && p.kind !== 'character').map((p) => (
-          <div key={`ref-${p.slot}`} className="stack gap-8" style={{ width: 110 }}>
-            <span className="label-sm">Picture {p.slot}</span>
-            {p.image_url
-              ? <img src={p.image_url} alt={p.name}
-                  style={{ width: 104, height: 104, objectFit: 'cover', borderRadius: 10,
-                           border: '1px solid var(--line, #ddd)' }} />
-              : <div style={{ width: 104, height: 104, borderRadius: 10, display: 'flex',
-                              alignItems: 'center', justifyContent: 'center',
-                              background: 'var(--well, rgba(127,127,127,.10))',
-                              border: '1px dashed var(--line, #ccc)' }}>
-                  <Icon name={p.kind === 'wardrobe' ? 'shirt' : 'location-dot'}
-                    style={{ color: 'var(--ink-3)', fontSize: 20 }} />
-                </div>}
-            <span className="muted" style={{ fontSize: 11.5 }}>{p.name} · {p.kind}</span>
-            {p.kind === 'frame' && (
-              <Button variant="quiet" size="sm" icon="trash-can" disabled={!!takeBusy}
-                title="Remove the first frame — the take renders from portraits and visuals only"
-                onClick={() => takeOp(() => api.removeScenePreview(jobId, scene.id))} />
-            )}
-          </div>
+          <RefTile key={`ref-${p.slot}`} p={p} busy={opBusy}
+            onRemoveFrame={p.kind === 'frame' ? removeFrame : null} />
         ))}
       </div>
 
-      {(scene.missing_portraits.length > 0 || scene.unvoiced.length > 0) && (
-        <Banner tone="warn">
-          {scene.missing_portraits.length > 0 && (
-            <div>No portrait for {scene.missing_portraits.join(', ')} — the model will
-              invent their look, and it will change between scenes. Add a look image
-              in Characters.</div>
-          )}
-          {scene.unvoiced.length > 0 && (
-            <div>No cast voice for {scene.unvoiced.join(', ')} — the model will invent
-              a voice, and it will drift between scenes.</div>
-          )}
-        </Banner>
-      )}
+      <StagingWarnings missingPortraits={scene.missing_portraits} unvoiced={scene.unvoiced} />
 
       {/* ── What happens ── */}
       <div className="stack gap-8">

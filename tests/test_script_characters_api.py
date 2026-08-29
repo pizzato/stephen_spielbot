@@ -44,8 +44,8 @@ class ScriptCharacterApiTests(unittest.TestCase):
         }))
         self.client = TestClient(backend.api)
 
-    def _make_job(self, characters):
-        scene = Scene(id=1, title="T", image_prompt="Caesar stands.", video_prompt="v", narration="n")
+    def _make_job(self, characters, image_prompt="Caesar stands."):
+        scene = Scene(id=1, title="T", image_prompt=image_prompt, video_prompt="v", narration="n")
         with stub_script([scene], characters), \
              mock.patch.object(backend, "_describe_in_background"):
             res = backend._do_script_generate(backend.GenerateScriptBody(
@@ -86,6 +86,27 @@ class ScriptCharacterApiTests(unittest.TestCase):
                if c["name"] == "Julius Caesar"]
         self.assertEqual(len(job), 1)
         self.assertEqual(job[0]["description"], "catalogue look")
+        # The Characters & Artifacts wall must still show that read-only style
+        # character. Narrated scenes have no metadata.cast, so this resolves the
+        # alias from the same image prompt the renderer uses.
+        listed = self.client.get(f"/api/jobs/{res['job_id']}/characters").json()
+        self.assertEqual([c["name"] for c in listed["catalogue"]], ["Julius Caesar"])
+
+    def test_global_catalogue_character_present_in_story_is_listed(self):
+        self.config_file.write_text(yaml.safe_dump({
+            "styles": [_style("Hero")],
+            "default_style": "Hero",
+            "characters": [{"id": "char_kinho", "name": "Kinho",
+                            "aliases": [], "description": "global canonical look",
+                            "style": ""}],
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        }))
+        res = self._make_job(
+            [{"name": "Kinho", "aliases": [], "description": "LLM override"}],
+            image_prompt="Kinho waits beside the window.")
+        listed = self.client.get(f"/api/jobs/{res['job_id']}/characters").json()
+        self.assertEqual(listed["characters"], [])
+        self.assertEqual([c["name"] for c in listed["catalogue"]], ["Kinho"])
 
     def test_crud_roundtrip(self):
         job_id = self._make_job([{"name": "Caesar", "description": "a general"}])["job_id"]
