@@ -437,6 +437,42 @@ than the style's usual video engine — H3 acted takes cut against LTX clips rea
 different productions, with colour and motion shifting shot to shot. A style already on a
 MiniMax engine keeps its own pick; unmixed films are untouched.
 
+### Continued shots
+
+A scene can **continue the previous scene's shot** instead of cutting: the flag is
+explicit per scene (`continues_previous`), set by the scene's writer — the LLM divide
+step may mark it where the story flows through a boundary, and both editors carry a
+*"Continues the previous scene"* toggle. How the join is made depends on the scenes:
+
+- **Acted → acted**: the take is conditioned on the **motion context** the previous
+  take saved (the same mechanism as the editor's **Continue** button), so the camera,
+  the people and the sound literally carry through — no cut at all. The context latent
+  lives on the worker that shot the take, so a chain of continuing acted scenes holds
+  **one worker** and renders in order. If that worker dies mid-chain (or the film is
+  resumed later on a different one), the scene falls back to opening on the previous
+  take's closing frame — a softer join, never a failed film.
+- **Narrated scenes** (and acted → narrated): the previous scene's frame *at its cut
+  point* becomes this scene's first frame, and the video prompt is told the shot is
+  already in motion — quoting the previous scene's own motion description so the camera
+  move carries on.
+
+Continued boundaries are **butt-joined** in assembly — the usual fade-out/fade-in
+between scenes would dip to black mid-take.
+
+What it costs and where it stops: scenes in a chain render **in sequence** (unrelated
+scenes still fan out across the workers), so a long unbroken chain gives up that
+parallelism — use it where the story earns it. Continuation is dropped, with a log
+line, where it cannot work: on the first scene, on **singing** scenes (their takes are
+pinned to the song's exact timeline), on takes with a pinned soundtrack artifact, and
+on an acted scene asked to continue a narrated one (acted scenes render first, in a
+pre-pass). A continuing acted scene also renders as a single clip — it never
+[chains with itself](models.md#chained-scenes) on top.
+
+One seam to know about: the join is made **at render time**. Re-shooting either side of
+a continued boundary from the film editor afterwards re-renders that scene alone — the
+new take no longer picks up (or hands off) the exact moment its neighbour holds, so the
+butt-join can jump until the other side is re-shot too.
+
 ### Video models
 
 A style carries **two video model pickers**, side by side under *Video models*, because a

@@ -49,7 +49,11 @@ Two execution models coexist; **the monolithic path drives normal renders**:
   `resume_generation.py <work_dir>` as a subprocess (`_launch_generation_job` in
   `app.py`). That process renders everything itself using its own `WorkerPool`
   (parallel ComfyUI/TTS acquire/release, threaded dialogue rendering), while updating
-  durable state through `TaskRun`/`complete_task`. It re-runs `ensure_generation_plan`
+  durable state through `TaskRun`/`complete_task`. Scenes marked
+  `continues_previous` are grouped into **chains** (`pipeline/continuity.py`): a chain
+  renders its scenes strictly in order — an acted chain holding one worker so each
+  take can continue the motion context the previous one left there — while unrelated
+  chains still fan out across the fleet in parallel, longest chains scheduled first. It re-runs `ensure_generation_plan`
   and `recover_incomplete_tasks` on start, so an interrupted render resumes without
   losing completed work. The durable store is its **progress/recovery ledger, not its
   scheduler** — it never calls `acquire_next_task`.
