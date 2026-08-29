@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, ContinueModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, ContinueModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, continuationHonoured, ContinuationFrameNote, CatalogueRefCard,
   RestyleForm, NO_STYLE,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
@@ -70,7 +70,7 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 // ── Per-scene card (Scenes tab) ───────────────────────────────────────────────
 
 function SceneCard({
-  scene, index, total, jobId, workDir, resolution, style,
+  scene, prevScene = null, index, total, jobId, workDir, resolution, style,
   voices, filmVoice, voiceMeta = {}, castOpts = [], actedSilent = false,
   acted = null, performance = null,
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
@@ -504,6 +504,9 @@ function SceneCard({
           </div>
 
           <div style={{ padding: '14px 16px' }}>
+            {continuationHonoured(sceneType, prevScene, actedSilent) && (
+              <ContinuationFrameNote acted={actedShape} />
+            )}
             {!editing ? (
               <>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 6 }}>
@@ -2700,6 +2703,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
             <SceneCard
               key={scene.id}
               scene={scene}
+              prevScene={scenes[i - 1] || null}
               index={i}
               total={scenes.length}
               jobId={jobId}

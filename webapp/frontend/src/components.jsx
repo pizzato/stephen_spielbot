@@ -171,6 +171,34 @@ export const isActedMode = (m) => ACTED_MODES.includes(m || '')
 export const hasActedShape = (mode, actedSilent, singing = false) =>
   isActedMode(mode) || (mode === 'silent' && (!!actedSilent || !!singing))
 
+// Will this scene's `continues_previous` flag actually be honoured by the
+// render? Mirrors continuity.drop_reason on the backend: the first scene has
+// nothing to continue, singing beats hold the song's own timeline, and an
+// acted scene cannot wait on a narrated predecessor (takes are shot in a
+// pre-pass, before the narrated scenes). A flag that is dropped renders as an
+// ordinary cut, so the scene DOES open on its own painted first frame.
+export const continuationHonoured = (scene, prev, actedSilent) => {
+  if (!scene?.continues_previous || !prev) return false
+  if (scene.singing || prev.singing) return false
+  return !(hasActedShape(scene.mode, actedSilent, scene.singing)
+    && !hasActedShape(prev.mode, actedSilent, prev.singing))
+}
+
+// The First frame panel's note on a continuing scene: the render opens it on
+// the previous scene's closing frame (or, take-to-take, on the motion context
+// that take left behind), so the painted image below is only a fallback.
+export const ContinuationFrameNote = ({ acted }) => (
+  <div className="muted mt-8" style={{ fontSize: 12, lineHeight: 1.5 }}>
+    <Icon name="link" /> This scene continues the previous one, so it opens on
+    {acted
+      ? " the motion the previous take left off on"
+      : " the previous scene's closing frame"} — the painted first frame on this
+    card is <strong>not</strong> what it starts from. It is kept as the fallback
+    if that handoff fails, and it is what the scene opens on again the moment
+    you turn continuation off.
+  </div>
+)
+
 function BeatRows({ beats, seconds, onChange, onCommit }) {
   const set = (i, k, v) => onChange(beats.map((b, j) => (i === j ? { ...b, [k]: v } : b)))
   return (
