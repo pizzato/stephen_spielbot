@@ -16,7 +16,10 @@ tts_workers:             # set by make install → containerized F5-TTS/Chatterb
 ```
 
 Scenes are distributed across the workers in parallel, so adding a machine shortens
-every render.
+every render. The one exception is a run of scenes marked
+[continues the previous scene](performance_films.md#continued-shots): those form a
+chain that renders in order on one worker, and only the film's *other* scenes fan
+out around it.
 
 ## Prerequisites per worker
 

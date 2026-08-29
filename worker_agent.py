@@ -230,7 +230,22 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
     scene_finals = [work_dir / f"scene_{i:02d}_final.mp4" for i in range(1, scene_count + 1)]
     combined = work_dir / "combined.mp4"
     music_path = Path(p.get("music_path", work_dir / "background_music.wav")).expanduser()
-    concatenate_scenes(scene_finals, combined)
+    # Continued shots (continues_previous) butt-join instead of fading — the
+    # same joins resume_generation makes. Best-effort: on any hiccup every
+    # boundary just keeps its fade.
+    try:
+        import json as _json
+
+        from pipeline import continuity as _continuity
+
+        rows = store.scene_rows(task.job_id)
+        jc_path = work_dir / "job_config.json"
+        jc = _json.loads(jc_path.read_text()) if jc_path.exists() else {}
+        hard = (_continuity.hard_boundaries(rows, _continuity.continuation_plan(rows, jc))
+                if len(rows) == len(scene_finals) else set())
+    except Exception:
+        hard = set()
+    concatenate_scenes(scene_finals, combined, hard_boundaries=hard)
     mix_background_music(
         combined,
         music_path,

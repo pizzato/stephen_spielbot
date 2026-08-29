@@ -672,7 +672,7 @@ class AssemblyTests(unittest.TestCase):
              m.patch.object(rg, "ensure_video_resolution"), \
              m.patch.object(rg, "_get_duration", return_value=6.0), \
              m.patch.object(rg, "concatenate_scenes",
-                            side_effect=lambda clips, out: Path(out).write_bytes(b"c" * 20_000)):
+                            side_effect=lambda clips, out, **kw: Path(out).write_bytes(b"c" * 20_000)):
             rg.main(wd)
         return store, job_id_from_work_dir(wd), out_dir
 

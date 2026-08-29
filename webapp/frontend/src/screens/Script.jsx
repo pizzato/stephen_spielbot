@@ -862,6 +862,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         soundscape: s.soundscape ?? null, cast: s.cast ?? null,
         beats: s.beats ?? null, seconds: s.seconds ?? null,
         no_wardrobe: !!s.no_wardrobe,
+        continues_previous: !!s.continues_previous,
       })
       // The server rebuilt the prompt (and narration) from the fields — adopt
       // its copy so the read-only prompt on screen is exactly what renders.
@@ -1090,6 +1091,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </Field>
 
             <SceneTypeControls scene={s} castOpts={castOpts} actedSilent={actedSilent}
+              isFirst={i === 0}
               onChange={(patch, commit) => { patchScene(i, patch); if (commit) persist(i, { ...scenes[i], ...patch }) }}
               onCommit={() => persist(i)}
               onConvert={async (m) => {

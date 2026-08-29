@@ -1071,6 +1071,30 @@ def extract_last_frame(video_path: Path, output_path: Path) -> Path:
     return output_path
 
 
+def extract_frame_at(video_path: Path, output_path: Path, seconds: float) -> Path:
+    """The frame *seconds* into a clip — the handoff frame a continuing scene
+    starts from.
+
+    A narrated clip renders ~1 s longer than its narration and the mux trims
+    it back, so the SHIPPED last frame sits at the narration's length, not at
+    the raw clip's end — grab the frame at the cut point, not the tail. Falls
+    back to the literal last frame when the ask is at or past the clip's end
+    (the mux freeze-pads that case instead of trimming).
+    """
+    dur = _get_duration(video_path)
+    if seconds <= 0 or seconds >= dur - 0.05:
+        return extract_last_frame(video_path, output_path)
+    _run([
+        _FFMPEG, "-y",
+        "-ss", f"{seconds:.3f}",
+        "-i", str(video_path),
+        "-vframes", "1",
+        "-q:v", "2",
+        str(output_path),
+    ], timeout=60)
+    return output_path
+
+
 def extract_audio(video_path: Path, output_path: Path, duration: float | None = None) -> Path:
     """Extract the audio track from a video file, optionally trimmed to duration."""
     dur_flag = ["-t", str(duration)] if duration is not None else []
@@ -1223,15 +1247,28 @@ def trim_video(input_path: Path, output_path: Path, duration: float) -> Path:
     return output_path
 
 
-def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float = 0.3) -> Path:
-    """Concatenate scenes with fade-out/fade-in between them."""
+def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float = 0.3,
+                       hard_boundaries: set[int] | None = None) -> Path:
+    """Concatenate scenes with fade-out/fade-in between them.
+
+    *hard_boundaries*: positional indices i where the join between clip i and
+    clip i+1 must not fade the PICTURE — a scene that CONTINUES the previous
+    shot (continues_previous) would read the dip as a glitch mid-take. The
+    0.05 s audio fades stay even there: they are a declick, not a transition —
+    on a motion-context join the audio is continuous and 50 ms is inaudible,
+    while a frame-handoff join splices two unrelated narration tracks and a
+    hard splice pops. Other boundaries keep both fades.
+    """
     if len(scene_paths) == 1:
         shutil.copy2(scene_paths[0], output_path)
         return output_path
 
     n = len(scene_paths)
+    hard = set(hard_boundaries or ())
     durations = [_get_duration(p) for p in scene_paths]
-    logger.info("[ffmpeg] concatenate_scenes: %d scenes, total %.1fs", n, sum(durations))
+    logger.info("[ffmpeg] concatenate_scenes: %d scenes, total %.1fs%s",
+                n, sum(durations),
+                f", hard joins at {sorted(hard)}" if hard else "")
 
     inputs = []
     for p in scene_paths:
@@ -1265,9 +1302,9 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         # video params across inputs, but scene finals can differ (e.g. a dialogue
         # scene's within-concat re-encode lands at 50fps while narration is 25).
         vf = [f"fps={_FILM_FPS}", "setsar=1", "setpts=PTS-STARTPTS"]
-        if fade > 0 and i > 0:
+        if fade > 0 and i > 0 and (i - 1) not in hard:
             vf.append(f"fade=t=in:st=0:d={fade:.2f}")
-        if fade > 0 and i < n - 1:
+        if fade > 0 and i < n - 1 and i not in hard:
             vf.append(f"fade=t=out:st={dur - fade:.3f}:d={fade:.2f}")
         filters.append(f"[{i}:v]{','.join(vf)}[fv{i}]")
 

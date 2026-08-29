@@ -35,6 +35,8 @@ from PIL import Image as _PILImage
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from dataclasses import replace as _dc_replace
+
 from pipeline.llm import Scene, NEGATIVE_PROMPT, narration_language_name
 from pipeline import engines as _engines
 from pipeline import performance as _performance
@@ -45,11 +47,12 @@ from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
     _verify_upscale_not_blank,
     concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
-    extract_last_frame, ensure_video_resolution, mix_background_music,
+    extract_frame_at, extract_last_frame, ensure_video_resolution, mix_background_music,
     temporal_ai_upscale_video, trim_video, upscale_video,
     write_silence_wav as _write_silence_wav,
 )
 from pipeline import cadence as _cadence
+from pipeline import continuity as _continuity
 from pipeline import scene_context as _scene_context
 from pipeline.tts_text import spoken_source
 from pipeline.tts_worker import generate_narration, resolve_robotic_amount
@@ -452,7 +455,9 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
 
 def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
                              comfy_url: str, vid_width: int, vid_height: int,
-                             style_name: str = "", direction: str = "") -> Path:
+                             style_name: str = "", direction: str = "",
+                             prev_ctx: dict | None = None,
+                             handoff_frame: Path | None = None) -> Path:
     """Render ONE performance scene: character portraits + dialogue → a clip that
     already contains its own speech. Returns the finished scene_NN_final.mp4.
 
@@ -460,23 +465,47 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     needs as arguments and touches no module state. *direction* is the editor's
     note for THIS take ("Shoot again" with an instruction) — it reaches the
     model as the prompt's [DIRECTION] block and is not persisted to the scene.
+
+    A scene marked ``continues_previous`` arrives with ONE of:
+    *prev_ctx* — the PREVIOUS scene's motion-context note; this take is
+    conditioned on that latent (which lives on *comfy_url*'s disk) so motion
+    and audio carry straight through the boundary. *handoff_frame* — the
+    fallback when the latent is unreachable: the previous scene's closing
+    frame rides as an opening "frame" reference instead.
     """
+    continuing = prev_ctx is not None or handoff_frame is not None
     # Fills in cast/length/setting for a dialogue scene authored in a MIXED
     # film, where only the lines and the classic prompts exist. Chaining is
     # read here too: it decides how long a SILENT scene is allowed to be, and
-    # clamping before the renderer sees it would cut the scene short.
-    scene_meta = _performance.acted_meta(scene, chained=chain_scenes_flag(cfg, style_name))
-    if direction.strip():
+    # clamping before the renderer sees it would cut the scene short. A
+    # CONTINUING take always renders as one clip, so it must be sized as one —
+    # sized chained it would ask for a two-clip length the single clip's
+    # ceiling then truncates, and the gate would retake at full GPU price
+    # toward a length it can never reach.
+    scene_meta = _performance.acted_meta(
+        scene, chained=chain_scenes_flag(cfg, style_name) and not continuing)
+    if continuing:
+        # The same preamble the editor's Continue uses: this is not a new
+        # scene, and re-establishing one is exactly the failure to avoid.
+        scene_meta["direction"] = " ".join(
+            x for x in (_CONTINUATION_DIRECTION, direction.strip(),
+                        str(scene_meta.get("direction") or "").strip()) if x)
+    elif direction.strip():
         scene_meta["direction"] = direction.strip()
-    ensure_opening_frame(scene, work_dir, cfg, comfy_url=comfy_url,
-                         vid_width=vid_width, vid_height=vid_height,
-                         style_name=style_name)
+    if not continuing:
+        # A continuing take opens on the previous scene's motion, not on a
+        # painted frame — one would fight the other.
+        ensure_opening_frame(scene, work_dir, cfg, comfy_url=comfy_url,
+                             vid_width=vid_width, vid_height=vid_height,
+                             style_name=style_name)
     # One scene = ONE generation, whole conversation in a single continuous
     # clip (the user's call: shot/reverse-shot splitting kept identities safe
     # but broke scenes apart). The splitter remains available per config
     # (performance_shot_split) for content where identity outranks flow;
     # in one-clip mode the identity locks and the gate carry the swap risk.
-    if bool(cfg.get("performance_shot_split", False)):
+    # A continuing scene is always one clip — a shot split would cut inside
+    # the very take that exists to avoid a cut.
+    if bool(cfg.get("performance_shot_split", False)) and not continuing:
         shots = _performance.shots_for(
             scene_meta, establishing=bool(cfg.get("performance_establishing", True)))
     else:
@@ -486,10 +515,18 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
             scene, shots, scene_meta, work_dir, cfg, comfy_url=comfy_url,
             vid_width=vid_width, vid_height=vid_height, style_name=style_name)
     else:
+        extra = ([{"name": "the closing frame of the previous scene — this take "
+                           "picks up from exactly this moment",
+                   "kind": "frame", "path": str(handoff_frame)}]
+                 if handoff_frame is not None and prev_ctx is None else None)
         final = _render_performance_clip(
             scene, shots[0], work_dir, cfg, work_dir / f"scene_{scene.id:02d}_final.mp4",
             comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
-            style_name=style_name)
+            style_name=style_name, extra_pictures=extra,
+            # The scene's own preview/first frame describes a fresh opening;
+            # a continuing take must open on the previous scene instead.
+            drop_kinds=(("frame",) if continuing else ()),
+            prev_ctx=prev_ctx)
     # Bind the continuation point to the clip that is actually in the cut.
     _scene_context.stamp_final(work_dir, scene.id, final)
     return final
@@ -504,6 +541,36 @@ _CONTINUATION_DIRECTION = (
     "the same room, the same framing and the same light, with everyone exactly "
     "where they already are. Do not re-establish the scene and do not "
     "re-introduce anyone.")
+
+
+# The narrated-scene counterpart of _CONTINUATION_DIRECTION: an I2V engine only
+# sees a still, so the prompt has to say the still is mid-shot — and quote the
+# previous scene's motion, which is the only description of the movement the
+# frame arrives carrying.
+_CONTINUATION_VIDEO_PROMPT = (
+    "Continuation of the previous shot — the camera has never cut: the clip "
+    "picks up from its first frame mid-motion and carries the same camera move "
+    "and subject action straight on, never restarting or re-establishing "
+    "anything.")
+
+
+def continuation_video_prompt(scene: Scene, prev_motion: str = "") -> str:
+    """The video prompt a narrated scene renders with when it CONTINUES the
+    previous scene from its closing frame.
+
+    *prev_motion* is the predecessor's LTX motion line — passed only when the
+    predecessor is a narrated scene. An acted predecessor's video_prompt is
+    its whole assembled H3 prompt (cast, lines, picture slots), and splicing
+    that in would crowd this scene's own instruction past the encoder cap.
+    """
+    parts = [_CONTINUATION_VIDEO_PROMPT]
+    prev_motion = (prev_motion or "").strip()
+    if prev_motion:
+        parts.append(f"The shot so far: {prev_motion}")
+    own = (scene.video_prompt or "").strip()
+    if own:
+        parts.append(f"It continues: {own}")
+    return " ".join(parts)
 
 
 def continue_performance_scene(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
@@ -637,6 +704,127 @@ def render_acted_scene(scene, work_dir: Path, cfg: dict, *, store, durable_job_i
     raise RuntimeError(f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
 
 
+def render_acted_group(group: list, work_dir: Path, cfg: dict, *, store,
+                       durable_job_id: str, worker_pool: WorkerPool,
+                       vid_width: int, vid_height: int,
+                       on_scene_start=None,
+                       dropped: set | None = None) -> dict[int, float]:
+    """Render a CHAIN of acted scenes, each continuing the previous one's shot.
+
+    The whole chain holds ONE worker: the motion context a take saves lives on
+    that worker's disk, so rendering the next scene anywhere else would lose
+    the very continuity the chain exists for. (Re-acquiring with ``only=``
+    instead would park this thread at the head of the pool's FIFO and stall
+    every other scene behind it — holding the lease is both simpler and fair.)
+
+    When the context is unreachable anyway — the worker died mid-chain, or the
+    predecessor was rendered by an earlier run on a machine now busy or gone —
+    the scene falls back to opening on the predecessor's closing frame: a
+    softer join than the latent gives, but the film still reads as one shot
+    and never fails outright. Returns {scene.id: duration}.
+    """
+    durs: dict[int, float] = {}
+    lease_secs = int(_engines.resolve_reference(
+        cfg, cfg.get("reference_engine")).get("lease_seconds") or 14400)
+    held: str | None = None
+    prev = None
+    try:
+        for scene in group:
+            final = work_dir / f"scene_{scene.id:02d}_final.mp4"
+            if final.exists() and final.stat().st_size > 10_000:
+                logger.info("Scene %d: already rendered — skipping", scene.id)
+                durs[scene.id] = _get_duration(final)
+                prev = scene
+                continue
+            if on_scene_start is not None:
+                on_scene_start(scene)
+            t_id = task_id(durable_job_id, "scene", scene.id, "performance")
+            last_err: Exception | None = None
+            for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):
+                if held is None:
+                    if not worker_pool.has_healthy():
+                        raise RuntimeError(f"All workers failed — last error: {last_err}")
+                    held = worker_pool.acquire()
+                # The continuation input, decided per attempt: the latent only
+                # works on the worker that wrote it, so a chain that moved
+                # workers (or resumed after one died) downgrades to the frame.
+                prev_ctx = None
+                handoff: Path | None = None
+                if prev is not None:
+                    prev_final = work_dir / f"scene_{prev.id:02d}_final.mp4"
+                    note = _scene_context.load(work_dir, prev.id)
+                    if (note and note.get("comfy_url") == held
+                            and _scene_context.continuable(work_dir, prev.id, prev_final)):
+                        prev_ctx = note
+                    else:
+                        try:
+                            handoff = extract_last_frame(
+                                prev_final,
+                                work_dir / f"scene_{scene.id:02d}_handoff.png")
+                            logger.info(
+                                "Scene %d: motion context for scene %d is not on %s "
+                                "— continuing from its closing frame instead",
+                                scene.id, prev.id, held)
+                        except Exception as exc:
+                            logger.warning("Scene %d: no handoff frame from scene "
+                                           "%d (%s) — rendering as a cut",
+                                           scene.id, prev.id, exc)
+                            if dropped is not None:
+                                # Tell assembly the join is a plain cut now, so
+                                # it keeps the fade instead of butt-joining two
+                                # unrelated shots.
+                                dropped.add(scene.id)
+                try:
+                    store.register_worker(worker_id("comfy", held), "comfy", held)
+                    with TaskRun(store, t_id, worker_id_value=worker_id("comfy", held),
+                                 lease_seconds=lease_secs, retryable=True,
+                                 start_message=f"acted scene {scene.id} (chain)") as run:
+                        out = render_performance_scene(
+                            scene, work_dir, cfg, comfy_url=held,
+                            vid_width=vid_width, vid_height=vid_height,
+                            style_name=cfg.get("style_name") or "",
+                            prev_ctx=prev_ctx, handoff_frame=handoff)
+                        store.record_artifact(durable_job_id, t_id, "scene_final", out,
+                                              duration_seconds=_get_duration(out))
+                        run.complete({"path": str(out)}, "acted scene rendered")
+                    durs[scene.id] = _get_duration(out)
+                    break
+                except Exception as e:
+                    last_err = e
+                    worker_fault = (isinstance(e, StuckJobError)
+                                    or any(k in str(e) for k in _WORKER_ERR_KEYWORDS)
+                                    or "not in list" in str(e))
+                    if worker_fault:
+                        logger.warning("Worker %s cannot render scene %d (%d/%d): %s — removing",
+                                       held, scene.id, attempt, _MAX_SCENE_ATTEMPTS,
+                                       str(e)[:200])
+                        worker_pool.mark_failed(held)
+                        worker_pool.release(held)
+                        held = None
+                    else:
+                        logger.warning("Scene %d failed on %s (%d/%d): %s — retrying",
+                                       scene.id, held, attempt, _MAX_SCENE_ATTEMPTS,
+                                       str(e)[:200])
+                        if attempt < _MAX_SCENE_ATTEMPTS:
+                            time.sleep(5)
+                        if attempt >= 2:
+                            # Two soft failures on one box smells like the box
+                            # (a full disk reads as a scene fault, not a worker
+                            # fault). Let the last attempt land elsewhere — the
+                            # per-attempt probe above then downgrades the join
+                            # to a frame handoff, which beats failing the film.
+                            worker_pool.release(held)
+                            held = None
+            else:
+                raise RuntimeError(
+                    f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
+            prev = scene
+    finally:
+        if held is not None:
+            worker_pool.release(held)
+    return durs
+
+
 def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_url,
                               vid_width, vid_height, style_name) -> Path:
     """Render each single-speaker shot, then join them into the scene.
@@ -722,17 +910,36 @@ def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
 def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_url,
                              vid_width, vid_height, style_name,
                              extra_pictures: list[dict] | None = None,
-                             drop_kinds: tuple = ()) -> Path:
+                             drop_kinds: tuple = (),
+                             prev_ctx: dict | None = None) -> Path:
     from pipeline.comfyui import (context_latent_name, generate_video_h3_ref,
-                                  generate_video_h3_ref_chained)
+                                  generate_video_h3_ref_chained,
+                                  generate_video_h3_ref_continue)
     from app import resolve_performance_references
+
+    from pipeline.comfyui import H3_MAX_REF_IMAGES
 
     # The SAME resolver the editor's performance view calls, so the slots shown
     # on screen are the slots wired into the graph.
     refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
     if drop_kinds:
         kept = [p for p in refs["pictures"] if p.get("kind") not in drop_kinds]
+        if not kept and not extra_pictures:
+            # A castless silent beat's ONLY reference can be its frame — and
+            # the resolver already suppressed the location because that frame
+            # existed. Dropping it too would leave the take nothing to hold
+            # onto (Ref2VA hard-requires an image), so keep the originals.
+            kept = refs["pictures"]
         refs["pictures"] = [{**p, "slot": i + 1} for i, p in enumerate(kept)]
+    if extra_pictures:
+        # The extras are load-bearing (a continuity frame, a handoff frame) and
+        # sit in the LAST slots — on a crowded scene they would be the ones the
+        # model cap silently slices off while the prompt still cites them. Make
+        # room by trimming the resolved tail (portraits lead, wardrobe trails).
+        keep = max(1, H3_MAX_REF_IMAGES - len(extra_pictures))
+        if len(refs["pictures"]) > keep:
+            refs["pictures"] = [{**p, "slot": i + 1}
+                                for i, p in enumerate(refs["pictures"][:keep])]
     for pic in (extra_pictures or []):
         refs["pictures"].append({**pic, "slot": len(refs["pictures"]) + 1})
     # Passed whole: build_h3_prompt reads each reference's kind to give it the
@@ -796,13 +1003,24 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             logger.info("Scene %d: pinning soundtrack artifact %s",
                         scene.id, track_audio.name)
 
+    # A pinned track fixes the clip's whole audio timeline; conditioning the
+    # same clip on the previous scene's motion context is untested against it
+    # and the sync is the part that must not move. The track wins.
+    if prev_ctx is not None and track_audio is not None:
+        logger.warning("Scene %d: has a pinned track — continuing the previous "
+                       "scene's motion is dropped for this take", scene.id)
+        prev_ctx = None
+
     # Chained acted scenes (h3_chain_scenes): a scene longer than one clip is
     # shot as two Ref2VA clips joined by H3 Motion Context instead of being
     # split. Reference engines are always MiniMax, so the toggle alone decides
     # — but a scene that already fits one clip renders single-clip either way
     # rather than paying the join's ~22% overhead for nothing. A pinned track
-    # spans exactly ONE clip, so an audio-driven take never chains.
-    chained = chain_scenes_flag(cfg, style_name) and track_audio is None
+    # spans exactly ONE clip, so an audio-driven take never chains — and a
+    # take CONTINUING the previous scene renders single-clip too (its graph
+    # already carries a motion context; loading a second one is untested).
+    chained = (chain_scenes_flag(cfg, style_name) and track_audio is None
+               and prev_ctx is None)
     if chained and _performance.content_seconds(
             meta, chained=True) > _performance.acted_limits(False)[1]:
         # Dialogue divides at speaker turns; a SILENT scene has no lines to
@@ -822,7 +1040,8 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     ]
     logger.info("Scene %d: performance render (%s%s) — %d portraits, %d voices → %s",
                 scene.id, engine["key"],
-                f", chained x{len(sub_metas)}" if chained else "",
+                f", chained x{len(sub_metas)}" if chained
+                else (", continuing previous scene" if prev_ctx is not None else ""),
                 len(ref_images), len(ref_audios), clip.name)
     # Where this take can be picked up again (the film editor's Continue). Each
     # attempt saves under its own prefix — a gate retake is a different take, and
@@ -842,7 +1061,20 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
         durations = [min(_performance.H3_CEILING_SECONDS,
                          _performance.render_seconds(m) * stretch)
                      for m in sub_metas]
-        if chained:
+        if prev_ctx is not None:
+            # Continue the PREVIOUS scene's take: same graph as the editor's
+            # Continue button, with the save token pointing at THIS scene so
+            # its own continuation point lands in its own slot.
+            generate_video_h3_ref_continue(
+                engine, prompts[0], ref_images, out,
+                context_latent=str(prev_ctx.get("latent") or ""),
+                context_token=token, clip_index=1,
+                ref_audios=ref_audios,
+                width=vid_width, height=vid_height,
+                duration_seconds=durations[0],
+                comfy_url=comfy_url,
+            )
+        elif chained:
             generate_video_h3_ref_chained(
                 engine, prompts, ref_images, out,
                 ref_audios=ref_audios,
@@ -1383,6 +1615,18 @@ def main(work_dir: Path) -> None:
     acted_ids = {s.id for s in dialogue_scenes}
     classic_scenes = [s for s in scenes if s.id not in acted_ids]
     dialogue_durs: dict[int, float] = {}
+    # Explicit cross-scene continuations (continues_previous): validated once,
+    # then honoured everywhere below — chain grouping in both scene pools, the
+    # handoff each dependent scene starts from, and the final concat's hard
+    # (fade-free) boundaries.
+    continuation = _continuity.continuation_plan(scenes, plan_cfg)
+    if continuation:
+        logger.info("Continued shots: %s",
+                    ", ".join(f"{p}→{s}" for s, p in sorted(continuation.items())))
+    # Scenes whose continuation degraded to a plain cut at render time (no
+    # handoff frame could be made): assembly keeps their fades. set.add is
+    # atomic, so the scene threads write it without a lock.
+    dropped_continuations: set[int] = set()
     # One production, one look: a mixed film's narrated scenes join the acted
     # takes on H3 rather than cutting between two different video models.
     video_engine = unify_mixed_engine(video_engine, cfg,
@@ -1407,29 +1651,52 @@ def main(work_dir: Path) -> None:
         done_dlg = [0]
         _dlg_lock = threading.Lock()
 
-        def _render_dialogue(scene: Scene) -> tuple[int, float]:
+        def _dlg_progress(scene: Scene) -> None:
             with _dlg_lock:
                 pct = 2 + (dlg_end - 2) * (done_dlg[0] / max(1, len(dialogue_scenes)))
                 write_progress(status_file, pct,
                                f"Acted scene {scene.id} of {len(scenes)} "
                                f"({done_dlg[0]} done)")
-            out = render_acted_scene(
-                scene, work_dir, plan_cfg, store=store, durable_job_id=durable_job_id,
-                worker_pool=worker_pool, vid_width=vid_width, vid_height=vid_height)
-            with _dlg_lock:
-                done_dlg[0] += 1
-            return scene.id, _get_duration(out)
 
-        n_parallel = max(1, min(len(worker_pool.urls), len(dialogue_scenes)))
+        def _render_dialogue_group(grp: list[Scene]) -> dict[int, float]:
+            # A chain of continuing scenes renders in order on one worker;
+            # a lone scene keeps the classic per-scene path.
+            if len(grp) == 1:
+                _dlg_progress(grp[0])
+                out = render_acted_scene(
+                    grp[0], work_dir, plan_cfg, store=store,
+                    durable_job_id=durable_job_id, worker_pool=worker_pool,
+                    vid_width=vid_width, vid_height=vid_height)
+                durs = {grp[0].id: _get_duration(out)}
+            else:
+                durs = render_acted_group(
+                    grp, work_dir, plan_cfg, store=store,
+                    durable_job_id=durable_job_id, worker_pool=worker_pool,
+                    vid_width=vid_width, vid_height=vid_height,
+                    on_scene_start=_dlg_progress,
+                    dropped=dropped_continuations)
+            with _dlg_lock:
+                done_dlg[0] += len(grp)
+            return durs
+
+        dlg_groups = _continuity.chain_groups(dialogue_scenes, continuation)
+        # Longest chains first — by rendered seconds, not scene count: a chain
+        # occupies one worker for its whole length, so starting the long pole
+        # last leaves the fleet idle waiting on it.
+        dlg_groups.sort(
+            key=lambda g: sum(
+                _performance.render_seconds(_performance.acted_meta(s)) for s in g),
+            reverse=True)
+        n_parallel = max(1, min(len(worker_pool.urls), len(dlg_groups)))
         write_progress(status_file, 1,
-                       f"Rendering {len(dialogue_scenes)} acted scene(s) across "
+                       f"Rendering {len(dialogue_scenes)} acted scene(s) "
+                       f"({len(dlg_groups)} chain(s)) across "
                        f"{n_parallel} worker(s)…")
         dlg_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_parallel)
         try:
-            futs = {dlg_pool.submit(_render_dialogue, s): s for s in dialogue_scenes}
+            futs = {dlg_pool.submit(_render_dialogue_group, g): g for g in dlg_groups}
             for fut in concurrent.futures.as_completed(futs):
-                sid, dur = fut.result()
-                dialogue_durs[sid] = dur
+                dialogue_durs.update(fut.result())
         finally:
             dlg_pool.shutdown(wait=True)
 
@@ -1502,7 +1769,7 @@ def main(work_dir: Path) -> None:
                 return_when=concurrent.futures.FIRST_COMPLETED,
             )
             for fut in done_futs:
-                scene = tts_pending.pop(fut)
+                tts_pending.pop(fut)
                 sid, out = fut.result()
                 dur = _get_duration(out)
                 narration_paths[sid] = out
@@ -1650,7 +1917,9 @@ def main(work_dir: Path) -> None:
     scene_raws_map: dict[int, Path] = {}
     scene_ambient_map: dict[int, Path | None] = {}
 
-    def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
+    def _run_scene(scene: Scene, handoff_frame: Path | None = None,
+                   prev_scene: Scene | None = None,
+                   prev_motion: str = "") -> tuple[int, Path, Path | None]:
         existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
         image_task = task_id(durable_job_id, "scene", scene.id, "image")
         video_task = task_id(durable_job_id, "scene", scene.id, "video")
@@ -1720,6 +1989,17 @@ def main(work_dir: Path) -> None:
                 scene.id, p.name, vid_width, vid_height,
             )
 
+        if handoff_frame is not None and handoff_frame.exists():
+            # This scene CONTINUES the previous one (continues_previous): it
+            # opens on that scene's closing frame — extracted at the render
+            # resolution, so it outranks any stale preview above — and its
+            # prompt carries the motion on instead of starting a fresh shot.
+            scene_first_frame = handoff_frame
+            scene = _dc_replace(
+                scene, video_prompt=continuation_video_prompt(scene, prev_motion))
+            logger.info("Scene %d: continuing scene %s from its closing frame",
+                        scene.id, getattr(prev_scene, "id", "?"))
+
         last_err: Exception | None = None
         for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):
             if not worker_pool.has_healthy():
@@ -1747,7 +2027,12 @@ def main(work_dir: Path) -> None:
                 if scene_first_frame and scene_first_frame.exists():
                     store.complete_task(image_task, result={"path": str(scene_first_frame), "skipped": True})
                     store.record_artifact(durable_job_id, image_task, "image", scene_first_frame)
-                    _persist_first_frame(scene_first_frame)
+                    if scene_first_frame != handoff_frame:
+                        # A handoff frame is the PREVIOUS scene's picture —
+                        # repointing this scene's stored preview at it would
+                        # outlive the flag (re-renders keep opening on it even
+                        # after continuation is switched off).
+                        _persist_first_frame(scene_first_frame)
                     image_done[0] = True
                 else:
                     store.start_task(
@@ -1823,12 +2108,81 @@ def main(work_dir: Path) -> None:
                 worker_pool.release(url)
         raise RuntimeError(f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
 
+    def _prepare_handoff(scene: Scene, prev: Scene, prev_raw: Path | None) -> Path | None:
+        """The frame a continuing scene opens on.
+
+        From the previous CLASSIC scene's raw clip at the point the mux will
+        cut it (its narration length), or from an ACTED predecessor's finished
+        take (which ships whole, so its literal last frame IS the cut point).
+        Written to its own scene_NN_handoff.png — never over the scene's
+        authored first frame, which must survive the flag being turned off.
+        Best-effort: a failure records the drop so assembly keeps the fade.
+        """
+        # EXACTLY _run_scene's skip conditions: when they disagree the scene
+        # re-renders while the handoff was skipped, and the continuation is
+        # silently lost.
+        existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
+        single = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
+        clip_02 = work_dir / f"scene_{scene.id:02d}_clip_02.mp4"
+        if (existing.exists() and existing.stat().st_size > 10_000) or (
+                single.exists() and single.stat().st_size > 10_000
+                and not clip_02.exists()):
+            return None  # already rendered — _run_scene will skip it
+        out = work_dir / f"scene_{scene.id:02d}_handoff.png"
+        try:
+            if prev_raw is not None and prev_raw.exists():
+                cut_at = float(narration_durs.get(prev.id) or 0.0)
+                if cut_at <= 0:
+                    raise RuntimeError(
+                        f"scene {prev.id} has no narration length to cut at")
+                return extract_frame_at(prev_raw, out, cut_at)
+            prev_final = work_dir / f"scene_{prev.id:02d}_final.mp4"
+            return extract_last_frame(prev_final, out)
+        except Exception as exc:
+            logger.warning("Scene %d: no handoff frame from scene %d (%s) — "
+                           "rendering as a cut", scene.id, prev.id, exc)
+            dropped_continuations.add(scene.id)
+            return None
+
+    scenes_by_id = {s.id: s for s in scenes}
+
+    def _run_scene_group(grp: list[Scene]) -> list[tuple[int, Path, Path | None]]:
+        """One chain of continuing classic scenes, rendered strictly in order —
+        each needs the previous clip on disk before it can start. The chain's
+        FIRST scene may itself continue an acted scene (rendered in the
+        pre-pass), which is where its handoff comes from."""
+        results: list[tuple[int, Path, Path | None]] = []
+        prev = scenes_by_id.get(continuation.get(grp[0].id, -1))
+        prev_raw: Path | None = None
+        for i, scene in enumerate(grp):
+            if i > 0:
+                prev = grp[i - 1]
+            handoff = _prepare_handoff(scene, prev, prev_raw) if prev is not None else None
+            # Quote the predecessor's motion only when it IS a motion line —
+            # group[0]'s predecessor is an acted scene, whose video_prompt is
+            # the whole assembled H3 prompt and would drown this scene's own.
+            motion = (prev.video_prompt or "") if i > 0 and prev is not None else ""
+            res = _run_scene(scene, handoff_frame=handoff, prev_scene=prev,
+                             prev_motion=motion)
+            prev_raw = res[1]
+            results.append(res)
+        return results
+
     n_workers = len(worker_pool.urls)
-    write_progress(status_file, video_band[0], f"Generating {len(classic_scenes)} scenes across {n_workers} worker(s)…")
+    classic_groups = _continuity.chain_groups(classic_scenes, continuation)
+    # Longest chains first — by clip seconds (narrations are known by now),
+    # not scene count: a chain renders serially, so a late start on the long
+    # pole leaves the fleet idle waiting for it at the end.
+    classic_groups.sort(
+        key=lambda g: sum(narration_durs.get(s.id, 0.0) for s in g),
+        reverse=True)
+    write_progress(status_file, video_band[0],
+                   f"Generating {len(classic_scenes)} scenes "
+                   f"({len(classic_groups)} chain(s)) across {n_workers} worker(s)…")
 
     scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, max(1, len(worker_pool.urls))))
-    pending: dict[concurrent.futures.Future, Scene] = {
-        scene_pool.submit(_run_scene, scene): scene for scene in classic_scenes
+    pending: dict[concurrent.futures.Future, list[Scene]] = {
+        scene_pool.submit(_run_scene_group, grp): grp for grp in classic_groups
     }
     completed = 0
     first_error: Exception | None = None
@@ -1841,25 +2195,26 @@ def main(work_dir: Path) -> None:
                 return_when=concurrent.futures.FIRST_COMPLETED,
             )
             for fut in done:
-                scene = pending.pop(fut)
+                grp = pending.pop(fut)
                 try:
-                    sid, scene_raw, scene_amb = fut.result()
-                    scene_raws_map[sid]    = scene_raw
-                    scene_ambient_map[sid] = scene_amb
-                    completed += 1
-                    pct = video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic
-                    write_progress(status_file, pct, f"Scene {sid}/{n} complete ✓  ({completed}/{n} done)")
+                    for sid, scene_raw, scene_amb in fut.result():
+                        scene_raws_map[sid]    = scene_raw
+                        scene_ambient_map[sid] = scene_amb
+                        completed += 1
+                        pct = video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic
+                        write_progress(status_file, pct, f"Scene {sid}/{n} complete ✓  ({completed}/{n} done)")
                     last_yield = time.time()
                 except Exception as e:
-                    logger.error("Scene %d failed permanently: %s", scene.id, e)
+                    ids = [s.id for s in grp]
+                    logger.error("Scene(s) %s failed permanently: %s", ids, e)
                     if first_error is None:
                         first_error = e
                     write_progress(status_file, video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic,
-                                   f"Scene {scene.id} FAILED: {e}")
+                                   f"Scene {ids[0] if len(ids) == 1 else ids} FAILED: {e}")
                     last_yield = time.time()
             now = time.time()
             if pending and first_error is None and (now - last_yield >= 30):
-                running = sorted(pending[f].id for f in pending)
+                running = sorted(s.id for f in pending for s in pending[f])
                 write_progress(status_file, video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic,
                                f"Scenes {running} generating… ({completed}/{n} done)")
                 last_yield = now
@@ -1968,7 +2323,14 @@ def main(work_dir: Path) -> None:
             # precisely the track's length.
             concatenate_scenes_hard_cut(scene_finals, combined)
         else:
-            concatenate_scenes(scene_finals, combined)
+            # A continued shot (continues_previous) must butt-join — the
+            # default inter-scene fade would dip to black mid-take. Joins that
+            # degraded to plain cuts at render time keep their fades.
+            kept_plan = {sid: p for sid, p in continuation.items()
+                         if sid not in dropped_continuations}
+            concatenate_scenes(
+                scene_finals, combined,
+                hard_boundaries=_continuity.hard_boundaries(scenes, kept_plan))
 
         if music_on and music_path.exists():
             write_progress(status_file, 95,

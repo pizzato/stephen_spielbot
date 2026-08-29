@@ -226,6 +226,15 @@ to convert, so it simply changes type and waits for you to write it. In a music 
 silent option reads **♪ Music video** — same routing, honest label: those scenes perform
 the song.
 
+Below the scene type sits **"Continues the previous scene"** — tick it and the renderer
+picks this shot up from the previous scene **without a cut**: acted takes literally
+continue the previous take's motion (and render on the same worker, in sequence), narrated
+scenes open on the previous scene's closing frame with the prompt carrying the camera move
+on, and the boundary is butt-joined in assembly instead of faded. The divide step may set
+it on its own where the story flows through a boundary. It is hidden on the first scene
+and on singing beats (their takes hold the song's exact timeline); see
+[Continued shots](../performance_films.md#continued-shots) for the mechanics.
+
 A **narrated or silent** scene has:
 
 | Field | Feeds |
