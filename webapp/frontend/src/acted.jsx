@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { api } from './api.js'
 import { Banner, Button, GuidedRegenButton, Icon, VideoVersionStrip, voiceLabel } from './components.jsx'
 
-// The acted-scene staging blocks, shared by the Script editor's scene cards and
-// the film edit screen's acted view so the two can never drift apart: a take is
+// The acted-scene staging blocks, shared by the Script and film editors' scene
+// cards so the two can never drift apart: a take is
 // conditioned on CHARACTERS, and the prompt refers to them by slot number
 // ("<Picture 1>", "<Audio 1>"), so every scene shows its slots as the thing
 // itself — the portrait that IS Picture 1, the voice clip that IS Audio 1.

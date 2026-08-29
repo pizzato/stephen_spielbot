@@ -445,7 +445,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [cur, setCur] = useState(0)
   // The acted STAGING for every scene this film shoots on H3 — resolved by the
   // backend with the renderer's own predicate and reference resolver, the same
-  // payload the film edit screen's acted view reads, so what a scene card shows
+  // payload the film edit screen's acted scene cards read, so what a scene card shows
   // is exactly what renders. Refreshed after any edit that can move a slot
   // (mode/cast/dialogue changes, character look/voice edits, first frames).
   const [perf, setPerf] = useState(null)

@@ -5,8 +5,8 @@ import {
   RestyleForm, NO_STYLE,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
-import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
+import { CastMember, RefTile, SoundtrackSlice, StagingWarnings } from '../acted.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -72,6 +72,7 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
   voices, filmVoice, voiceMeta = {}, castOpts = [], actedSilent = false,
+  acted = null, performance = null,
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
@@ -370,6 +371,31 @@ function SceneCard({
     }
   }
 
+  // Acted scenes are rewritten as one coherent take (dialogue, action,
+  // setting and camera), then re-shot with the normal Video/Shoot again
+  // control. Keep that paired workflow on this scene's one card.
+  const rewriteActed = async (instruction = '') => {
+    setBusy('rewrite')
+    setError('')
+    try {
+      const r = await api.regenActedScene(jobId, scene.id, instruction)
+      adopt(r?.scene)
+      await onSaved()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const removeFirstFrame = async () => {
+    setError('')
+    try {
+      await api.removeScenePreview(jobId, scene.id)
+      await onSaved()
+    } catch (e) { setError(e.message) }
+  }
+
   const isRendering = !!busy || !!taskId
   const selectedVersion = history?.versions?.find((v) => v.id === history.selected)
   const previewUrl = selectedVersion ? fileUrl(selectedVersion.path)
@@ -377,6 +403,7 @@ function SceneCard({
   const selectedTake = videoHistory?.versions?.find((v) => v.id === videoHistory.selected)
   const videoUrl = selectedTake ? fileUrl(selectedTake.path) : scene.video_url
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
+  const actedShape = hasActedShape(sceneType.mode, actedSilent, sceneType.singing)
 
   return (
     <>
@@ -552,7 +579,8 @@ function SceneCard({
                 </>)}
                 {isActedMode(sceneType.mode) ? (
                   <ActedPrompt prompt={videoPrompt} edited={!!scene.prompt_edited}
-                    refs={(sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    refs={acted?.pictures || (sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    audios={acted?.audios || []}
                     onSave={async (text) => {
                       try {
                         const r = await api.saveScene(jobId, scene.id, {
@@ -589,7 +617,8 @@ function SceneCard({
                     dialogue scene shows — it is shot the same way. */}
                 {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && (
                   <ActedPrompt label="Acted prompt" prompt={scene.acted_prompt || ''} edited={!!scene.prompt_edited}
-                    refs={(sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    refs={acted?.pictures || (sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    audios={acted?.audios || []}
                     onSave={async (text) => {
                       try {
                         await api.saveScene(jobId, scene.id, {
@@ -635,7 +664,7 @@ function SceneCard({
                   a render input — it can be painted, replaced (upload/paste)
                   or removed at will; narrated scenes keep the same painters. */}
               <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
-                label={isActedMode(sceneType.mode) ? (previewUrl ? 'First frame' : 'Add first frame') : 'Image'}
+                label={actedShape ? (previewUrl ? 'First frame' : 'Add first frame') : 'Image'}
                 busyLabel="Rendering…" busy={busy === 'image'}
                 onRegen={(instr) => rerender('image', instr)} chips={REGEN_CHIPS.image} align="left" />
               <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !previewUrl}
@@ -655,17 +684,24 @@ function SceneCard({
               <Button variant="ghost" icon="paste" size="sm" disabled={isRendering}
                 title="Use the image on the clipboard as this scene's initial frame"
                 onClick={pasteFrame}>Paste</Button>
-              {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && previewUrl && (
+              {actedShape && previewUrl && (
                 <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering}
                   title="Delete the first-frame image — the next shoot renders from portraits and visuals only"
-                  onClick={async () => {
-                    setError('')
-                    try { await api.removeScenePreview(jobId, scene.id); onSaved() }
-                    catch (e) { setError(e.message) }
-                  }}>Remove first frame</Button>
+                  onClick={removeFirstFrame}>Remove first frame</Button>
+              )}
+              {actedShape && (
+                <GuidedRegenButton variant="ghost" icon="rotate-right" size="sm"
+                  label="Re-generate scene" busyLabel="Rewriting…"
+                  busy={busy === 'rewrite'} disabled={isRendering}
+                  chips={sceneType.singing
+                    ? ['Nobody sings in this shot', 'More movement', 'Closer in', 'Different setting']
+                    : sceneType.mode === 'silent'
+                      ? ['Slower', 'More movement', 'Closer in', 'Different setting']
+                      : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
+                  onRegen={rewriteActed} align="left" />
               )}
               <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
-                label={isActedMode(sceneType.mode) ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
+                label={actedShape ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
                 onRegen={(instr) => rerender('video', instr)} chips={REGEN_CHIPS.video} align="left" />
               <Button variant="ghost" icon="scissors" size="sm" disabled={isRendering || !videoUrl}
                 title="Cut the tail off this scene's clip — the untrimmed take is kept"
@@ -675,7 +711,7 @@ function SceneCard({
               {/* Only offered where it can actually work: an acted take whose
                   motion context is still on a worker and still matches the clip
                   in the cut (scene.can_continue). */}
-              {isActedMode(sceneType.mode) && scene.can_continue && (
+              {actedShape && scene.can_continue && (
                 <Button variant="ghost" icon="forward-step" size="sm" disabled={isRendering || !videoUrl}
                   title="Shoot a few more seconds carrying on from the last frame — same take, no cut"
                   onClick={() => { setContErr(''); setCont(true) }}>
@@ -703,6 +739,52 @@ function SceneCard({
 
             <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
               onSelect={selectVideoVersion} onDelete={deleteVideoVersion} aspect={aspect} busy={selecting || isRendering} />
+
+            {/* The same resolved staging shown in the Script editor: acted and
+                non-acted scenes stay in film order, while the cards that need
+                references expose every portrait, voice and artifact in place. */}
+            {acted && (
+              <div className="stack gap-16 mt-24" style={{ borderTop: '1px solid var(--line)', paddingTop: 18 }}>
+                <div className="row between center row--wrap gap-10">
+                  <span className="label-sm">Acted take — renders from these references</span>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    one continuous shot{acted.silent ? ' · silent' : ' · no narrator'}
+                    {performance?.engine?.label ? <> · <strong>{performance.engine.label}</strong></> : null}
+                  </span>
+                </div>
+
+                <SoundtrackSlice window={acted.song_window} songUrl={performance?.song_url || ''} />
+
+                <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
+                  {acted.cast.map((c) => (
+                    <CastMember key={c.name} c={c}
+                      audio={acted.audios.find((a) => a.name === c.name)}
+                      picture={acted.pictures.find((p) => p.name === c.name)}
+                      jobId={jobId} voiceOpts={voices} voiceMeta={voiceMeta}
+                      onChanged={onSaved} />
+                  ))}
+                  {acted.pictures.filter((p) => p.kind && p.kind !== 'character').map((p) => (
+                    <RefTile key={`ref-${p.slot}`} p={p} busy={isRendering}
+                      onRemoveFrame={p.kind === 'frame' ? removeFirstFrame : null} />
+                  ))}
+                  {!acted.cast.length && (
+                    <span className="muted" style={{ fontSize: 12.5 }}>Nobody on screen yet — pick the cast in Edit.</span>
+                  )}
+                </div>
+
+                <StagingWarnings missingPortraits={acted.missing_portraits} unvoiced={acted.unvoiced} />
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Looks and voices are set here. Locations, wardrobe and other references are in
+                  <strong> Characters &amp; Artifacts</strong>.
+                </div>
+              </div>
+            )}
+
+            {actedShape && !acted && (
+              <div className="muted mt-16" style={{ fontSize: 12.5 }}>
+                This scene uses an acted take. Its resolved cast and artifact references appear here once the scene is saved.
+              </div>
+            )}
           </div>
         </div>
       </Card>
@@ -2424,6 +2506,9 @@ function CharactersTab({ workDir, onSwitchToScenes, reloadKey = 0 }) {
 function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const voiceMeta = voiceMetaMap(meta.config?.voices)
   const [scenes, setScenes] = useState([])
+  const [performance, setPerformance] = useState(null)
+  const [performanceError, setPerformanceError] = useState('')
+  const perfById = useMemo(() => new Map((performance?.scenes || []).map((s) => [s.id, s])), [performance])
   // Dialogue speaker options: the catalogue characters plus any speakers already
   // used across this film's scenes (so existing casts stay selectable).
   const castOpts = useMemo(() => {
@@ -2450,8 +2535,15 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const load = useCallback(async () => {
     setError('')
     try {
-      const r = await api.filmScenes(workDir)
+      const [r, perfResult] = await Promise.all([
+        api.filmScenes(workDir),
+        api.loadPerformanceScript(workDir)
+          .then((data) => ({ data, error: '' }))
+          .catch((e) => ({ data: null, error: e.message })),
+      ])
       setScenes(r.scenes || [])
+      setPerformance(perfResult.data)
+      setPerformanceError(perfResult.error)
       setJobId(r.job_id || '')
       onTitle?.(r.title || '')
       setResolution(r.resolution || '')
@@ -2569,6 +2661,9 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       </div>
 
       <Banner tone="danger">{error}</Banner>
+      {performanceError && (
+        <Banner tone="warn">Acted-scene references could not be loaded: {performanceError}</Banner>
+      )}
 
       {activeRenders > 0 && (
         <Banner tone="info">
@@ -2616,6 +2711,8 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
               voiceMeta={voiceMeta}
               castOpts={castOpts}
               actedSilent={actedSilent}
+              acted={perfById.get(scene.id) || null}
+              performance={performance}
               onDelete={handleDelete}
               onMove={handleMove}
               onSaved={load}
@@ -2640,37 +2737,26 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
 
 // ── Unified Edit Film screen ──────────────────────────────────────────────────
 
-const EDIT_TABS = new Set(['film', 'characters', 'scenes', 'performance'])
+const EDIT_TABS = new Set(['film', 'characters', 'scenes'])
+// Old links/bookmarks could point at the removed acted-only tab. Land those on
+// the unified scene editor instead of unexpectedly opening Film.
+const editTab = (value) => value === 'performance' ? 'scenes' : (EDIT_TABS.has(value) ? value : 'film')
 
 export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }) {
-  const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
+  const [tab, setTab] = useState(editTab(initialTab))
   const [filmTitle, setFilmTitle] = useState('')
   // Any scene that renders as an H3 take — the acted ones plus, when the style
   // performs them, the silent ones. Those takes are conditioned on reference
-  // images and shown in the acted view, so this is what decides whether the
-  // film gets the visuals wall and the Acted scenes tab.
+  // images, so this decides whether the film gets the visuals wall. The acted
+  // staging itself stays on the matching card in the one Scenes tab.
   const [hasRefTakes, setHasRefTakes] = useState(false)
   const [filmScenes, setFilmScenes] = useState([])    // for the visuals card's scene scoping
   const [filmJobId, setFilmJobId] = useState('')
   const [charReload, setCharReload] = useState(0)     // bumped when the bar adds a character
-  // Voice library for the acted view's per-character voice picker. Without it
-  // the select has only its "invent" option — and an HTML select whose value
-  // isn't among its options silently shows the first one, reading as "no
-  // voice" for a character that HAS one.
-  const [voiceOpts, setVoiceOpts] = useState([])
-  const [voiceMeta, setVoiceMeta] = useState({})
-  useEffect(() => {
-    api.getConfig().then((c) => {
-      const cfg = c?.config || c || {}
-      setVoiceOpts((cfg.voices || []).map((v) => v?.name).filter(Boolean))
-      setVoiceMeta(voiceMetaMap(cfg.voices))
-    }).catch(() => {})
-  }, [])
-
   // Prefill page title from film scenes (lightweight enough for the head), and
   // note whether anything here is shot on the reference engine: the Scenes list
-  // keeps every scene whatever the mix, and the acted view is added beside it
-  // for the takes — spoken or performed silent — that H3 shoots.
+  // keeps every scene whatever the mix and adds staging to the takes — spoken
+  // or performed silent — that H3 shoots.
   useEffect(() => {
     if (!workDir) return
     api.filmScenes(workDir).then((r) => {
@@ -2684,7 +2770,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   }, [workDir])
 
   useEffect(() => {
-    setTab(EDIT_TABS.has(initialTab) ? initialTab : 'film')
+    setTab(editTab(initialTab))
   }, [workDir, initialTab])
 
   const label = workDir ? workDir.replace(/\/+$/, '').split('/').pop() : 'Film'
@@ -2706,17 +2792,12 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
           { value: 'characters', label: hasRefTakes ? 'Characters & Artifacts' : 'Characters' },
-          // ONE look whatever the mix: the Scenes editor (every scene, every
-          // mode, shiftable between them) plus, when anything is acted, the
-          // Acted scenes view — cast slots, portraits, voices, takes.
+          // One ordered editor whatever the mix: every scene mode plus its
+          // mode-specific staging, references, editing and re-shoot controls.
           { value: 'scenes', label: 'Scenes' },
-          ...(hasRefTakes ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
       </div>
 
-      {tab === 'performance' && (
-        <PerformanceScenes workDir={workDir} voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
-      )}
       {tab === 'film' && (
         <FilmTab
           workDir={workDir}

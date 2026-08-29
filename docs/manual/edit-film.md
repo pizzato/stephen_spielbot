@@ -3,9 +3,10 @@
 `#/edit/<film>` — `#/remix/<film>` is a deep-link alias for the same screen.
 
 Post-production on a finished film. Tabs: **Film**, **Characters & Artifacts** (plain
-**Characters** on films with no takes shot on the reference engine), **Scenes** — and
-**Acted scenes** whenever the film has any such take, spoken or
-[performed silent](../performance_films.md#silent-scenes-performed).
+**Characters** on films with no takes shot on the reference engine), and **Scenes**.
+The Scenes tab always contains the complete ordered film: narrated, dialogue,
+performance, singing, and [performed silent](../performance_films.md#silent-scenes-performed)
+scenes can all appear together, with the controls each one needs on its own card.
 
 Nothing here re-renders the whole film. Every operation touches the smallest thing it can
 and re-muxes the final cut atomically when it's done.
@@ -288,8 +289,11 @@ See [Characters](../characters.md) for how consistency actually works.
 
 ## Scenes
 
-One card per scene. Collapsed, a card shows its thumbnail and prompt summaries; **Edit**
-opens the fields.
+One card per scene, in film order, regardless of scene type. Collapsed, a card shows its
+first frame, current clip and prompt summaries; **Edit** opens the fields. Acted cards
+also show their resolved cast portraits, voices, location/wardrobe/reference slots and
+song slice on that same card, so editing, rewriting, re-shooting and choosing takes never
+requires switching to another tab.
 
 ### Editable fields
 
@@ -403,14 +407,11 @@ The chevrons move a scene up or down; **Delete** removes it. Both re-cut the fin
 
 ---
 
-## Acted scenes
+### Acted staging on the scene card
 
-The same staging the [Script screen](script.md#acted-staging) shows on each acted
-scene's card, gathered into one view, with each scene's rendered clip in it: cast slots
-with portraits and voices, reference thumbnails, the editable dialogue and assembled
-prompt, **Re-generate scene**, **Shoot this scene again**, the **Takes** strip (every
-re-shoot kept), and **Reassemble film**.
-
-It covers every take the film shot on H3 — including its
-[performed silent scenes](../performance_films.md#silent-scenes-performed), which appear
-as the same card marked *silent*, without the dialogue editor.
+The same staging the [Script screen](script.md#acted-staging) shows sits directly below
+each acted scene: numbered cast slots with portraits and voices, artifact reference
+thumbnails, soundtrack slice and warnings. The card's editor contains the dialogue and
+assembled prompt, while **Re-generate scene**, **Shoot again**, **Continue**, trim and the
+image/video version strips stay with it. Performed silent scenes use the same layout,
+marked *silent* and without dialogue controls.
