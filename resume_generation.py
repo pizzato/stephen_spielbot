@@ -1769,7 +1769,7 @@ def main(work_dir: Path) -> None:
                 return_when=concurrent.futures.FIRST_COMPLETED,
             )
             for fut in done_futs:
-                scene = tts_pending.pop(fut)
+                tts_pending.pop(fut)
                 sid, out = fut.result()
                 dur = _get_duration(out)
                 narration_paths[sid] = out
