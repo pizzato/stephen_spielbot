@@ -1252,9 +1252,12 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
     """Concatenate scenes with fade-out/fade-in between them.
 
     *hard_boundaries*: positional indices i where the join between clip i and
-    clip i+1 must be a straight butt-join — a scene that CONTINUES the previous
-    shot (continues_previous) would read a fade there as a glitch mid-take.
-    Other boundaries keep their fades.
+    clip i+1 must not fade the PICTURE — a scene that CONTINUES the previous
+    shot (continues_previous) would read the dip as a glitch mid-take. The
+    0.05 s audio fades stay even there: they are a declick, not a transition —
+    on a motion-context join the audio is continuous and 50 ms is inaudible,
+    while a frame-handoff join splices two unrelated narration tracks and a
+    hard splice pops. Other boundaries keep both fades.
     """
     if len(scene_paths) == 1:
         shutil.copy2(scene_paths[0], output_path)
@@ -1309,9 +1312,9 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         # (24k mono) mixed with talking clips (44.1k stereo) otherwise fails concat.
         af = [f"aresample={_FILM_AR}", f"aformat=sample_rates={_FILM_AR}:channel_layouts=stereo",
               "asetpts=PTS-STARTPTS"]
-        if fade_a > 0 and i > 0 and (i - 1) not in hard:
+        if fade_a > 0 and i > 0:
             af.append(f"afade=t=in:st=0:d={fade_a:.2f}")
-        if fade_a > 0 and i < n - 1 and i not in hard:
+        if fade_a > 0 and i < n - 1:
             af.append(f"afade=t=out:st={dur - fade_a:.3f}:d={fade_a:.2f}")
         a_src = i if has_audio[i] else silence_idx[i]
         filters.append(f"[{a_src}:a]{','.join(af)}[fa{i}]")

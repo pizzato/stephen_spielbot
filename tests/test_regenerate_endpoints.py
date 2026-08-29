@@ -135,7 +135,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(b"temporal-upscaled-scene")
             return out
 
-        def fake_concat(paths, out, fade=0.3):
+        def fake_concat(paths, out, fade=0.3, **kw):
             self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4"])
             out.write_bytes(b"temporal-upscaled-final")
             return out
@@ -171,7 +171,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(b"latent-upscaled-scene")
             return out
 
-        def fake_concat(paths, out, fade=0.3):
+        def fake_concat(paths, out, fade=0.3, **kw):
             out.write_bytes(b"latent-upscaled-final")
             return out
 
@@ -217,7 +217,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(f"upscaled:{src.name}".encode())
             return out
 
-        def fake_concat(paths, out, fade=0.3):
+        def fake_concat(paths, out, fade=0.3, **kw):
             self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4", "scene_02_final.upscaled.mp4"])
             # the film's own join, with its dip-to-black between scenes (the
             # default fade, as the render uses) — never the stream copy
@@ -288,7 +288,7 @@ class FilmUpscaleTests(unittest.TestCase):
                  mock.patch("pipeline.assembler._verify_upscale_not_blank"), \
                  mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
                  mock.patch("pipeline.assembler.concatenate_scenes",
-                            side_effect=lambda paths, out, fade=0.3: out.write_bytes(b"joined") or out):
+                            side_effect=lambda paths, out, fade=0.3, **kw: out.write_bytes(b"joined") or out):
                 backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
                 backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "ic_lora")
             self.assertEqual(backend._film_tasks["tid"]["status"], "done")

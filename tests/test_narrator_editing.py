@@ -114,7 +114,7 @@ class RemixNarratorTests(NarratorEditCase):
         def fake_mux(_video, _audio, out_path, **_kwargs):
             Path(out_path).write_bytes(b"muxed" * 5000)
 
-        def fake_concat(_scenes, out_path):
+        def fake_concat(_scenes, out_path, **kw):
             Path(out_path).write_bytes(b"combined" * 5000)
 
         def fake_mix(_combined, _music, out_path, **_kwargs):

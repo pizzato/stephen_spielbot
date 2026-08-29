@@ -297,6 +297,7 @@ opens the fields.
 |---|---|
 | **Title** | With a regenerate button |
 | **Scene type** | Narration, dialogue, or silent — and who speaks |
+| **Continues the previous scene** | Pick up the previous scene's shot without a cut ([mechanics](../performance_films.md#continued-shots)); hidden on the first scene and singing beats. Applies at the next render of the scene |
 | **Narration** | With a regenerate button |
 | **Spoken text** | Optional split, see below |
 | **Narrator voice** | Per-scene override; defaults to the film narrator |
@@ -365,6 +366,11 @@ the film actually says.
 The join is made once the clip renders, and the shorter take is kept in the takes strip —
 if the continuation is not what you wanted, click back to the take before it. Continue again
 to keep going: each continuation picks up where the last one stopped.
+
+One caveat for scenes that [continue the previous scene](../performance_films.md#continued-shots):
+a per-scene re-shoot renders that scene alone, without the cross-scene join — the new take
+no longer picks up (or hands off) the exact moment its neighbour holds, so the butt-join at
+that boundary can jump until the other side is re-shot too.
 
 Continue is offered only where it can actually work, so the button is absent when:
 

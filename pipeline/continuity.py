@@ -29,10 +29,20 @@ from pipeline import performance as _performance
 logger = logging.getLogger("video_gen")
 
 
+def _scene_id(scene) -> int:
+    """Scene id from either a Scene or a stored row dict."""
+    if isinstance(scene, dict):
+        return int(scene.get("id") or 0)
+    return int(getattr(scene, "id", 0) or 0)
+
+
 def wants_continuation(scene) -> bool:
-    """The authored flag, straight off the scene's metadata."""
-    meta = getattr(scene, "metadata_extra", None) or {}
-    return bool(meta.get("continues_previous"))
+    """The authored flag, straight off the scene's metadata.
+
+    Reads through performance.scene_meta so it works on a Scene AND on a
+    stored row dict — the backend's rebuild paths pass rows.
+    """
+    return bool(_performance.scene_meta(scene).get("continues_previous"))
 
 
 def drop_reason(prev, scene, cfg: dict) -> str | None:
@@ -68,10 +78,10 @@ def continuation_plan(scenes: list, cfg: dict) -> dict[int, int]:
         if wants_continuation(scene):
             reason = drop_reason(prev, scene, cfg)
             if reason is None:
-                plan[scene.id] = prev.id
+                plan[_scene_id(scene)] = _scene_id(prev)
             else:
-                logger.warning(
-                    "Scene %d: continues_previous dropped — %s", scene.id, reason)
+                logger.warning("Scene %d: continues_previous dropped — %s",
+                               _scene_id(scene), reason)
         prev = scene
     return plan
 
@@ -86,7 +96,7 @@ def chain_groups(scene_list: list, plan: dict[int, int]) -> list[list]:
     """
     groups: list[list] = []
     for s in scene_list:
-        if groups and plan.get(s.id) == groups[-1][-1].id:
+        if groups and plan.get(_scene_id(s)) == _scene_id(groups[-1][-1]):
             groups[-1].append(s)
         else:
             groups.append([s])
@@ -100,4 +110,4 @@ def hard_boundaries(scenes: list, plan: dict[int, int]) -> set[int]:
     continuing shot reads as a glitch, so these boundaries butt-join instead.
     """
     return {i for i in range(len(scenes) - 1)
-            if plan.get(scenes[i + 1].id) == scenes[i].id}
+            if plan.get(_scene_id(scenes[i + 1])) == _scene_id(scenes[i])}

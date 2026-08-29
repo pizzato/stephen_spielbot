@@ -60,6 +60,7 @@ SONG_SCENE_SECONDS = 5.0
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import cadence  # noqa: E402
+from pipeline import continuity  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
 from pipeline import film_timing  # noqa: E402
 from pipeline import image_history  # noqa: E402
@@ -5320,7 +5321,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
             else:
                 meta.pop("no_wardrobe", None)
         if body.continues_previous is not None:
-            if body.continues_previous and sid > 1:
+            # Stored as sent — "first scene" is a POSITION, not an id (the film
+            # editor reorders without renumbering), so validity is the render's
+            # call (continuity.continuation_plan drops what cannot be honoured)
+            # and the editors hide the toggle at position one.
+            if body.continues_previous:
                 meta["continues_previous"] = True
             else:
                 meta.pop("continues_previous", None)
@@ -7619,7 +7624,8 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
             raise RuntimeError("No background music found in this film folder.")
         cfg = gapp.load_config()
         ambient = wd / "ambient.wav"
-        concatenate_scenes(scene_finals, combined)
+        concatenate_scenes(scene_finals, combined,
+                           hard_boundaries=_film_hard_boundaries(wd, scene_finals))
         voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
         mix_background_music(
             combined, music_path, final_path,
@@ -7907,7 +7913,8 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
         raise RuntimeError("No background music found in this film folder.")
     ambient = wd / "ambient.wav"
     cfg = gapp.load_config()
-    concatenate_scenes(scene_finals, combined)
+    concatenate_scenes(scene_finals, combined,
+                       hard_boundaries=_film_hard_boundaries(wd, scene_finals))
     staged_final = wd / "final_localize.staging.mp4"
     voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
     mix_background_music(
@@ -8642,6 +8649,42 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         )
 
 
+def _film_hard_boundaries(wd: Path, scene_clips: list[Path]) -> set[int]:
+    """Fade-free join positions for a film REBUILD, mirroring the render.
+
+    A scene marked ``continues_previous`` was butt-joined by the original
+    render (`resume_generation` passes `hard_boundaries` to the concat); every
+    rebuild — re-shoot reassembly, narrator remix, localization, the finishing
+    upscale — must keep those joins or the first rebuild puts a fade back in
+    the middle of a continued take. Scene ids come off the clip filenames so
+    this works on whatever ordered subset a rebuild is joining; any failure
+    returns an empty set (all joins keep their fades) rather than blocking.
+    """
+    try:
+        ids: list[int] = []
+        for p in scene_clips:
+            m = re.match(r"scene_(\d+)_", Path(p).name)
+            if not m:
+                return set()
+            ids.append(int(m.group(1)))
+        store = DurableStore.default()
+        try:
+            rows = {int(r["id"]): r
+                    for r in store.scene_rows(job_id_from_work_dir(wd))}
+        finally:
+            store.close()
+        ordered = [rows[i] for i in ids if i in rows]
+        if len(ordered) != len(ids):
+            return set()
+        cfg = _film_job_config(wd)
+        return continuity.hard_boundaries(
+            ordered, continuity.continuation_plan(ordered, cfg))
+    except Exception:
+        gapp.logger.warning("Could not compute continued-shot joins for %s",
+                            wd.name, exc_info=True)
+        return set()
+
+
 def _rendered_scene_finals(wd: Path) -> list[Path]:
     order = _load_scene_order(wd) or []
     ordered: list[Path] = []
@@ -8850,7 +8893,8 @@ def _temporal_upscale_scenes_to_final(
     # Same dip-to-black between scenes as the render and every rebuild, too:
     # joined with fade=0 the upscaled film cut hard where the original faded,
     # and a bright-to-bright cut read as a frame flashing between the scenes.
-    concatenate_scenes(upscaled, combined)
+    concatenate_scenes(upscaled, combined,
+                       hard_boundaries=_film_hard_boundaries(wd, upscaled))
 
     jc = _film_job_config(wd)
     music_path = wd / "background_music.wav"
@@ -14246,7 +14290,8 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
                     ensure_video_resolution(clip, vid_w, vid_h)
             except Exception:
                 pass  # let the concat report it if the clip is truly broken
-        concatenate_scenes(scene_finals, combined)
+        concatenate_scenes(scene_finals, combined,
+                           hard_boundaries=_film_hard_boundaries(wd, scene_finals))
         ambient = wd / "ambient.wav"
         if music_on:
             mix_background_music(

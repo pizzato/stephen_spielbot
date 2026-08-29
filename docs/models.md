@@ -195,7 +195,10 @@ It covers both kinds of scene, on different gates:
   chains its dialogue. The script budget doubles (~6 lines / ~45 spoken words
   per dialogue scene instead of 3 / 22), exchanges that used to split into two
   scenes stay one continuous take, and a scene that still fits one clip renders
-  single-clip rather than paying the join overhead for nothing.
+  single-clip rather than paying the join overhead for nothing. A scene with a
+  pinned soundtrack renders single-clip too, and so does one that
+  [continues the previous scene](performance_films.md#continued-shots) — its
+  graph already carries a motion context.
 - **Silent scenes** chain too where the style
   [performs them](performance_films.md#silent-scenes-performed). A silent beat
   has no lines to divide, so what splits is its *window*: the writer is asked

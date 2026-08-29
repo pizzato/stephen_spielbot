@@ -1341,7 +1341,7 @@ class ReassembleActedTests(unittest.TestCase):
 
     def test_no_music_reassembles_to_the_concat(self):
         # No background_music.wav on disk — the acted film never got a score.
-        def fake_concat(clips, out):
+        def fake_concat(clips, out, **kw):
             Path(out).write_bytes(b"concat")
         with mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.mix_background_music") as mix, \
@@ -1357,7 +1357,7 @@ class ReassembleActedTests(unittest.TestCase):
     def test_music_off_skips_the_mix_even_with_a_score_on_disk(self):
         (self.wd / "background_music.wav").write_bytes(b"wav")
         (self.wd / "job_config.json").write_text(json.dumps({"music_enabled": False}))
-        def fake_concat(clips, out):
+        def fake_concat(clips, out, **kw):
             Path(out).write_bytes(b"concat")
         with mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.mix_background_music") as mix, \

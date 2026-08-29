@@ -69,7 +69,9 @@ ready tasks from the durable graph instead of the controller pushing work.
    Nothing has rendered yet.
 3. **Approve** puts the item in the queue. Starting it launches `resume_generation.py`.
 4. The render fans scenes across the ComfyUI workers and narration across the TTS
-   workers — in parallel, one job per worker.
+   workers — in parallel, one job per worker. Scenes marked
+   [continues the previous scene](performance_films.md#continued-shots) are the
+   exception: they chain, rendering in order on one worker.
 5. `assembler.py` muxes scenes, narration, and music into the final cut.
 6. The final lands at `~/videos/<name>.mp4`, alongside the work directory that produced it.
 

@@ -63,6 +63,13 @@ class TestContinuationPlan(unittest.TestCase):
         scenes = [_dialogue(1), _dialogue(2, continues=True)]
         self.assertEqual(continuity.continuation_plan(scenes, {}), {2: 1})
 
+    def test_stored_rows_work_too(self):
+        # The backend's rebuild paths pass store rows, not Scene objects.
+        rows = [{"id": 1, "metadata": {}},
+                {"id": 2, "metadata": {"continues_previous": True}}]
+        self.assertEqual(continuity.continuation_plan(rows, {}), {2: 1})
+        self.assertEqual(continuity.hard_boundaries(rows, {2: 1}), {0})
+
 
 class TestChainGroups(unittest.TestCase):
     def test_the_four_scene_example(self):
@@ -157,14 +164,17 @@ class TestConcatHardJoins(unittest.TestCase):
         self.assertEqual(graph.count("afade=t=out"), 2)
         self.assertEqual(graph.count("afade=t=in"), 2)
 
-    def test_hard_boundary_drops_both_sides_of_the_join(self):
-        # Boundary 0→1 is a continued shot: clip 0 keeps no fade-out, clip 1 no
-        # fade-in; the untouched 1→2 boundary keeps both.
+    def test_hard_boundary_drops_video_fades_but_keeps_audio_declick(self):
+        # Boundary 0→1 is a continued shot: clip 0 loses its fade-out, clip 1
+        # its fade-in (the untouched 1→2 boundary keeps both). The 0.05 s
+        # audio fades survive everywhere — they are a declick, not a
+        # transition, and a frame-handoff join splices two unrelated
+        # narration tracks that would pop without them.
         graph = self._filtergraph({0})
         self.assertEqual(graph.count(",fade=t=out"), 1)
         self.assertEqual(graph.count(",fade=t=in"), 1)
-        self.assertEqual(graph.count("afade=t=out"), 1)
-        self.assertEqual(graph.count("afade=t=in"), 1)
+        self.assertEqual(graph.count("afade=t=out"), 2)
+        self.assertEqual(graph.count("afade=t=in"), 2)
 
 
 if __name__ == "__main__":
