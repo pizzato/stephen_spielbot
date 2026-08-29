@@ -741,6 +741,11 @@ def scene_from_raw(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
         "soundscape": _clean(raw.get("soundscape")),
         "refusals": _clean(raw.get("refusals")),
     }
+    # The writer's explicit continuation mark (continues_previous): this take
+    # picks up the previous scene's shot without a cut. Sparse — only when set,
+    # and never on the first scene.
+    if bool(raw.get("continues_previous")) and scene_id > 1:
+        meta["continues_previous"] = True
     # Reference wiring is resolved at render time (portraits/voices that actually
     # exist), so the stored prompt names the cast in scene order as a preview;
     # the renderer rebuilds it with the real slots before queueing.

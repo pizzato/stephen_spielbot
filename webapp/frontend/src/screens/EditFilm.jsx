@@ -92,6 +92,7 @@ function SceneCard({
     setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
     cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
     singing: !!scene.singing, no_wardrobe: !!scene.no_wardrobe,
+    continues_previous: !!scene.continues_previous,
   })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
@@ -127,6 +128,7 @@ function SceneCard({
       mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
       setting: s.setting || '', camera: s.camera || '', soundscape: s.soundscape || '',
       no_wardrobe: !!s.no_wardrobe,
+      continues_previous: !!s.continues_previous,
       cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
       singing: !!s.singing,
     })
@@ -148,6 +150,7 @@ function SceneCard({
         soundscape: st.soundscape ?? null, cast: st.cast ?? null,
         beats: st.beats ?? null, seconds: st.seconds ?? null,
         no_wardrobe: !!st.no_wardrobe,
+        continues_previous: !!st.continues_previous,
       })
     } catch (e) {
       setError(e.message)
@@ -512,6 +515,7 @@ function SceneCard({
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </Field>
                 <SceneTypeControls scene={sceneType} castOpts={castOpts} actedSilent={actedSilent}
+                  isFirst={index === 0}
                   onChange={changeType} onCommit={commitType}
                   onConvert={async (m) => {
                     setError('')

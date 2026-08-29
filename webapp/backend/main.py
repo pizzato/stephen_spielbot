@@ -246,6 +246,9 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "camera": meta.get("camera", ""),
         "soundscape": meta.get("soundscape", ""),
         "no_wardrobe": bool(meta.get("no_wardrobe")),
+        # This scene picks up the previous scene's shot without a cut — set by
+        # the divide step or the editors; the render chains such scenes.
+        "continues_previous": bool(meta.get("continues_previous")),
         "cast": meta.get("cast", []),
         # Normalized (a prose string becomes one whole-take beat): the editor
         # maps over these, and the renderer normalizes identically.
@@ -2292,7 +2295,9 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
            f"{max(6, round(take_secs * 2.25))} spoken words TOTAL — "
            + ("a real exchange, not a fragment — and split " if take_secs >= 15 else "split ")
            + "anything longer across consecutive scenes in the same setting rather than "
-           "overfilling one. ")
+           "overfilling one. When you split one continuous exchange that way, mark each "
+           "follow-on scene with \"continues_previous\": true — the renderer then continues "
+           "the SAME take without a cut instead of re-staging the room. ")
         + ("A \"silent\" scene leaves narration empty (visuals only) and gets \"setting\", "
            "\"camera\" and \"soundscape\" exactly as a dialogue scene does — silent scenes "
            "are PERFORMED, not animated from a still. Whenever anyone is in shot, give it a "
@@ -5203,6 +5208,9 @@ class SceneUpdate(BaseModel):
     # False is stored ("they don't sing in this shot"); True clears the key —
     # performing is the default, so metadata stays sparse.
     performs: bool | None = None
+    # This scene picks up the PREVIOUS scene's shot without a cut. True is
+    # stored; False clears the key — an ordinary cut is the default.
+    continues_previous: bool | None = None
 
 
 def _scene_style_note(job_id: str) -> str:
@@ -5311,6 +5319,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["no_wardrobe"] = True
             else:
                 meta.pop("no_wardrobe", None)
+        if body.continues_previous is not None:
+            if body.continues_previous and sid > 1:
+                meta["continues_previous"] = True
+            else:
+                meta.pop("continues_previous", None)
         if body.cast is not None:
             meta["cast"] = [str(n).strip() for n in body.cast if str(n).strip()]
         if body.beats is not None:

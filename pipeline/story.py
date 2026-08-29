@@ -566,6 +566,10 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
     from pipeline import performance as _perf
 
     mode = str(item.get("mode") or "narration").strip().lower()
+    # The writer's explicit continuation mark: this scene picks up the previous
+    # scene's shot without a cut. Stored sparsely (only when true), and never
+    # on the first scene — there is nothing before it to continue.
+    continues = bool(item.get("continues_previous")) and scene_id > 1
     if _perf.is_performance_mode(mode) and item.get("lines"):
         return _perf.scene_from_raw(scene_id, item, style_note=style_hint or "")
     if mode == "silent":
@@ -580,6 +584,8 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
             # One name comes back as a bare string often enough to matter — and
             # list("Ada") is three "characters" nobody has a portrait for.
             extra["cast"] = [cast] if isinstance(cast, str) else list(cast)
+        if continues:
+            extra["continues_previous"] = True
         return Scene(
             id=scene_id,
             title=item.get("title", f"Scene {scene_id}"),
@@ -596,6 +602,7 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
         image_prompt=item.get("image_prompt", title),
         video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
         narration=item.get("narration", ""),
+        metadata_extra={"continues_previous": True} if continues else {},
     )
 
 

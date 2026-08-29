@@ -198,7 +198,7 @@ function BeatRows({ beats, seconds, onChange, onCommit }) {
 }
 
 export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = false,
-  onChange, onCommit, onConvert }) {
+  isFirst = false, onChange, onCommit, onConvert }) {
   // onChange(patch, commit): merge patch into the scene; when commit is true the
   // parent persists the merged value immediately (discrete edits). Text inputs
   // pass commit=false and persist on blur via onCommit(). Passing the computed
@@ -264,6 +264,17 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
         <Banner tone="info">♪ A music-video beat — the cast performs the film's song on
           camera (visibly singing, take shipped muted); the sung track is the film's
           audio. Edit the words in the Song tab.</Banner>
+      )}
+
+      {/* Cross-scene continuation: the render picks this shot up from the
+          previous scene (motion context on acted takes, closing frame on
+          narrated ones) and joins them without a fade. Not on the first scene
+          (nothing to continue) or singing beats (their take holds the song's
+          exact timeline). */}
+      {!isFirst && !scene.singing && (
+        <Check checked={!!scene.continues_previous}
+          onChange={(v) => onChange({ continues_previous: v }, true)}
+          label="Continues the previous scene — pick up its shot without a cut (the two render in sequence)" />
       )}
 
       {actedShape && (
