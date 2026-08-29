@@ -6,9 +6,11 @@ The review gate. Everything the render will do is decided here, and nothing has 
 GPU yet except the scene preview images you ask for.
 
 Views along the top, in the order the work happens: **Scripts**, **Song** (music videos
-only), **Story**, **Characters** (which becomes **Characters & Artifacts** when the film
-has acted scenes), **Scenes**, **Acted scenes** (only when the film has any) — and
-**Cover**, which belongs to publishing, last.
+only), **Story** (story-first drafts), **Characters & Artifacts**, **Scenes** — and
+**Cover**, which belongs to publishing, last. The tabs are the same for every film:
+only Song and Story appear per-format (they have no data otherwise), and each scene's
+card carries whatever its mode needs, so nothing about the menu shifts as scenes change
+shape.
 
 Whichever view you are on, the page header carries **Brief**: it takes you back to
 [Create](create.md) with everything this film was asked for — title, direction, length,
@@ -141,6 +143,12 @@ The **AI editor verdict** card shows the critique the drafter ran on itself: *pa
 
 ## Characters & Artifacts
 
+The same wall for every film, whatever the mix of scene modes. Characters are woven into
+every scene image; location, wardrobe and reference images feed the acted takes, so when
+no scene is acted yet a note says they wait until one switches to **Dialogue** (or a
+silent beat is performed on H3) — the controls are all still there, since any scene can
+switch mode at any time.
+
 Every reference the film renders from, on one wall, with **one bar to add them all**:
 character, location, wardrobe, free-form **image** (any other thing the model should
 match — its description tells the model what it is), **video** (a clip whose
@@ -185,17 +193,23 @@ every style should have it).
 
 ## Scenes
 
-The main event. One scene at a time, with the whole filmstrip underneath.
+The main event. **Every scene of the film, together, in order** — one card per scene,
+whatever its mode. A narrated scene's card carries its narration and prompts; an acted
+scene's card carries those *and* its full staging — cast slots, reference images, the
+assembled prompt, and the rendered takes — so there is no separate acted view to keep in
+sync.
 
 ### Navigating
 
-**Prev** / **Next**, or click any thumbnail in **All scenes**. The header shows
-`Scene 3 / 12` and a `~20s` chip — the rough per-scene runtime.
+The filmstrip at the top shows the whole film; click any thumbnail to jump to that
+scene's card. Each card is headed `Scene 3 / 12` with a `~20s` chip — the rough
+per-scene runtime — and a mode chip (*narration*, *acted*, *silent*, *♪ music video*).
 
 ### Restructuring
 
-The arrow buttons move the current scene earlier or later. **Add scene** inserts a new one
-after it. The trash icon deletes it (with a confirm, and never the last remaining scene).
+Each card's header has arrow buttons to move that scene earlier or later. **Add scene**
+inserts a new one after it. The trash icon deletes it (with a confirm, and never the
+last remaining scene).
 
 Scene ids are renumbered 1..N on save, and the edit order is tracked separately, so
 reordering is safe.
@@ -260,25 +274,27 @@ The **video prompt is read-only**: it is assembled from those fields (never writ
 thing twice), with a legend above it saying which reference each `<Picture N>` number is.
 **Edit prompt** pins hand-written text instead — the fields stop rebuilding it until you
 **Rebuild from the fields**. **Re-generate scene** rewrites the whole take with the LLM
-(dialogue, action, setting — same theme, optionally steered), and the sidebar's References
-card shows the resolved portraits. An acted scene's **first frame is optional**: painted
-from the setting with the cast anchored to their portraits, it rides as the take's
-opening-composition reference — and **Remove first frame** drops it again.
+(dialogue, action, setting — same theme, optionally steered). An acted scene's
+**first frame is optional**: painted from the setting with the cast anchored to their
+portraits, it rides as the take's opening-composition reference — and
+**Remove first frame** drops it again.
 
-## Acted scenes
+### Acted staging
 
-For films with acted scenes, a second view shows each one as a single card: the portrait
-that IS `<Picture 1>`, the voice clip that IS `<Audio 1>`, reference thumbnails, the
-editable dialogue, the assembled prompt, the rendered take with its **Takes** strip (every
-re-shoot is kept — click one to use it), **Shoot this scene again** with **Re-generate
-scene** beside it (rewrite the take, then shoot it again), and **Reassemble film** once
-takes have changed.
+A scene that renders as an acted take carries its full staging on the same card, below
+the fields, resolved by the very function the renderer uses: the portrait that IS
+`<Picture 1>`, the voice clip that IS `<Audio 1>` (look and voice editable in place),
+the location / wardrobe / continuity reference thumbnails, a music-video beat's pinned
+soundtrack slice, and — once the scene has been shot — the rendered take with its
+**Takes** strip (every re-shoot is kept — click one to use it) and **Shoot this scene
+again**. The filmstrip card at the top offers **Reassemble film** once takes have
+changed.
 
-The view lists **every take the film shoots on the reference engine**, so a
-[performed silent scene](../performance_films.md#silent-scenes-performed) appears here
-too — same card, marked *silent*, with no dialogue editor: it is shot the same way and
-its prompt is read the same way. **Re-generate scene** rewrites it (action, setting,
-camera) and leaves it silent. A music-video beat's card leads its re-generate chips with
+**Every take the film shoots on the reference engine** stages this way, so a
+[performed silent scene](../performance_films.md#silent-scenes-performed) carries the
+same staging — marked *silent*, with no dialogue editor: it is shot the same way and its
+prompt is read the same way. **Re-generate scene** rewrites it (action, setting, camera)
+and leaves it silent. A music-video beat's card leads its re-generate chips with
 **"Nobody sings in this shot"** — the rewrite then marks the scene non-performing, so the
 song still plays over it but the cast stops miming (see
 [singing films](../performance_films.md#singing-films-the-music-video-format)).
@@ -302,7 +318,8 @@ The scene's still, generated on demand:
 
 ### All scenes
 
-The filmstrip, with **Regenerate all** to repaint every frame.
+The filmstrip at the top of the view, with **Regenerate all** to repaint every frame —
+and a line saying how many of the scenes render as acted takes, on which engine.
 
 ## Restyle
 

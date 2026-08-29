@@ -491,11 +491,11 @@ export function Chip({ tone = 'neutral', dot, children }) {
   return <span className={`chip chip--${tone}`}>{dot ? <span className="chip__dot"></span> : null}{children}</span>
 }
 
-export function Card({ span, rowSpan, well, padLg, link, onClick, href, className = '', children, style }) {
+export function Card({ span, rowSpan, well, padLg, link, onClick, href, className = '', children, style, id }) {
   const cls = ['card', link ? 'card-link' : '', well ? 'card--well' : '', padLg ? 'card--pad-lg' : '',
     span ? `col-${span}` : '', rowSpan ? 'row-2' : '', className].filter(Boolean).join(' ')
-  if (href) return <a className={cls} href={href} target="_blank" rel="noopener" style={style}>{children}</a>
-  return <div className={cls} onClick={onClick} style={style}>{children}</div>
+  if (href) return <a className={cls} id={id} href={href} target="_blank" rel="noopener" style={style}>{children}</a>
+  return <div className={cls} id={id} onClick={onClick} style={style}>{children}</div>
 }
 
 // A "tell it how" popover: a small caret button beside a Re-generate control that

@@ -1452,9 +1452,14 @@ def _job_style_name(job_id: str) -> str:
     return _script_source_meta(job_id, "")[3]
 
 
-def _film_reference_usage(wd: Path) -> tuple[set, bool]:
+def _film_reference_usage(wd: Path, characters=()) -> tuple[set, bool]:
     """(cast names in any scene, film has acted scenes) — what the reference
     wall means by "used by this video". Case-insensitive names.
+
+    Narrated and ordinarily-silent scenes do not carry an explicit ``cast``
+    list, so also resolve catalogue names and aliases from their image prompts.
+    That is the same text and matcher the image renderer uses when deciding
+    which canonical character look belongs in a scene.
 
     "Acted" is the render-time predicate, not the mode alone: a style that
     performs its silent scenes (h3_silent_scenes) shoots them as Ref2VA takes,
@@ -1486,6 +1491,11 @@ def _film_reference_usage(wd: Path) -> tuple[set, bool]:
                 spk = str((ln or {}).get("speaker") or "").strip()
                 if spk:
                     names.add(spk.lower())
+            image_prompt = str(r.get("image_prompt") or "")
+            for c in characters or ():
+                name = str((c or {}).get("name") or "").strip()
+                if name and gapp._character_mentions(image_prompt, c):
+                    names.add(name.lower())
     except Exception:
         pass
     return names, has_acted
@@ -1507,12 +1517,13 @@ def _script_chars_ok(wd: Path) -> dict:
     A script character shadows a same-named catalogue one."""
     payload = _script_characters_payload(wd)
     taken = {(c.get("name") or "").strip().lower() for c in payload}
-    used, _has_acted = _film_reference_usage(wd)
     catalogue = []
     try:
         cfg = gapp.load_config()
         style_name = _job_style_name(job_id_from_work_dir(wd))
-        for c in gapp._style_characters(cfg, style_name):
+        style_characters = gapp._style_characters(cfg, style_name)
+        used, _has_acted = _film_reference_usage(wd, style_characters)
+        for c in style_characters:
             name_key = (c.get("name") or "").strip().lower()
             # Only members THIS video casts — the wall shows the film's
             # references, not the whole catalogue.

@@ -405,10 +405,11 @@ The chevrons move a scene up or down; **Delete** removes it. Both re-cut the fin
 
 ## Acted scenes
 
-The acted view from the [Script screen](script.md#acted-scenes), with each scene's
-rendered clip in it: cast slots with portraits and voices, reference thumbnails, the
-editable dialogue and assembled prompt, **Re-generate scene**, **Shoot this scene again**,
-the **Takes** strip (every re-shoot kept), and **Reassemble film**.
+The same staging the [Script screen](script.md#acted-staging) shows on each acted
+scene's card, gathered into one view, with each scene's rendered clip in it: cast slots
+with portraits and voices, reference thumbnails, the editable dialogue and assembled
+prompt, **Re-generate scene**, **Shoot this scene again**, the **Takes** strip (every
+re-shoot kept), and **Reassemble film**.
 
 It covers every take the film shot on H3 — including its
 [performed silent scenes](../performance_films.md#silent-scenes-performed), which appear
