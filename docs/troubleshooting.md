@@ -126,6 +126,18 @@ Re-run the OAuth connect from **Settings → Channels**. Tokens are per channel,
 `~/.config/video-generator/*_token.json`. Full setup: [YouTube](youtube_setup.md),
 [X](x_setup.md).
 
+### YouTube says `quotaExceeded` (403)
+
+The YouTube Data API allows 10,000 quota units per day for the whole Google Cloud
+project, shared across every connected channel. Uploads are the big spender
+(1,600 units each, plus 400 per caption track); comment sweeps cost a couple of
+units per channel per sweep, which adds up if they run often. When the quota runs
+out the backend backs off all YouTube calls until the quota resets at midnight US
+Pacific time — channel management and publishing recover on their own after that.
+To spend less, raise **Minutes between comment sweeps** in
+[Settings → Automation](manual/settings.md#youtube-automation), upload fewer
+caption languages, or request a bigger quota in the Google Cloud Console.
+
 ### X refuses a long video
 
 The X API cannot post video longer than 2 minutes 20 seconds. Longer films fall back to

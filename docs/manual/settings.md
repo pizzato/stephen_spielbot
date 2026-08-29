@@ -461,6 +461,12 @@ Global only.
 
 - **⚡ Fully automated mode** — turns on every global step, in this card and the one above
 - **Fetch & evaluate comments on a schedule**
+- **Minutes between comment sweeps** — how often the schedule actually polls
+  (default 60). Each sweep costs YouTube API quota for every connected channel, so
+  polling too often can exhaust the project's 10,000-unit daily quota; the same
+  interval also paces the X-mentions sweep. When YouTube reports the daily quota
+  exhausted, the backend stops calling the API until the midnight-Pacific reset
+  instead of retrying.
 - **Auto-approve requests above the confidence threshold**
 - **Clear declined ideas** — lets previously declined topics resurface in new AI
   suggestions (ignored ones stay hidden). The AI-ideas top-up itself is per style — see
