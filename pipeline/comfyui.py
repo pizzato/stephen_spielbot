@@ -1067,6 +1067,30 @@ def _add_context_save(workflow: dict, prefix: str, clip_index: int) -> None:
     }
 
 
+def _apply_turbo_to_chain(workflow: dict, engine: dict) -> None:
+    """Swap a static chain graph's base sampler for the turbo engine's nodes.
+
+    The chain templates carry the base sampler (EasyCache + res_multistep).
+    Filled with a turbo engine they inherit its steps=4 but not its distill
+    LoRA or few-step sampler, so the base model renders 4 near-raw steps —
+    mushy faces, incoherent motion, broken audio. Replace EasyCache with
+    MiniMaxH3TurboLoRA (same node id, so the scheduler/guider model wires
+    hold) and KSamplerSelect with MiniMaxH3TurboSampler, mirroring the
+    engine's own workflow.
+    """
+    if engine.get("requires_node") != "MiniMaxH3TurboSampler":
+        return
+    workflow[_node_id(workflow, "EasyCache")] = {
+        "class_type": "MiniMaxH3TurboLoRA",
+        "inputs": {"model": [_node_id(workflow, "UNETLoader"), 0],
+                   "lora_name": engine["lora"], "strength": 1.0,
+                   "low_vram": False},
+    }
+    workflow[_node_id(workflow, "KSamplerSelect")] = {
+        "class_type": "MiniMaxH3TurboSampler", "inputs": {},
+    }
+
+
 def _add_motion_context(workflow: dict, context_latent: str) -> None:
     """Rewire a Ref2VA graph to CONTINUE the take saved in *context_latent*.
 
@@ -1337,6 +1361,7 @@ def generate_video_h3_ref_chained(
                 repl["AUDIO_CONTEXT_LENGTH"] = H3_CHAIN_AUDIO_FRAMES
                 repl["CONTEXT_LATENT_PATH"] = context_latent_name(token, idx - 1)
             workflow = _fill_template(_load_workflow(wf_name), repl)
+            _apply_turbo_to_chain(workflow, engine)
             _wire_ref_slots(workflow, image_names, audio_names)
 
             logger.info("[comfy] h3 ref chain clip %d/%d %dx%d length=%d steps=%d refs=%di/%da",
@@ -1427,6 +1452,7 @@ def generate_video_h3_chained(
                 repl["AUDIO_CONTEXT_LENGTH"] = H3_CHAIN_AUDIO_FRAMES
                 repl["CONTEXT_LATENT_PATH"] = context_latent_name(token, idx - 1)
             workflow = _fill_template(_load_workflow(wf_name), repl)
+            _apply_turbo_to_chain(workflow, engine)
 
             logger.info("[comfy] h3 chain clip %d/%d %dx%d length=%d steps=%d",
                         idx, len(parts), gen_w, gen_h, length, steps)
