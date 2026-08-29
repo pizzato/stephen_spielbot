@@ -3513,6 +3513,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <div className="stack gap-16 mt-16">
               <Check checked={fullyAutomated} onChange={setFullyAutomated} label="⚡ Fully automated mode — turns on every global step, here and above" />
               <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
+              <Field label="Minutes between comment sweeps (each sweep spends YouTube API quota per channel; also paces X mentions)">
+                <input className="input" type="number" min={5} max={1440} step={5} value={cfg.comment_poll_minutes ?? 60}
+                  onChange={(e) => set('comment_poll_minutes', Number(e.target.value) || 60)} style={{ width: 110 }} />
+              </Field>
               <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
               {/* The AI-ideas top-up itself is per style now — it lives in
                    "What automation makes" above, like the other per-film flags. */}

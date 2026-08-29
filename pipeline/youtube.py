@@ -42,6 +42,39 @@ _VIDEO_TITLES_TTL = 6 * 3600.0  # seconds before a channel's title list is re-fe
 # legacy youtube_token.json path, so existing setups keep working unchanged.
 DEFAULT_CHANNEL_KEY = "default"
 
+# ── Daily-quota backoff ───────────────────────────────────────────────────────
+# The YouTube Data API quota is per Google Cloud project and resets at midnight
+# US Pacific time. Once a call fails with quotaExceeded, every further call is
+# guaranteed to fail until then, so periodic callers check quota_blocked() and
+# go quiet instead of hammering the API with doomed retries.
+_quota_blocked_until = 0.0
+
+
+def _next_quota_reset() -> float:
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("US/Pacific"))
+    reset = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return reset.timestamp()
+
+
+def note_quota_error(exc: Exception | str) -> bool:
+    """If ``exc`` is a YouTube quotaExceeded error, start the backoff and return
+    True. Callers pass every YouTube failure through here."""
+    global _quota_blocked_until
+    if "quotaExceeded" not in str(exc):
+        return False
+    if time.time() >= _quota_blocked_until:
+        _quota_blocked_until = _next_quota_reset()
+        logger.warning("YouTube daily quota exhausted — backing off API calls until "
+                       "the midnight-Pacific reset (%s)",
+                       time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(_quota_blocked_until)))
+    return True
+
+
+def quota_blocked() -> bool:
+    return time.time() < _quota_blocked_until
+
 
 def _token_path(channel: str = "") -> Path:
     """Token file for a channel key. '' / 'default' → the legacy single-channel
@@ -315,6 +348,7 @@ def _thread_replies(youtube, parent_id: str) -> list[dict]:
             if not page:
                 break
     except Exception as exc:
+        note_quota_error(exc)
         logger.warning("thread replies fetch failed for %s: %s", parent_id, exc)
         return []
     return out
@@ -322,6 +356,8 @@ def _thread_replies(youtube, parent_id: str) -> list[dict]:
 
 def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, channel: str = "") -> list[dict]:
     """Fetch recent comment threads from the authenticated user's channel."""
+    if quota_blocked():
+        raise RuntimeError("YouTube daily quota exhausted — waiting for the midnight-Pacific reset.")
     creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         raise RuntimeError("Not authenticated. Connect YouTube first.")

@@ -381,6 +381,7 @@ DEFAULT_CFG = {
     # mirrors the DEFAULT style (see _ensure_styles).
     "made_for_kids": False,
     "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
+    "comment_poll_minutes": 60,                # minutes between comment/mention sweeps (YouTube quota: ~2 units per channel per sweep)
     "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
     "youtube_auto_start_job": False,           # auto-start the next queue item with a ready script; loops until the queue is empty
     "youtube_auto_write_scripts": False,       # write (but don't render) scripts for pending queue items, parking them unapproved for review/edit

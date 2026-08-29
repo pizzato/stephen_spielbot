@@ -12739,6 +12739,10 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
             fetched_any = True
         except Exception as e:
             errors.append(f"{ch or 'default'}: {str(e).splitlines()[0][:120]}")
+            # Quota is per project, shared by every channel — once one sweep hits
+            # quotaExceeded the rest are doomed too, so stop the round here.
+            if yt.note_quota_error(e):
+                break
             continue
         for fc in fetched:
             cur = by_id.get(fc.get("comment_id"))
@@ -16414,12 +16418,21 @@ def _automation_tick() -> dict:
                 _reconcile_queue()
             except Exception:
                 pass
-            if cfg.get("youtube_auto_fetch_evaluate"):
+            # Comment/mention sweeps run on their own, much slower cadence than the
+            # tick: each YouTube sweep costs 2+ quota units per channel, so at the
+            # tick's 3-minute pace six channels alone burn most of the 10k daily
+            # quota (issue observed 2026-08-29). Default one sweep per hour.
+            global _last_comment_fetch
+            poll_secs = max(1.0, float(cfg.get("comment_poll_minutes", 60) or 60)) * 60.0
+            comments_due = time.time() - _last_comment_fetch >= poll_secs
+            if comments_due and (cfg.get("youtube_auto_fetch_evaluate") or cfg.get("x_auto_fetch_evaluate")):
+                _last_comment_fetch = time.time()
+            if cfg.get("youtube_auto_fetch_evaluate") and comments_due and not yt.quota_blocked():
                 try:
                     out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
                 except Exception as e:
                     out["fetch_error"] = str(e)[:120]
-            if cfg.get("x_auto_fetch_evaluate"):
+            if cfg.get("x_auto_fetch_evaluate") and comments_due:
                 try:
                     out["x_fetch"] = _fetch_and_evaluate_x(cfg.get("x_auto_approve_comments", False))
                 except Exception as e:
@@ -16487,6 +16500,9 @@ import threading  # noqa: E402
 _AUTOMATION_INTERVAL = 180  # seconds between full scheduled ticks
 _COMPLETION_POLL = 15       # seconds between cheap "did the render finish?" checks
 _tick_lock = threading.Lock()
+# Comment/mention sweeps run far less often than the tick (see _automation_tick);
+# 0.0 makes the first tick after startup sweep immediately.
+_last_comment_fetch = 0.0
 _automation_started = False
 
 
