@@ -111,6 +111,20 @@ pipeline changes in three places:
   music **caption** (genre, tempo, mood, arrangement) that becomes the film's music
   description. Both music engines sing lyrics natively; the caption reads best structured,
   and for song films it must *not* say "instrumental".
+- **One lead singer fronts it.** Before the song is written, a **lead singer is cast
+  from the style's [character catalogue](characters.md)** — a character the brief names
+  wins, otherwise one is drawn at random so a channel's videos rotate through its cast —
+  and their identity (sex, age, **background** — the character card's fields, plus their
+  library voice's tone and accent) becomes the song's **vocalist** line, stored in
+  `song.json`. That one line is enforced everywhere it matters: it is appended to the
+  caption when the track is sung, so the voice on the track matches; the lyrics are
+  written in that singer's voice; and the story and divide prompts cast that character
+  by name as the one performer in every singing scene, so the person shown singing is
+  the person heard. A style with no usable catalogue character still gets a vocalist —
+  the songwriter defines one (sex, age, background, voice quality) and the story invents
+  a matching performer. Each video also dresses the singer in **one fresh outfit** chosen
+  for that film — described consistently across its scenes, different film to film — so
+  the catalogue portrait anchors the face, not an unchanging costume.
 - **The cast performs it.** Every scene is staged as a **performed silent take** —
   the same H3 Ref2VA path as [silent scenes, performed](#silent-scenes-performed),
   no style toggle needed — stamped `singing` in its metadata. Scenes with cast on screen
@@ -189,12 +203,14 @@ track's real length is what the scenes are divided out of, and each take gets it
 of it pinned in. The lyrics are the one thing nothing can supply — type them into the Song
 tab, because the story is drafted from them and the scenes perform them.
 
-At generation time, the fallback description: the render describes the **lead performer's cast library voice**
-(gender, age, tone, accent — e.g. *"mature female vocalist, warm smoky voice, Irish
-accent"*) and appends it to the caption: the singer on screen and the voice on the track
-are matched by description, not by cloning. Pick the character's voice in the script's
-Characters tab to steer it. Lip movement is a performance, not a phoneme-accurate sync —
-exactly like a real music video shot without playback.
+At generation time the vocalist is *described*, in this order: an explicitly chosen
+**Singing voice**'s casting metadata wins; else the **vocalist line cast at draft time**
+(the lead singer's sex/age/background, e.g. *"young female vocalist, Brazilian, warm
+smoky voice, light Portuguese accent"*); films predating both fall back to describing the
+lead performer's cast library voice. The description is appended to the caption: the
+singer on screen and the voice on the track are matched by description, not by cloning.
+Lip movement is a performance, not a phoneme-accurate sync — exactly like a real music
+video shot without playback.
 
 **Engine choice matters.** MiniMax Music 3's caption-driven vocals are the stronger
 singer; ACE-Step also sings but our workflow pins its BPM, key and **English-only**

@@ -3031,6 +3031,24 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <textarea className="textarea" rows={3} value={c.description || ''}
                   onChange={(e) => updateChar(i, { description: e.target.value })} />
               </Field>
+              <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
+                <Field label="Sex" hint="Drives voice auto-casting and, on music videos, the sung voice.">
+                  <select className="input" style={{ width: 120 }} value={c.gender || ''}
+                    onChange={(e) => updateChar(i, { gender: e.target.value })}>
+                    {['', 'male', 'female'].map((g) => <option key={g} value={g}>{g || 'unset…'}</option>)}
+                  </select>
+                </Field>
+                <Field label="Age">
+                  <select className="input" style={{ width: 120 }} value={c.age || ''}
+                    onChange={(e) => updateChar(i, { age: e.target.value })}>
+                    {['', 'child', 'young', 'adult', 'mature', 'elderly'].map((a) => <option key={a} value={a}>{a || 'unset…'}</option>)}
+                  </select>
+                </Field>
+                <div className="grow"><Field label="Background" hint="Nationality, language, accent — e.g. “Brazilian, sings in Portuguese-accented English”. Shapes the sung voice when they front a music video.">
+                  <input className="input" value={c.background || ''} placeholder="e.g. Brazilian, light Portuguese accent"
+                    onChange={(e) => updateChar(i, { background: e.target.value })} />
+                </Field></div>
+              </div>
               <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes. Blank = the style's narrator voice.">
                 <select className="input" style={{ maxWidth: 260 }} value={c.voice || ''}
                   onChange={(e) => updateChar(i, { voice: e.target.value })}>

@@ -57,8 +57,10 @@ the format does to the render.
   drafted from. Give the direction here rather than in a *tell it how* instruction:
   the instruction steers one re-write and is then forgotten.
 - **Sound** — what the music model is told about the song (genre, tempo, mood,
-  arrangement). The lead performer's cast voice is described on top of this at render
-  time, so leave the vocalist out.
+  arrangement). The film's vocalist — the lead singer cast from the style's character
+  catalogue at draft time (see [Singing films](../performance_films.md#singing-films-the-music-video-format)),
+  or the songwriter's own vocalist line — is described on top of this when the track is
+  sung, so leave the vocalist out.
 - **Lyrics** — sung exactly as written, section tags (`[Verse]`, `[Chorus]`, …) on their
   own lines.
 - Both boxes have a **Re-generate** button with a *tell it how* caret: re-writing the
@@ -66,8 +68,9 @@ the format does to the render.
   music for the lyrics you have. Either way both halves are saved, unsaved edits included.
 - **Singing voice** — the library voice the song is sung in. At generation it only
   *describes* the vocalist to the music model (gender, age, tone — the engines cannot be
-  handed a voice); left on *the model's own vocalist* the song decides. It is also the
-  target of the re-voicing below, which is an actual clone.
+  handed a voice); left on *the model's own vocalist* the film's cast lead singer
+  decides (their sex, age and background — the vocalist line stored with the song). It
+  is also the target of the re-voicing below, which is an actual clone.
 - **Save edits** keeps your typing (**Discard edits** throws it away); **Generate the
   song** renders the track on a worker, and **Sing this as [voice]** re-voices it with
   seed-vc — always converting the sung

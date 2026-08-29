@@ -624,18 +624,24 @@ def write_song(story: dict | None, target_seconds: float,
                language: str | None = None, *,
                topic: str = "", video_title: str = "",
                source_text: str = "", music_hint: str = "",
-               instruction: str = "") -> dict:
+               singer_note: str = "", instruction: str = "") -> dict:
     """The film's SONG, written from the approved story draft.
 
     A song film ("song" format) is a music video: the music engine sings the
     whole soundtrack while the cast performs it on camera. This is where the
-    soundtrack is authored — returns ``{"caption": ..., "lyrics": ...}``:
-    tagged lyrics ([Verse]/[Chorus]/…) both music engines take verbatim, and a
-    structured caption (genre, tempo, mood, arrangement) that replaces the
-    instrumental ``music`` description. The caption deliberately leaves the
-    vocalist out — the render appends a description of the cast singer's
-    library voice (gender/age/tone), so the sung voice fits the character
-    the film shows singing.
+    soundtrack is authored — returns ``{"caption": ..., "lyrics": ...,
+    "vocalist": ...}``: tagged lyrics ([Verse]/[Chorus]/…) both music engines
+    take verbatim, a structured caption (genre, tempo, mood, arrangement) that
+    replaces the instrumental ``music`` description, and a vocalist line (sex,
+    age, background, voice quality). The caption deliberately leaves the
+    vocalist out — the track render appends the vocalist description, so the
+    sung voice fits the person the film shows singing.
+
+    *singer_note* pins the vocalist when the caller has already cast one (a
+    style-catalogue character): a "THE SINGER" line rides into the prompt so
+    both the lyrics and the returned vocalist describe that person. Empty
+    leaves the model to define the vocalist itself — either way the song
+    comes back with one.
 
     The lyric budget comes from *target_seconds*: sung delivery runs well
     under two words a second, and over-length lyrics are what make the model
@@ -664,12 +670,17 @@ def write_song(story: dict | None, target_seconds: float,
     language_note = (f"\nSONG LANGUAGE — write the lyrics in {lang_name}; the "
                      f"section tags and the caption stay in English."
                      if lang_name else "")
+    singer_line = (f"\nTHE SINGER — the song is sung by: {singer_note.strip()}. "
+                   "Return exactly this as \"vocalist\" and write the lyrics "
+                   "in this singer's voice."
+                   if (singer_note or "").strip() else "")
     user = _prompts.user("song_write",
                          title_line=_title_line(topic, video_title or None),
                          story_text=source_text or topic,
                          duration_seconds=seconds,
                          word_budget=word_budget,
                          music_hint=music_hint,
+                         singer_note=singer_line,
                          language_note=language_note)
     if (instruction or "").strip():
         user += ("\n\nAdditional instruction from the user — follow it, overriding "
@@ -683,7 +694,10 @@ def write_song(story: dict | None, target_seconds: float,
     if not lyrics:
         raise RuntimeError("Song writing returned no lyrics")
     caption = str(data.get("caption") or music_hint or "").strip()
-    return {"caption": caption, "lyrics": lyrics}
+    # The caller's cast singer outranks whatever the model wrote back.
+    vocalist = ((singer_note or "").strip()
+                or str(data.get("vocalist") or "").strip())
+    return {"caption": caption, "lyrics": lyrics, "vocalist": vocalist}
 
 
 def critique_song(song: dict, target_seconds: float, *,
