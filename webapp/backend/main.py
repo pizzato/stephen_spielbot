@@ -7417,6 +7417,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # (covers that predate typography need one regeneration first).
         "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
         "resolution": jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+        # Whether the published final is larger than the render tier, and the
+        # size's name — the editor's "Upscaled to …" indication.
+        "upscale": _final_upscale_info(wd),
         # The look this film was shot in, for the "Restyle this film" card.
         "style_name": jc.get("style_name") or "",
         "style": jc.get("style") or "",
@@ -14027,6 +14030,35 @@ def _is_portrait_film(work_dir: Path) -> bool:
     return h > w
 
 
+def _final_upscale_info(wd: Path) -> dict:
+    """Whether the published final is larger than the render tier, and what to
+    call that size.
+
+    The scene clips always stay at the render resolution — only the assembled
+    final is upscaled (the render-time finishing step or a Remix upscale) — so
+    without this the editor gives no hint the film was upscaled at all, and a
+    scene re-render looks like it would throw the whole upscale away.
+    """
+    fw = fh = 0
+    final_path = gapp._final_path_for_work_dir(wd)
+    if final_path.exists():
+        try:
+            from pipeline.assembler import _get_video_dimensions
+            fw, fh = _get_video_dimensions(final_path)
+        except Exception:
+            fw = fh = 0
+    rw, rh = _film_dimensions(wd)
+    upscaled = bool(fw and fh and fw * fh > rw * rh)
+    label = ""
+    if upscaled:
+        # The friendly tier name ("Portrait 4K (2160×3840)") when the final
+        # matches one; a hand-sized cut falls back to raw pixels.
+        label = next((name for name, dims in gapp._UPSCALE_RESOLUTIONS.items()
+                      if dims == (fw, fh)), "") or f"{fw}×{fh}"
+    return {"upscaled": upscaled, "final_width": fw, "final_height": fh,
+            "label": label}
+
+
 @api.get("/api/films/scenes")
 def film_scenes(work_dir: str = Query(...)) -> dict:
     wd = Path(work_dir)
@@ -14101,6 +14133,10 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
         # editor gives them the acted setup rather than a bare duration.
         "acted_silent": _acted_silent_cfg(jc)["h3_silent_scenes"],
         "resolution": resolution,
+        # The final may be bigger than the scene clips (finishing/Remix
+        # upscale): say so, or a scene re-render looks like it costs the
+        # whole upscale.
+        "upscale": _final_upscale_info(wd),
         "voice": jc.get("default_voice", ""),
         "voices": gapp.get_voice_choices(),
     }

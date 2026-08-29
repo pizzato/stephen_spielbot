@@ -1536,6 +1536,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <div className="row center between" style={{ padding: '16px 20px' }}>
             <span className="row center gap-8">
               <Chip tone="ok" dot>Final cut</Chip>
+              {videoDims && (
+                <Chip>
+                  {videoDims.w}×{videoDims.h}{data?.upscale?.upscaled ? ' · upscaled' : ''}
+                </Chip>
+              )}
               {showLangChip && (
                 <Chip>
                   <Icon name="language" /> {cutLangName}{isOriginalCut ? ' · original' : ''}
@@ -2521,6 +2526,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   }, [scenes, meta.config?.characters])
   const [jobId, setJobId] = useState('')
   const [resolution, setResolution] = useState('')
+  const [upscale, setUpscale] = useState(null)
   const [style, setStyle] = useState('')
   // The film's style performs its silent scenes on H3 (h3_silent_scenes): those
   // scenes are then written through the acted fields, same as the dialogue ones.
@@ -2550,6 +2556,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       setJobId(r.job_id || '')
       onTitle?.(r.title || '')
       setResolution(r.resolution || '')
+      setUpscale(r.upscale || null)
       setStyle(r.style || '')
       setActedSilent(!!r.acted_silent)
       setVoices(r.voices || [])
@@ -2668,6 +2675,16 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
         <Banner tone="warn">Acted-scene references could not be loaded: {performanceError}</Banner>
       )}
 
+      {upscale?.upscaled && (
+        <p className="muted" style={{ fontSize: 13, marginTop: -6, marginBottom: 16 }}>
+          <Icon name="up-right-and-down-left-from-center" /> The published final is upscaled
+          to <strong>{upscale.label}</strong>. The scene clips here stay at the render
+          resolution ({resolution}) — re-rendering one only replaces that clip; it never
+          redoes the upscale. After reassembling, run Upscale video on the Film tab to
+          bring the new cut back to full AI-upscale quality.
+        </p>
+      )}
+
       {activeRenders > 0 && (
         <Banner tone="info">
           <Icon name="spinner" spin /> Re-rendering {activeRenders} scene{activeRenders > 1 ? 's' : ''}… Reassemble when done.
@@ -2756,6 +2773,9 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   const [hasRefTakes, setHasRefTakes] = useState(false)
   const [filmScenes, setFilmScenes] = useState([])    // for the visuals card's scene scoping
   const [filmJobId, setFilmJobId] = useState('')
+  // Final-vs-scenes size: the scene clips stay at the render tier, so when the
+  // published final was upscaled the header says so ("Upscaled to 4K …").
+  const [upscale, setUpscale] = useState(null)
   const [charReload, setCharReload] = useState(0)     // bumped when the bar adds a character
   // Prefill page title from film scenes (lightweight enough for the head), and
   // note whether anything here is shot on the reference engine: the Scenes list
@@ -2770,6 +2790,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         s.singing ?? s.metadata?.singing)))
       setFilmScenes(list)
       setFilmJobId(r.job_id || '')
+      setUpscale(r.upscale || null)
     }).catch(() => {})
   }, [workDir])
 
@@ -2786,6 +2807,13 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         <div className="page-head__intro">
           <span className="label-sm reveal">Edit film</span>
           <h1 className="display-md reveal reveal-d1">{displayTitle}</h1>
+          {upscale?.upscaled && (
+            <div className="reveal reveal-d1" style={{ marginTop: 8 }}>
+              <Chip tone="ok">
+                <Icon name="up-right-and-down-left-from-center" /> Upscaled to {upscale.label}
+              </Chip>
+            </div>
+          )}
         </div>
         <div className="row gap-10 reveal reveal-d1">
           <Button variant="ghost" icon="arrow-left" onClick={() => go('library')}>Films</Button>
