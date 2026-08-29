@@ -177,6 +177,9 @@ def check_auth_status(client_secrets_path: str, force: bool = False, channel: st
     # creds.refresh(Request()) which is a network call with no built-in timeout
     # and can block for 30+ seconds if the network is slow or stalled.
     def _full_check() -> dict:
+        if quota_blocked():
+            return {"connected": False, "channel_name": "", "channel_id": "",
+                    "error": "YouTube daily quota exhausted — retrying after the midnight-Pacific reset"}
         creds = _load_credentials(client_secrets_path, channel)
         if not creds:
             return {
@@ -205,6 +208,7 @@ def check_auth_status(client_secrets_path: str, force: bool = False, channel: st
         result = {"connected": False, "channel_name": "", "channel_id": "",
                   "error": "Connection check timed out — check your network"}
     except Exception as exc:
+        note_quota_error(exc)
         result = {"connected": False, "channel_name": "", "channel_id": "", "error": str(exc)[:300]}
     finally:
         pool.shutdown(wait=False)  # don't block — let any slow I/O finish in background
