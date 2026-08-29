@@ -133,6 +133,27 @@ def _comfy_has_cuda(comfy_url: str) -> bool:
         return False
 
 
+def _rejection_reason(body: str) -> str:
+    """One-line summary of a ComfyUI /prompt rejection body.
+
+    Callers keep only the first line of the failure (a film task stores
+    ``str(e).splitlines()[0]``), so the reason has to be ON that line: a bare
+    "400" leaves the screen saying nothing happened while the log holds the
+    real cause. A missing node also gets the fix, since the answer is on the
+    worker rather than in the film.
+    """
+    try:
+        err = (json.loads(body) or {}).get("error") or {}
+    except Exception:
+        return "see the log for details"
+    message = str(err.get("message") or "").strip()
+    if err.get("type") == "missing_node_type":
+        node = str((err.get("extra_info") or {}).get("class_type") or "").strip()
+        return (f"the node '{node or '?'}' is not installed on this worker "
+                f"— rebuild its ComfyUI container (see docs/troubleshooting.md)")
+    return message or "see the log for details"
+
+
 def _queue_prompt(workflow: dict, client_id: str, comfy_url: str = COMFYUI_URL) -> str:
     payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
     req = urllib.request.Request(
@@ -146,7 +167,9 @@ def _queue_prompt(workflow: dict, client_id: str, comfy_url: str = COMFYUI_URL) 
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode()
-        raise RuntimeError(f"ComfyUI rejected workflow ({comfy_url}): {e.code}\n{body}")
+        raise RuntimeError(
+            f"ComfyUI ({comfy_url}) rejected the workflow: {_rejection_reason(body)}"
+            f"\n[{e.code}] {body}")
     except urllib.error.URLError as e:
         raise RuntimeError(
             f"ComfyUI is not reachable at {comfy_url} — is it running?\n"

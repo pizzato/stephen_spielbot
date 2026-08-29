@@ -75,6 +75,20 @@ Containers silently falling back to CPU is a known failure mode after a host
 as failed scene tasks that succeed on retry — reduce concurrency by removing a worker from
 `comfy_workers` temporarily, or lower the resolution.
 
+### A task fails instantly with "the node '…' is not installed on this worker"
+
+The worker's ComfyUI does not register a node the workflow needs, so it rejects the job
+the moment it is submitted — every scene fails within seconds, which looks like nothing
+happened at all. Confirm which workers are missing it (an empty `{}` means missing):
+
+```bash
+curl -s http://s2:8188/object_info/FlashVSRNode
+```
+
+Custom nodes live inside the container image and are **not** on a mounted volume, so a
+container that was patched by hand loses them on the next recreate. Rebuild the worker
+images so the pinned nodes in `docker/comfyui/Dockerfile` are baked back in.
+
 ## Renders
 
 ### A render is stuck or phantom
