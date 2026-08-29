@@ -7019,6 +7019,49 @@ def mark_job_seen(body: JobActionBody) -> dict:
     return {"ok": True}
 
 
+class FilmMetaBody(BaseModel):
+    work_dir: str = ""
+    title: str | None = None      # rename the display title (never the folder)
+    starred: bool | None = None
+    archived: bool | None = None
+
+
+@api.post("/api/films/meta")
+def set_film_meta(body: FilmMetaBody) -> dict:
+    """Library metadata for one film: rename (display title), star, archive.
+    starred/archived persist in job_config.json — the renderer rewrites job.json
+    wholesale on completion/error, so flags there wouldn't survive a re-render.
+    The rename shares _save_video_title with the Publish screen's save, so both
+    paths land in the same places (durable record, job_config, pending queue
+    item); the work FOLDER is never renamed — its name keys the durable job id,
+    the published final's path and deep links."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    out = gapp.OUTPUT_DIR.resolve()
+    try:
+        wd_res = wd.resolve()
+    except OSError:
+        raise HTTPException(400, "Invalid path.")
+    if not body.work_dir or wd_res == out or wd_res.parent != out:
+        raise HTTPException(400, "Refusing to write outside the videos directory.")
+    if not wd.exists():
+        raise HTTPException(404, "Film not found.")
+    title = (body.title or "").strip()
+    if body.title is not None and not title:
+        raise HTTPException(400, "Title cannot be empty.")
+    if title:
+        _save_video_title(wd, title)
+    if body.starred is not None or body.archived is not None:
+        jc = _film_job_config(wd)
+        if body.starred is not None:
+            jc["starred"] = bool(body.starred)
+        if body.archived is not None:
+            jc["archived"] = bool(body.archived)
+        _write_film_job_config(wd, jc)
+    return {"ok": True, "title": title}
+
+
 # ── library / recent jobs ────────────────────────────────────────────────────
 
 def _channel_display_name(cfg: dict, key: str) -> str:
@@ -7094,6 +7137,37 @@ def _style_names_for_work_dirs(dirs: list[str]) -> dict[str, str]:
     return out
 
 
+def _video_titles_for_work_dirs(dirs: list[str]) -> dict[str, str]:
+    """Display title per work dir, for the Films list. Same resolution order as
+    _video_title_for (job_config.json → durable job record) but batched into ONE
+    store session — the per-item helper opens sqlite per call, too slow for the
+    1000-film library list. Returns '' (not the dir name) when no explicit title
+    was ever saved, so the caller falls back to the pretty folder label."""
+    out: dict[str, str] = {}
+    missing = []
+    for d in dirs:
+        title = str(_film_job_config(Path(d)).get("video_title") or "").strip()
+        if title:
+            out[d] = title
+        else:
+            missing.append(d)
+    if missing:
+        try:
+            store = DurableStore.default()
+            try:
+                for d in missing:
+                    row = _row_to_dict(store.get_job(job_id_from_work_dir(Path(d))))
+                    cfg_json = json.loads(row.get("config_json") or "{}")
+                    out[d] = str(cfg_json.get("video_title") or row.get("title") or "")
+            finally:
+                store.close()
+        except Exception:
+            pass
+    for d in missing:
+        out.setdefault(d, "")
+    return out
+
+
 @api.get("/api/jobs")
 def list_jobs() -> dict:
     # The Library lists every finished film (it filters client-side, no paging),
@@ -7111,6 +7185,7 @@ def list_jobs() -> dict:
     script_rows = list(gapp._list_script_jobs())
     styles = _style_names_for_work_dirs(
         [d for _, d in finished_rows] + [d for _, d in script_rows])
+    titles = _video_titles_for_work_dirs([d for _, d in finished_rows])
     chan_cache: dict[str, str] = {}
     def _channel_disp(style: str) -> str:
         if style not in chan_cache:
@@ -7123,13 +7198,19 @@ def list_jobs() -> dict:
             meta = json.loads((Path(d) / "job.json").read_text())
         except Exception:
             meta = {}
+        jc = _film_job_config(Path(d))
         finished.append({"label": l, "work_dir": d, "cover_url": _cover_url(d),
+                         # Saved display title (rename / Publish-screen edit);
+                         # the card falls back to the pretty folder label.
+                         "title": titles.get(d) or l,
                          "seen": bool(meta.get("viewed_at")),
                          # Rendering one script at a second resolution leaves two
                          # films with the SAME label, so the card names the size.
-                         "resolution": (_film_job_config(Path(d)).get("resolution") or "").strip(),
+                         "resolution": (jc.get("resolution") or "").strip(),
                          "style_name": styles.get(d, ""),
                          "channel": _channel_disp(styles.get(d, "")),
+                         "starred": bool(jc.get("starred")),
+                         "archived": bool(jc.get("archived")),
                          **_film_publish_status(Path(d), meta, cfg)})
     scripts = [{"label": l, "work_dir": d,
                 # a finished film exists for this script — same marker the
@@ -10850,33 +10931,44 @@ def yt_post_save(body: CoverSaveBody) -> dict:
         raise HTTPException(404, "No script found.")
     title = (body.title or "").strip()
     if title:
-        job_id = job_id_from_work_dir(wd)
-        store = DurableStore.default()
-        try:
-            # Merge into the existing config/metadata — create_or_update_job
-            # overwrites both on conflict, so re-pass them to avoid clobbering
-            # phase/style_name/scene_count.
-            d = _row_to_dict(store.get_job(job_id))
-            cfg = json.loads(d.get("config_json") or "{}")
-            meta = json.loads(d.get("metadata_json") or "{}")
-            cfg["video_title"] = title
-            store.create_or_update_job(
-                job_id, wd, title, config=cfg, metadata=meta,
-                status=d.get("status") or "pending",
-            )
-        finally:
-            store.close()
+        _save_video_title(wd, title, queue_item_id=body.queue_item_id)
     try:
         _description_path(wd).write_text(body.description or "")
     except Exception as e:
         raise HTTPException(500, f"Could not save description: {str(e).splitlines()[0][:200]}")
-    # Keep a still-pending linked queue item's title in sync (issue #43).
-    qid = (body.queue_item_id or "").strip() or _film_job_config(wd).get("queue_item_id", "")
-    if qid and title:
+    return {"ok": True, "title": title}
+
+
+def _save_video_title(wd: Path, title: str, queue_item_id: str = "") -> None:
+    """Persist a film's display title everywhere reads look for it: the durable
+    job record (read back by _video_title_for, the publish prefill and
+    load_script), job_config.json (the Films list's batched read), and a
+    still-pending linked queue item so the Queue reflects the edit too
+    (issue #43)."""
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        # Merge into the existing config/metadata — create_or_update_job
+        # overwrites both on conflict, so re-pass them to avoid clobbering
+        # phase/style_name/scene_count.
+        d = _row_to_dict(store.get_job(job_id))
+        cfg = json.loads(d.get("config_json") or "{}")
+        meta = json.loads(d.get("metadata_json") or "{}")
+        cfg["video_title"] = title
+        store.create_or_update_job(
+            job_id, wd, title, config=cfg, metadata=meta,
+            status=d.get("status") or "pending",
+        )
+    finally:
+        store.close()
+    jc = _film_job_config(wd)
+    jc["video_title"] = title
+    _write_film_job_config(wd, jc)
+    qid = (queue_item_id or "").strip() or jc.get("queue_item_id", "")
+    if qid:
         item = _queue_item_by_id(qid)
         if item and item.get("status") == "pending":
             yt.update_queue_item(qid, final_title=title)
-    return {"ok": True, "title": title}
 
 
 def _description_path(wd: Path) -> Path:
@@ -15943,12 +16035,14 @@ def _enqueue_finished_for_publish(recent_only: bool = True) -> int:
             continue
         if recent_only and (now - float(meta.get("updated_at") or 0)) > _PUBLISH_AUTOENQUEUE_WINDOW:
             continue
+        jc = _film_job_config(p)
+        if jc.get("archived"):
+            continue  # archived films sit out the auto-publish sweep
         if pq.item_by_work_dir(str(p)) is not None:
             continue  # already queued (or explicitly removed) — never resurrect
         youtube, x = _publish_targets_for_job(p, meta)
         if not (youtube["enabled"] or x["enabled"]):
             continue  # nothing left to publish
-        jc = _film_job_config(p)
         source = _publish_source_for(jc)
         title = jc.get("video_title") or _video_title_for(p)
         if pq.add_item(str(p), title=title, source=source,

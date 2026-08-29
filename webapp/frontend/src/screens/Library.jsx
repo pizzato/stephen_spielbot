@@ -27,6 +27,9 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
   const [busyDel, setBusyDel] = useState('')
   const [busyNew, setBusyNew] = useState('')         // work_dir pending "new version" copy
   const [busyApprove, setBusyApprove] = useState('') // work_dir pending publish approval
+  const [renaming, setRenaming] = useState('')       // work_dir whose title is being edited
+  const [renameVal, setRenameVal] = useState('')
+  const [busyRename, setBusyRename] = useState('')
   // Filters live in the URL (#/films?status=…&channel=…&style=…) so they
   // accumulate and back-navigation returns to the same filtered view.
   const [{ status: filter, channel, style }, setFilters] = useHashParams({ status: 'all', channel: '', style: '' })
@@ -63,6 +66,33 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
     catch (e) { setError(e.message) } finally { setBusyDel('') }
   }
 
+  // Patch one film's fields in place — flipping a star/archive flag shouldn't
+  // refetch the whole library. Errors reload so the UI can't drift from disk.
+  const patchFilm = (wd, patch) =>
+    setJobs((j) => ({ ...j, finished: j.finished.map((f) => (f.work_dir === wd ? { ...f, ...patch } : f)) }))
+
+  const toggleStar = (f) => {
+    const starred = !f.starred
+    patchFilm(f.work_dir, { starred })
+    api.setFilmMeta({ work_dir: f.work_dir, starred }).catch((e) => { setError(e.message); load() })
+  }
+
+  const setArchived = (f, archived) => {
+    patchFilm(f.work_dir, { archived })
+    api.setFilmMeta({ work_dir: f.work_dir, archived }).catch((e) => { setError(e.message); load() })
+  }
+
+  // Rename edits the display title (what publishing uses) — the work folder and
+  // its files keep their names.
+  const startRename = (f) => { setRenaming(f.work_dir); setRenameVal(f.title || f.label) }
+  const saveRename = async (wd) => {
+    const title = renameVal.trim()
+    if (!title || busyRename) return
+    setBusyRename(wd); setError('')
+    try { await api.setFilmMeta({ work_dir: wd, title }); patchFilm(wd, { title }); setRenaming('') }
+    catch (e) { setError(e.message) } finally { setBusyRename('') }
+  }
+
   // Channel/style options come from the films themselves, so the dropdowns only
   // offer values that actually select something. Filters accumulate: the status
   // buckets (and their counts) are computed on the channel/style-narrowed set.
@@ -77,20 +107,27 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
   const styleOpts = distinct('style_name', style)
   const base = jobs.finished.filter((f) =>
     (!channel || f.channel === channel) && (!style || f.style_name === style))
+  // Archived films only appear under their own filter; every other view works
+  // on the live set, so the status counts still add up to "All".
+  const live = base.filter((f) => !f.archived)
 
   // Filter options carry counts; a bucket only appears once it has films (or is
   // the current selection, so it doesn't vanish under the user when the last
   // match moves on). With the approval gate off, the approval buckets never show.
-  const counts = base.reduce((m, f) => { const s = statusOf(f); m[s] = (m[s] || 0) + 1; return m }, {})
+  const counts = live.reduce((m, f) => { const s = statusOf(f); m[s] = (m[s] || 0) + 1; return m }, {})
   const filterOpts = [
-    { value: 'all', label: 'All', n: base.length },
+    { value: 'all', label: 'All', n: live.length },
+    { value: 'starred', label: '★ Starred', n: live.filter((f) => f.starred).length },
     { value: 'approval', label: 'Needs approval', n: counts.approval || 0 },
     { value: 'approved', label: 'Approved', n: counts.approved || 0 },
     { value: 'published', label: 'Published', n: counts.published || 0 },
     { value: 'unpublished', label: 'Not published', n: counts.unpublished || 0 },
+    { value: 'archived', label: 'Archived', n: base.length - live.length },
   ].filter((o) => o.value === 'all' || o.n > 0 || o.value === filter)
     .map((o) => ({ value: o.value, label: `${o.label} (${o.n})` }))
-  const shown = filter === 'all' ? base : base.filter((f) => statusOf(f) === filter)
+  const shown = filter === 'archived' ? base.filter((f) => f.archived)
+    : filter === 'starred' ? live.filter((f) => f.starred)
+      : filter === 'all' ? live : live.filter((f) => statusOf(f) === filter)
   const unfiltered = filter === 'all' && !channel && !style
 
   return (
@@ -178,7 +215,27 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>
             <div style={{ padding: '14px 18px 16px' }}>
-              <div style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{f.label}</div>
+              {renaming === f.work_dir ? (
+                <div className="row center gap-6" onClick={(e) => e.stopPropagation()}>
+                  <input className="input" autoFocus value={renameVal}
+                    onChange={(e) => setRenameVal(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') saveRename(f.work_dir); if (e.key === 'Escape') setRenaming('') }}
+                    style={{ padding: '8px 10px', fontWeight: 700, minWidth: 0 }} />
+                  <Button variant="primary" icon="check" title="Save name"
+                    disabled={busyRename === f.work_dir || !renameVal.trim()}
+                    onClick={() => saveRename(f.work_dir)} />
+                  <Button variant="ghost" icon="xmark" title="Cancel" onClick={() => setRenaming('')} />
+                </div>
+              ) : (
+                <div className="row center between gap-6">
+                  <div style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{f.title || f.label}</div>
+                  <button className="btn btn--quiet" title={f.starred ? 'Unstar' : 'Star'}
+                    style={{ padding: '4px 8px', flexShrink: 0 }}
+                    onClick={(e) => { e.stopPropagation(); toggleStar(f) }}>
+                    <Icon name="star" style={{ color: f.starred ? '#eab308' : 'var(--ink-4)' }} />
+                  </button>
+                </div>
+              )}
               {f.published && f.destinations?.length > 0 && (
                 <div className="row gap-6 mt-8 row--wrap">
                   {f.destinations.map((d, k) => {
@@ -194,6 +251,15 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
                 <Button variant="ghost" icon="copy" disabled={busyNew === f.work_dir} onClick={(e) => { e.stopPropagation(); newVersion(f.work_dir) }}>
                   {busyNew === f.work_dir ? 'Copying…' : 'New version'}
                 </Button>
+                <Button variant="ghost" icon="pen" title="Rename"
+                  onClick={(e) => { e.stopPropagation(); startRename(f) }} />
+                {f.archived ? (
+                  <Button variant="ghost" icon="box-open" title="Unarchive"
+                    onClick={(e) => { e.stopPropagation(); setArchived(f, false) }}>Unarchive</Button>
+                ) : (
+                  <Button variant="ghost" icon="box-archive" title="Archive"
+                    onClick={(e) => { e.stopPropagation(); setArchived(f, true) }} />
+                )}
                 {f.awaiting_approval && (
                   <Button variant="primary" icon="check" disabled={busyApprove === f.work_dir} onClick={(e) => { e.stopPropagation(); approve(f.work_dir) }}>
                     {busyApprove === f.work_dir ? 'Approving…' : 'Approve'}
