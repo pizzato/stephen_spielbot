@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect, RestyleForm, NO_STYLE } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
-import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
+import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, ActedTakes } from '../acted.jsx'
 import { styleLineage, resolveStyle } from '../styleUtils.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -443,8 +443,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     return null
   })()
   const [cur, setCur] = useState(0)
+  // The acted STAGING for every scene this film shoots on H3 — resolved by the
+  // backend with the renderer's own predicate and reference resolver, the same
+  // payload the film edit screen's acted view reads, so what a scene card shows
+  // is exactly what renders. Refreshed after any edit that can move a slot
+  // (mode/cast/dialogue changes, character look/voice edits, first frames).
+  const [perf, setPerf] = useState(null)
+  const refreshPerf = () => {
+    if (!job?.work_dir) return
+    api.loadPerformanceScript(job.work_dir).then(setPerf).catch(() => {})
+  }
+  useEffect(() => { setPerf(null); refreshPerf() }, [job?.job_id])
+  const perfById = new Map((perf?.scenes || []).map((s) => [s.id, s]))
   const [lightbox, setLightbox] = useState(null)
-  const [inpaint, setInpaint] = useState(false)
+  const [inpaint, setInpaint] = useState(null)   // scene INDEX being inpainted
   const [inpaintErr, setInpaintErr] = useState('')
   const [genAll, setGenAll] = useState(false)
   const [genAllMsg, setGenAllMsg] = useState('')
@@ -454,7 +466,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Restyle modal: null when closed, else { styleName, style, repaintCast }.
   const [restyle, setRestyle] = useState(null)
   const [restyleMsg, setRestyleMsg] = useState('')
-  const [confirmDelScene, setConfirmDelScene] = useState(false)
+  const [confirmDelScene, setConfirmDelScene] = useState(null)  // scene INDEX pending delete
 
   // Sync state and switch to Cover when a new job loads
   useEffect(() => {
@@ -533,9 +545,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // identified characters server-side WITHOUT changing job_id (so the sync
   // effect above never re-seeds), and background passes keep adding looks.
   // Re-pull the list from the server whenever the tab is opened.
+  const reloadCharacters = () => api.scriptCharacters(job.job_id)
+    .then((r) => { setCharacters(r.characters || []); setCastCatalogue(r.catalogue || []) })
+    .catch(() => { /* keep the snapshot */ })
   useEffect(() => {
-    // Not gated on the Characters tab: the Scenes tab's References card needs
-    // the catalogue portraits too (most casts are catalogue members).
+    // Not gated on the Characters tab: the Scenes tab's staging needs the
+    // catalogue portraits too (most casts are catalogue members).
     if (!job?.job_id) return
     let alive = true
     api.scriptCharacters(job.job_id)
@@ -737,10 +752,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }
 
   // ── Scenes tab ────────────────────────────────────────────────────────────────
+  // Every scene renders as its own card, so the handlers take the scene INDEX
+  // rather than closing over a single "current" one. `cur` remains only as the
+  // scene the lightbox / inpaint modal is on.
   const total = scenes.length
   const d = scenes[cur] || {}
-  const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
-  const patchScene = (patch) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, ...patch } : s))
+  const setField = (idx, k, v) => setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, [k]: v } : s))
+  const patchScene = (idx, patch) => setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, ...patch } : s))
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
   const imgUrl = (s) => (s && s.preview_path) ? fileUrl(s.preview_path) + (s.cb ? `&t=${s.cb}` : '') : ''
 
@@ -754,7 +772,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     const i = vs.findIndex((v) => v.id === s?.history?.selected)
     return i < 0 ? 0 : i
   }
-  const openLightbox = () => setLightbox({ ver: selVerIdx(d) })
+  const openLightbox = (idx) => {
+    lbCur.current = idx
+    setCur(idx)
+    setLightbox({ ver: selVerIdx(scenes[idx]) })
+  }
   // A held arrow key fires faster than React re-renders, so stepping reads the
   // scene it is on from a ref — reading `cur` would make every repeat start from
   // the same index and collapse the whole burst into one step.
@@ -769,7 +791,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     // Save the scene being left and move the page with the image, exactly like
     // `move` — but without awaiting the save, so the next press isn't held up.
     persist(from)
-    setConfirmDelScene(false)
+    setConfirmDelScene(null)
     setCur(ns)
   }
   const lbVerMove = (delta) => setLightbox((lb) => {
@@ -807,21 +829,23 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     ? (lbMulti && lbVersions[lightbox.ver] ? fileUrl(lbVersions[lightbox.ver].path) : imgUrl(d))
     : ''
 
-  const regenField = async (field, instruction = '') => {
-    setFieldBusy(field); setError('')
+  const regenField = async (idx, field, instruction = '') => {
+    const s = scenes[idx]
+    if (!s) return
+    setFieldBusy(`${idx}:${field}`); setError('')
     try {
-      const r = await api.regenField(job.job_id, d.id, field, {
-        title: d.title || '', narration: d.narration || '',
-        image_prompt: d.image_prompt || '', video_prompt: d.video_prompt || '',
+      const r = await api.regenField(job.job_id, s.id, field, {
+        title: s.title || '', narration: s.narration || '',
+        image_prompt: s.image_prompt || '', video_prompt: s.video_prompt || '',
         instruction,
       })
-      setField(field, r.value)
+      setField(idx, field, r.value)
     } catch (e) { setError(e.message) } finally { setFieldBusy('') }
   }
 
-  const fieldLabel = (text, field, icon) => (
-    <RegenLabel icon={icon} busy={fieldBusy === field}
-      onRegen={(instr) => regenField(field, instr)} chips={REGEN_CHIPS[field]}>{text}</RegenLabel>
+  const fieldLabel = (idx, text, field, icon) => (
+    <RegenLabel icon={icon} busy={fieldBusy === `${idx}:${field}`}
+      onRegen={(instr) => regenField(idx, field, instr)} chips={REGEN_CHIPS[field]}>{text}</RegenLabel>
   )
 
   const persist = async (idx = cur, override = null) => {
@@ -843,12 +867,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       // its copy so the read-only prompt on screen is exactly what renders.
       const fresh = (r?.scene && r.scene.id === s.id) ? r.scene : null
       if (fresh) setScenes((arr) => arr.map((x, i) => (i === idx ? { ...x, ...fresh } : x)))
+      // Mode/cast/dialogue edits move reference slots — keep the staging honest.
+      refreshPerf()
     } catch (e) { setError(e.message) }
   }
 
   // Pin / unpin the assembled prompt for an acted scene.
-  const savePromptOverride = async (text) => {
-    const s = scenes[cur]
+  const savePromptOverride = async (idx, text) => {
+    const s = scenes[idx]
     if (!s) return
     try {
       const r = await api.saveScene(job.job_id, s.id, {
@@ -860,7 +886,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         narration: s.narration || '', mode: s.mode || 'dialogue', prompt: text,
       })
       const fresh = (r?.scene && r.scene.id === s.id) ? r.scene : null
-      if (fresh) setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, ...fresh } : x)))
+      if (fresh) setScenes((arr) => arr.map((x, i) => (i === idx ? { ...x, ...fresh } : x)))
+      refreshPerf()
     } catch (e) { setError(e.message) }
   }
 
@@ -880,11 +907,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     : globalCast.filter((x) => !x.style || lineageNames.has(x.style)).map((x) => x.name)
   const castOpts = [...new Set([...characters.map((c) => c.name), ...styleCast])].filter(Boolean)
 
-  const move = async (to) => {
-    if (to < 0 || to >= total) return
-    setConfirmDelScene(false)
-    await persist(cur)
-    setCur(to)
+  // Jump the page to a scene's card (the thumbnail rail's click action).
+  const jumpTo = (idx) => {
+    setCur(idx)
+    const s = scenes[idx]
+    if (s) document.getElementById(`scene-card-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   // Structural edits (issue #193): the backend renumbers scene ids to 1..N and
@@ -894,71 +921,345 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     const fresh = (r.scenes || []).map((s) => ({ ...s, cb: Date.now() }))
     setScenes(fresh)
     setCur(Math.max(0, Math.min(focusIdx, fresh.length - 1)))
-    setConfirmDelScene(false)
+    setConfirmDelScene(null)
+    refreshPerf()
   }
 
-  const addSceneAfter = async () => {
+  const addSceneAfter = async (idx) => {
     setBusy('structure'); setError('')
     try {
-      await persist(cur)
-      const r = await api.addScene(job.job_id, d.id || 0)
-      applyStructure(r, cur + 1)
+      await persist(idx)
+      const r = await api.addScene(job.job_id, scenes[idx]?.id || 0)
+      applyStructure(r, idx + 1)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const deleteScene = async () => {
+  const deleteScene = async (idx) => {
     setBusy('structure'); setError('')
     try {
-      const r = await api.deleteScene(job.job_id, d.id)
-      applyStructure(r, cur)
+      const r = await api.deleteScene(job.job_id, scenes[idx].id)
+      applyStructure(r, idx)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const moveScene = async (di) => {
-    const to = cur + di
+  const moveScene = async (idx, di) => {
+    const to = idx + di
     if (to < 0 || to >= total) return
     setBusy('structure'); setError('')
     try {
-      await persist(cur)
+      await persist(idx)
       const order = scenes.map((s) => s.id)
-      ;[order[cur], order[to]] = [order[to], order[cur]]
+      ;[order[idx], order[to]] = [order[to], order[idx]]
       const r = await api.reorderScenes(job.job_id, order)
       applyStructure(r, to)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const regen = async (instruction = '') => {
-    setBusy('preview'); setError('')
+  const regen = async (idx, instruction = '') => {
+    setBusy(`preview:${idx}`); setError('')
     try {
-      await persist(cur)
-      const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style, instruction)
-      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      await persist(idx)
+      const r = await api.regenPreview(job.job_id, scenes[idx].id, resolution, style, instruction)
+      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      refreshPerf()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const selectVersion = async (versionId) => {
-    setBusy('preview'); setError('')
+  const selectVersion = async (idx, versionId) => {
+    setBusy(`preview:${idx}`); setError('')
     try {
-      const r = await api.selectPreview(job.job_id, scenes[cur].id, versionId)
-      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      const r = await api.selectPreview(job.job_id, scenes[idx].id, versionId)
+      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      refreshPerf()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const deleteVersion = async (versionId) => {
-    setBusy('preview'); setError('')
+  const deleteVersion = async (idx, versionId) => {
+    setBusy(`preview:${idx}`); setError('')
     try {
-      const r = await api.deletePreview(job.job_id, scenes[cur].id, versionId)
-      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, history: r.history } : s))
+      const r = await api.deletePreview(job.job_id, scenes[idx].id, versionId)
+      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, history: r.history } : s))
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  // `inpaint` holds the INDEX of the scene being edited (null when closed).
   const applyInpaint = async (mask, editPrompt, denoise) => {
+    const idx = inpaint
     setBusy('inpaint'); setInpaintErr('')
     try {
-      const r = await api.inpaintScene(job.job_id, scenes[cur].id, mask, editPrompt, denoise)
-      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
-      setInpaint(false)
+      const r = await api.inpaintScene(job.job_id, scenes[idx].id, mask, editPrompt, denoise)
+      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      setInpaint(null)
+      refreshPerf()
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
+  }
+
+  // Remove an acted scene's painted first frame — the take then renders from
+  // portraits and visuals alone.
+  const removeFirstFrame = async (idx) => {
+    setError('')
+    try {
+      await api.removeScenePreview(job.job_id, scenes[idx].id)
+      setScenes((arr) => arr.map((x, j) => (j === idx ? { ...x, has_preview: false, preview_path: '' } : x)))
+      refreshPerf()
+    } catch (e) { setError(e.message) }
+  }
+
+  // Re-shot a scene? The published final still holds the old take until the
+  // film is reassembled — same action the film edit screen offers.
+  const [assembling, setAssembling] = useState(false)
+  const [assembleMsg, setAssembleMsg] = useState('')
+  const reassemble = async () => {
+    setAssembling(true); setError(''); setAssembleMsg('')
+    try {
+      const r = await api.reassembleFilm(job.work_dir)
+      setAssembleMsg(`Film reassembled from ${r.scene_count} scene(s).${r.note ? ' ' + r.note : ''}`)
+    } catch (e) { setError(e.message) } finally { setAssembling(false) }
+  }
+
+  // One scene, one card — EVERY scene of the film, in order, whatever its
+  // mode. The fields (left) are the single editor; an acted scene also carries
+  // its resolved staging (cast slots, references, takes) on the same card,
+  // read from the renderer's own payload, so there is no separate acted view
+  // to fall out of sync with. A plain function (not a component) so React
+  // keeps the DOM — and the focused input — across re-renders.
+  const renderSceneCard = (s, i) => {
+    const acted = perfById.get(s.id)  // present when this scene renders as an H3 take
+    const actedShape = hasActedShape(s.mode, actedSilent, s.singing)
+    const previewBusy = busy === `preview:${i}`
+    const wpm = job?.create_brief?.scene_plan?.wpm || 150
+    const words = String(s.narration || '').split(/\s+/).filter(Boolean).length
+    const durChip = actedShape
+      ? `${Math.round((acted?.seconds ?? s.seconds ?? s.duration) || 10)}s`
+      : words ? `~${Math.max(1, Math.round(words / wpm * 60))}s` : '~12s'
+    const modeChip = s.singing ? '♪ music video'
+      : isActedMode(s.mode) ? 'acted'
+        : s.mode === 'silent' ? (actedShape ? 'silent · acted' : 'silent') : 'narration'
+    const rewrite = async (instr) => {
+      setBusy('acted-regen'); setError('')
+      try {
+        const r = await api.regenActedScene(job.job_id, s.id, instr)
+        if (r?.scene) setScenes((arr) => arr.map((x, j) => (j === i ? { ...x, ...r.scene } : x)))
+        refreshPerf()
+      } catch (e) { setError(e.message) } finally { setBusy('') }
+    }
+    const rewriteButton = (
+      <GuidedRegenButton variant="ghost" icon="rotate-right"
+        label="Re-generate scene" busyLabel="Rewriting…"
+        busy={busy === 'acted-regen'} disabled={!!busy}
+        chips={s.singing
+          ? ['Nobody sings in this shot', 'More movement', 'Closer in', 'Different setting']
+          : s.mode === 'silent'
+            ? ['Slower', 'More movement', 'Closer in', 'Different setting']
+            : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
+        onRegen={rewrite} />
+    )
+    return (
+      <Card span={12} key={s.id} id={`scene-card-${s.id}`} className="reveal reveal-d2">
+        <div className="row center between row--wrap gap-10">
+          <div className="row center gap-10">
+            <span className="h-title">Scene {i + 1}<span className="muted" style={{ fontWeight: 400 }}> / {total}</span></span>
+            <Chip tone="accent" dot>{durChip}</Chip>
+            <Chip>{modeChip}</Chip>
+          </div>
+          <div className="row center gap-8">
+            <Button variant="quiet" icon="arrow-up" title="Move this scene earlier"
+              disabled={i === 0 || !!busy} onClick={() => moveScene(i, -1)} />
+            <Button variant="quiet" icon="arrow-down" title="Move this scene later"
+              disabled={i >= total - 1 || !!busy} onClick={() => moveScene(i, 1)} />
+            <Button variant="ghost" icon="plus" disabled={!!busy} onClick={() => addSceneAfter(i)}>
+              {busy === 'structure' ? 'Working…' : 'Add scene'}
+            </Button>
+            {confirmDelScene === i ? (
+              <>
+                <Button variant="danger" icon="trash-can" disabled={!!busy} onClick={() => deleteScene(i)}>Confirm delete</Button>
+                <Button variant="ghost" disabled={!!busy} onClick={() => setConfirmDelScene(null)}>Cancel</Button>
+              </>
+            ) : (
+              <Button variant="quiet" icon="trash-can" title="Delete this scene"
+                disabled={total <= 1 || !!busy} onClick={() => setConfirmDelScene(i)} />
+            )}
+          </div>
+        </div>
+
+        <div className="row gap-24 mt-24 row--wrap" style={{ alignItems: 'flex-start' }}>
+          {/* ── The scene's fields — the single editor for every mode ── */}
+          <div className="stack gap-22" style={{ flex: '1 1 480px', minWidth: 0 }}>
+            <Field label={fieldLabel(i, 'Scene title', 'title')}>
+              <input className="input" value={s.title || ''} onChange={(e) => setField(i, 'title', e.target.value)} onBlur={() => persist(i)} />
+            </Field>
+
+            <SceneTypeControls scene={s} castOpts={castOpts} actedSilent={actedSilent}
+              onChange={(patch, commit) => { patchScene(i, patch); if (commit) persist(i, { ...scenes[i], ...patch }) }}
+              onCommit={() => persist(i)}
+              onConvert={async (m) => {
+                setError('')
+                try {
+                  const r = await api.convertSceneMode(job.job_id, s.id, m)
+                  if (r?.scene) setScenes((arr) => arr.map((x, j) => (j === i ? { ...x, ...r.scene } : x)))
+                  refreshPerf()
+                } catch (e) { setError(e.message) }
+              }} />
+
+            {(s.mode || 'narration') === 'narration' && (
+              <Field label={fieldLabel(i, 'Narration', 'narration', 'microphone-lines')}>
+                <textarea className="textarea" rows={4} value={s.narration || ''} onChange={(e) => setField(i, 'narration', e.target.value)} onBlur={() => persist(i)} />
+              </Field>
+            )}
+
+            {(s.mode || 'narration') === 'narration' && (s.tts_text || '').trim() && (
+              <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                <Icon name="microphone-lines" /> Spoken text is split from the narration (set on the film's
+                edit screen) — the voice reads: “{s.tts_text}”{' '}
+                <button type="button" style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
+                  onClick={() => { const ns = { ...scenes[i], tts_text: '' }; setField(i, 'tts_text', ''); persist(i, ns) }}>
+                  Unsplit — speak the narration
+                </button>
+              </div>
+            )}
+
+            {isActedMode(s.mode) ? (
+              <>
+                <div>
+                  {rewriteButton}
+                  <div className="muted mt-8" style={{ fontSize: 12 }}>
+                    Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.
+                  </div>
+                </div>
+                <ActedPrompt prompt={s.video_prompt || ''} edited={!!s.prompt_edited}
+                  refs={acted?.pictures || (s.cast || []).map((n, j) => ({ slot: j + 1, name: n }))}
+                  audios={acted?.audios || []}
+                  onSave={(text) => savePromptOverride(i, text)}
+                  onRebuild={() => savePromptOverride(i, '')} />
+              </>
+            ) : (
+              <>
+                <Field label={fieldLabel(i, 'Image prompt', 'image_prompt', 'image')}
+                  hint={actedShape
+                    ? 'FLUX — the frame this take opens on.'
+                    : 'FLUX — static, highly detailed.'}>
+                  <textarea className="textarea" rows={4} value={s.image_prompt || ''} onChange={(e) => setField(i, 'image_prompt', e.target.value)} onBlur={() => persist(i)} />
+                </Field>
+                <Field label={fieldLabel(i, 'Video prompt', 'video_prompt', 'film')}
+                  hint={actedShape
+                    ? 'Stands in as the setting while the Setting field above is empty.'
+                    : 'For the video engine (LTX / MiniMax H3) — motion & camera.'}>
+                  <textarea className="textarea" rows={5} value={s.video_prompt || ''} onChange={(e) => setField(i, 'video_prompt', e.target.value)} onBlur={() => persist(i)} />
+                </Field>
+                {actedShape && (
+                  <>
+                    <div>
+                      {rewriteButton}
+                      <div className="muted mt-8" style={{ fontSize: 12 }}>
+                        Rewrites the whole take — action, setting, camera — and rebuilds the prompt. It stays silent.
+                      </div>
+                    </div>
+                    {/* The performed silent take's own H3 prompt, assembled from
+                        the fields above — the same view a dialogue scene gets. */}
+                    <ActedPrompt label="Acted prompt" prompt={s.acted_prompt || ''} edited={!!s.prompt_edited}
+                      refs={acted?.pictures || (s.cast || []).map((n, j) => ({ slot: j + 1, name: n }))}
+                      audios={acted?.audios || []}
+                      onSave={(text) => savePromptOverride(i, text)}
+                      onRebuild={() => savePromptOverride(i, '')} />
+                  </>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* ── First frame ── */}
+          <div className="stack gap-16" style={{ flex: '0 1 300px', minWidth: 240 }}>
+            <div>
+              <span className="label-sm">First frame</span>
+              {isActedMode(s.mode) && (
+                <div className="muted mt-8" style={{ fontSize: 12, lineHeight: 1.5 }}>
+                  Optional for an acted scene: painted from the <strong>setting</strong> with
+                  the cast anchored to their portraits, and passed to the take as its
+                  opening-composition reference — it anchors the space and framing
+                  (faces and voices still come from their own references).
+                </div>
+              )}
+              <div className="mt-16" onClick={() => s.has_preview && openLightbox(i)}
+                style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)', cursor: s.has_preview ? 'zoom-in' : 'default' }}>
+                {s.has_preview
+                  ? <img src={imgUrl(s)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                  : <div className={`gfill ${(previewBusy || genAll) ? 'skel' : 'g' + (i % 6)}`} style={{ position: 'absolute', inset: 0 }}></div>}
+                {s.has_preview && (
+                  <span style={{ position: 'absolute', right: 8, bottom: 8, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 5, backdropFilter: 'blur(4px)' }}>
+                    <Icon name="up-right-and-down-left-from-center" /> Full size
+                  </span>
+                )}
+              </div>
+              <GuidedRegenButton block variant="ghost" icon="rotate-right"
+                label="Regenerate image" busyLabel="Painting…"
+                busy={previewBusy} disabled={!!busy}
+                onRegen={(instr) => regen(i, instr)} chips={REGEN_CHIPS.image} />
+              <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!s.has_preview || !!busy}
+                onClick={() => { setInpaintErr(''); setInpaint(i) }}>Edit image</Button>
+              {isActedMode(s.mode) && s.has_preview && (
+                <Button variant="ghost" block icon="trash-can" disabled={!!busy}
+                  onClick={() => removeFirstFrame(i)}>Remove first frame</Button>
+              )}
+              <VersionStrip versions={s.history?.versions} selected={s.history?.selected}
+                onSelect={(vid) => selectVersion(i, vid)} onDelete={(vid) => deleteVersion(i, vid)}
+                aspect={aspect} busy={previewBusy || busy === 'inpaint'} />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Acted staging: everything this take renders from, resolved by the
+               renderer itself — cast slots, references, soundtrack, takes. ── */}
+        {acted && (
+          <div className="stack gap-16 mt-24" style={{ borderTop: '1px solid var(--line)', paddingTop: 18 }}>
+            <div className="row between center row--wrap gap-10">
+              <span className="label-sm">Acted take — renders from these references</span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                one continuous shot · no narrator, no music{perf?.engine?.label ? <> · <strong>{perf.engine.label}</strong></> : null}
+              </span>
+            </div>
+
+            <ActedTakes scene={acted} workDir={job.work_dir} onChanged={refreshPerf}
+              hint="The take on screen was shot from the fields above — after an edit it is stale until the scene is shot again." />
+
+            <SoundtrackSlice window={acted.song_window} songUrl={perf?.song_url || ''} />
+
+            <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
+              {acted.cast.map((c) => (
+                <CastMember key={c.name} c={c}
+                  audio={acted.audios.find((a) => a.name === c.name)}
+                  picture={acted.pictures.find((p) => p.name === c.name)}
+                  jobId={job.job_id} voiceOpts={voiceOpts} voiceMeta={voiceMeta}
+                  onChanged={async () => { await reloadCharacters(); refreshPerf() }} />
+              ))}
+              {acted.pictures.filter((p) => p.kind && p.kind !== 'character').map((p) => (
+                <RefTile key={`ref-${p.slot}`} p={p} busy={!!busy}
+                  onRemoveFrame={p.kind === 'frame' ? () => removeFirstFrame(i) : null} />
+              ))}
+              {!acted.cast.length && (
+                <span className="muted" style={{ fontSize: 12.5 }}>Nobody on screen yet — pick the cast above.</span>
+              )}
+            </div>
+
+            <StagingWarnings missingPortraits={acted.missing_portraits} unvoiced={acted.unvoiced} />
+            <div className="muted" style={{ fontSize: 12 }}>
+              Portraits and voices are set right here; the scenery &amp; wardrobe reference
+              images are managed in <strong>Characters &amp; Artifacts</strong>.
+            </div>
+          </div>
+        )}
+
+        {/* The staging payload hasn't loaded (or the scene was just switched and
+            not saved yet): say where the references come from instead of
+            silently showing nothing. */}
+        {actedShape && !acted && (
+          <div className="muted mt-16" style={{ fontSize: 12.5 }}>
+            This scene renders as an acted take from its cast portraits and the
+            <strong> Characters &amp; Artifacts</strong> references — the resolved
+            staging appears here once the scene is saved.
+          </div>
+        )}
+      </Card>
+    )
   }
 
   const approve = async () => {
@@ -988,7 +1289,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // affected card while its op runs. Field edits are local until blur (saveCharacter).
   const charOp = async (id, run) => {
     setCharBusy(id); setError(''); setCharMsg('')
-    try { const r = await run(); setCharacters(r.characters || []) }
+    try {
+      const r = await run()
+      setCharacters(r.characters || [])
+      // A look or voice change moves the portrait/audio the takes render from.
+      refreshPerf()
+    }
     catch (e) { setError(e.message) } finally { setCharBusy('') }
   }
   const setCharField = (id, key, val) =>
@@ -1112,11 +1418,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
             </>
           )}
-
-      {view === 'performance' && job && (
-            <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
-              onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? 'Save to queue slot' : 'Approve → render'}</Button>
-          )}
         </div>
       </div>
 
@@ -1149,27 +1450,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         {/* Left to right in the order the work happens: pick a script, write
             the song (a music video starts there), draft the story, cast the
-            characters and artifacts, edit the scenes, review the takes — and
-            the cover, which belongs to publishing, last. */}
+            characters and artifacts, edit the scenes — and the cover, which
+            belongs to publishing, last. The tabs are the SAME for every film:
+            only Song/Story appear per-format (they have no data otherwise),
+            and each scene's card carries whatever its mode needs, so nothing
+            about the menu shifts as scenes change shape. */}
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
           ...(song ? [{ value: 'song', label: 'Song' }] : []),
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
-          // ONE look whatever the mix: the Scenes editor (where every scene
-          // can shift mode) plus, when anything is acted, the Acted scenes
-          // view with its cast slots, takes and prompts.
-          { value: 'characters', label: someActedShape ? 'Characters & Artifacts' : 'Characters' },
+          { value: 'characters', label: 'Characters & Artifacts' },
           { value: 'scenes', label: 'Scenes' },
-          ...(someActedShape ? [{ value: 'performance', label: 'Acted scenes' }] : []),
           { value: 'cover', label: 'Cover' },
         ]} />
       </div>
-
-      {/* ── Performance tab: scenes, their numbered references, and the prompt ── */}
-      {view === 'performance' && job && (
-        <PerformanceScenes workDir={job.work_dir} jobId={job.job_id}
-          voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
-      )}
 
       {/* ── Song tab (music-video films): the words and sound the film sings ── */}
       {view === 'song' && song && (
@@ -1618,216 +1912,45 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {view === 'scenes' && job && (
         <>
           <div className="bento">
-            <Card span={8} padLg className="reveal reveal-d2">
-              <div className="row center between">
-                <div className="row center gap-10">
-                  <Button variant="quiet" icon="chevron-left" disabled={cur === 0} onClick={() => move(cur - 1)}>Prev</Button>
-                  <span className="h-title">Scene {cur + 1}<span className="muted" style={{ fontWeight: 400 }}> / {total}</span></span>
-                  <Button variant="quiet" iconRight="chevron-right" disabled={cur >= total - 1} onClick={() => move(cur + 1)}>Next</Button>
+            {/* ── The whole film at a glance: click a thumb to jump to its card.
+                   Every scene is edited below, whatever its mode — acted ones
+                   carry their staging on the same card, so there is no separate
+                   view to keep in sync. ── */}
+            <Card span={12} className="reveal reveal-d2">
+              <div className="row center between row--wrap gap-10">
+                <div>
+                  <span className="label-sm">All scenes</span>
+                  {perf?.scenes?.length ? (
+                    <div className="muted mt-8" style={{ fontSize: 12.5 }}>
+                      {perf.scenes.length} of {total} scene{total === 1 ? '' : 's'} render as acted takes
+                      {perf.engine?.label ? <> on <strong>{perf.engine.label}</strong></> : null} — their
+                      cast, references and takes sit on their cards below.
+                    </div>
+                  ) : null}
                 </div>
                 <div className="row center gap-8">
-                  <Button variant="quiet" icon="arrow-left" title="Move this scene earlier"
-                    disabled={cur === 0 || !!busy} onClick={() => moveScene(-1)} />
-                  <Button variant="quiet" icon="arrow-right" title="Move this scene later"
-                    disabled={cur >= total - 1 || !!busy} onClick={() => moveScene(1)} />
-                  <Button variant="ghost" icon="plus" disabled={!!busy} onClick={addSceneAfter}>
-                    {busy === 'structure' ? 'Working…' : 'Add scene'}
+                  {(perf?.scenes || []).some((x) => x.has_video) && (
+                    <Button variant="primary" icon="circle-nodes" disabled={assembling || !!busy} onClick={reassemble}>
+                      {assembling ? 'Assembling…' : 'Reassemble film'}
+                    </Button>
+                  )}
+                  <Button variant="ghost" icon="rotate-right" disabled={genAll} onClick={regenAll}>
+                    {genAll ? 'Regenerating…' : 'Regenerate all'}
                   </Button>
-                  {confirmDelScene ? (
-                    <>
-                      <Button variant="danger" icon="trash-can" disabled={!!busy} onClick={deleteScene}>Confirm delete</Button>
-                      <Button variant="ghost" disabled={!!busy} onClick={() => setConfirmDelScene(false)}>Cancel</Button>
-                    </>
-                  ) : (
-                    <Button variant="quiet" icon="trash-can" title="Delete this scene"
-                      disabled={total <= 1 || !!busy} onClick={() => setConfirmDelScene(true)} />
-                  )}
-                  <Chip tone="accent" dot>{(() => {
-                    // Spoken length of THIS scene at the script's cadence plan
-                    // (words ÷ wpm) — the 10–15s contract made visible.
-                    const wpm = job?.create_brief?.scene_plan?.wpm || 150
-                    const words = String(d.narration || '').split(/\s+/).filter(Boolean).length
-                    return words ? `~${Math.max(1, Math.round(words / wpm * 60))}s` : '~12s'
-                  })()}</Chip>
                 </div>
               </div>
-
-              <div className="stack gap-22 mt-24">
-                <Field label={fieldLabel('Scene title', 'title')}>
-                  <input className="input" value={d.title || ''} onChange={(e) => setField('title', e.target.value)} onBlur={() => persist(cur)} />
-                </Field>
-
-                <SceneTypeControls scene={d} castOpts={castOpts} actedSilent={actedSilent}
-                  onChange={(patch, commit) => { patchScene(patch); if (commit) persist(cur, { ...scenes[cur], ...patch }) }}
-                  onCommit={() => persist(cur)}
-                  onConvert={async (m) => {
-                    setError('')
-                    try {
-                      const r = await api.convertSceneMode(job.job_id, d.id, m)
-                      if (r?.scene) setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, ...r.scene } : x)))
-                    } catch (e) { setError(e.message) }
-                  }} />
-
-                {(d.mode || 'narration') === 'narration' && (
-                  <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>
-                    <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
-                  </Field>
-                )}
-
-                {(d.mode || 'narration') === 'narration' && (d.tts_text || '').trim() && (
-                  <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                    <Icon name="microphone-lines" /> Spoken text is split from the narration (set on the film's
-                    edit screen) — the voice reads: “{d.tts_text}”{' '}
-                    <button type="button" style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
-                      onClick={() => { const s = { ...scenes[cur], tts_text: '' }; setField('tts_text', ''); persist(cur, s) }}>
-                      Unsplit — speak the narration
-                    </button>
-                  </div>
-                )}
-
-                {isActedMode(d.mode) ? (
-                  <>
-                    <div>
-                      <GuidedRegenButton variant="ghost" icon="rotate-right"
-                        label="Re-generate scene" busyLabel="Rewriting…"
-                        busy={busy === 'acted-regen'} disabled={!!busy}
-                        chips={['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
-                        onRegen={async (instr) => {
-                          setBusy('acted-regen'); setError('')
-                          try {
-                            const r = await api.regenActedScene(job.job_id, d.id, instr)
-                            if (r?.scene) setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, ...r.scene } : x)))
-                          } catch (e) { setError(e.message) } finally { setBusy('') }
-                        }} />
-                      <div className="muted mt-8" style={{ fontSize: 12 }}>
-                        Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.
-                      </div>
-                    </div>
-                    <ActedPrompt prompt={d.video_prompt || ''} edited={!!d.prompt_edited}
-                    refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
-                    onSave={(text) => savePromptOverride(text)}
-                    onRebuild={() => savePromptOverride('')} />
-                  </>
-                ) : (
-                  <>
-                    <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')}
-                      hint={hasActedShape(d.mode, actedSilent, d.singing)
-                        ? 'FLUX — the frame this take opens on.'
-                        : 'FLUX — static, highly detailed.'}>
-                      <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
-                    </Field>
-                    <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')}
-                      hint={hasActedShape(d.mode, actedSilent, d.singing)
-                        ? 'Stands in as the setting while the Setting field above is empty.'
-                        : 'For the video engine (LTX / MiniMax H3) — motion & camera.'}>
-                      <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
-                    </Field>
-                    {/* The performed silent take's own H3 prompt, assembled from
-                        the fields above — the same view a dialogue scene gets. */}
-                    {hasActedShape(d.mode, actedSilent, d.singing) && (
-                      <ActedPrompt label="Acted prompt" prompt={d.acted_prompt || ''} edited={!!d.prompt_edited}
-                        refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
-                        onSave={(text) => savePromptOverride(text)}
-                        onRebuild={() => savePromptOverride('')} />
-                    )}
-                  </>
-                )}
-              </div>
-            </Card>
-
-            <div className="col-4 stack gap-16">
-              {hasActedShape(d.mode, actedSilent, d.singing) ? (
-                <Card className="reveal reveal-d2">
-                  <span className="label-sm">References</span>
-                  <div className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                    {isActedMode(d.mode)
-                      ? 'An acted scene renders from these references.'
-                      : 'This silent beat is performed on H3 — it renders from these references and its first frame.'}
-                  </div>
-                  <div className="row gap-10 row--wrap mt-16">
-                    {(d.cast || []).map((n, i) => {
-                      const c = characters.find((x) => x.name === n) || castCatalogue.find((x) => x.name === n)
-                      return (
-                        <div key={n} className="stack gap-4" style={{ width: 86, textAlign: 'center' }}>
-                          {c?.image_url
-                            ? <img src={c.image_url} alt={n} style={{ width: 86, height: 86, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--line)' }} />
-                            : <div style={{ width: 86, height: 86, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)', border: '1px dashed var(--line)' }}><Icon name="user" /></div>}
-                          <span className="muted" style={{ fontSize: 11 }}>Picture {i + 1} · {n}</span>
-                        </div>
-                      )
-                    })}
-                    {!(d.cast || []).length && <span className="muted" style={{ fontSize: 12.5 }}>No one on screen yet — pick the cast on the left.</span>}
-                  </div>
-                  <div className="muted mt-16" style={{ fontSize: 12 }}>
-                    Portraits, voices, and the scenery &amp; wardrobe reference images are
-                    managed in <strong>Characters &amp; artifacts</strong>.
-                  </div>
-                </Card>
-              ) : null}
-              <Card className="reveal reveal-d2">
-                <span className="label-sm">First frame</span>
-                {isActedMode(d.mode) && (
-                  <div className="muted mt-8" style={{ fontSize: 12, lineHeight: 1.5 }}>
-                    Optional for an acted scene: painted from the <strong>setting</strong> with
-                    the cast anchored to their portraits, and passed to the take as its
-                    opening-composition reference — it anchors the space and framing
-                    (faces and voices still come from their own references).
-                  </div>
-                )}
-                <div className="mt-16" onClick={() => d.has_preview && openLightbox()}
-                  style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)', cursor: d.has_preview ? 'zoom-in' : 'default' }}>
-                  {d.has_preview
-                    ? <img src={imgUrl(d)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
-                    : <div className={`gfill ${(busy === 'preview' || genAll) ? 'skel' : 'g' + (cur % 6)}`} style={{ position: 'absolute', inset: 0 }}></div>}
-                  {d.has_preview && (
-                    <span style={{ position: 'absolute', right: 8, bottom: 8, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 5, backdropFilter: 'blur(4px)' }}>
-                      <Icon name="up-right-and-down-left-from-center" /> Full size
-                    </span>
-                  )}
-                </div>
-                <GuidedRegenButton block variant="ghost" icon="rotate-right"
-                  label="Regenerate image" busyLabel="Painting…"
-                  busy={busy === 'preview'} disabled={!!busy}
-                  onRegen={regen} chips={REGEN_CHIPS.image} />
-                <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!d.has_preview || !!busy}
-                  onClick={() => { setInpaintErr(''); setInpaint(true) }}>Edit image</Button>
-                {isActedMode(d.mode) && d.has_preview && (
-                  <Button variant="ghost" block icon="trash-can" disabled={!!busy}
-                    onClick={async () => {
-                      setError('')
-                      try {
-                        await api.removeScenePreview(job.job_id, d.id)
-                        setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, has_preview: false, preview_path: '' } : x)))
-                      } catch (e) { setError(e.message) }
-                    }}>Remove first frame</Button>
-                )}
-                <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
-                  onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
-              </Card>
-              <Card well className="reveal reveal-d3">
-                <div className="row center gap-10">
-                  <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
-                  <span className="muted" style={{ fontSize: 12.5 }}>Edit any scene before rendering — changes here drive the final film.</span>
-                </div>
-              </Card>
-            </div>
-
-            <Card span={12} className="reveal reveal-d4">
-              <div className="row center between">
-                <span className="label-sm">All scenes</span>
-                <Button variant="ghost" icon="rotate-right" disabled={genAll} onClick={regenAll}>
-                  {genAll ? 'Regenerating…' : 'Regenerate all'}
-                </Button>
-              </div>
+              {assembleMsg && <div className="mt-16"><Banner tone="ok">{assembleMsg}</Banner></div>}
               <div className="scene-grid mt-16">
                 {scenes.map((s, i) => (
-                  <div key={s.id} className={`scene ${i === cur ? 'is-current' : ''}`} onClick={() => move(i)}>
+                  <div key={s.id} className={`scene ${i === cur ? 'is-current' : ''}`} onClick={() => jumpTo(i)}>
                     <Thumb variant={i} aspect={aspect} label={String(i + 1).padStart(2, '0')} src={s.has_preview ? imgUrl(s) : null} />
                     <div className="scene__cap">{s.title || `Scene ${i + 1}`}</div>
                   </div>
                 ))}
               </div>
             </Card>
+
+            {scenes.map((s, i) => renderSceneCard(s, i))}
           </div>
 
           {lightbox && (
@@ -1865,9 +1988,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </div>
           )}
 
-          {inpaint && (
-            <InpaintModal src={imgUrl(d)} aspect={aspect} busy={busy === 'inpaint'} error={inpaintErr}
-              onApply={applyInpaint} onClose={() => setInpaint(false)} />
+          {inpaint !== null && scenes[inpaint] && (
+            <InpaintModal src={imgUrl(scenes[inpaint])} aspect={aspect} busy={busy === 'inpaint'} error={inpaintErr}
+              onApply={applyInpaint} onClose={() => setInpaint(null)} />
           )}
         </>
       )}
@@ -1898,25 +2021,30 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </div>
           </Card>
 
-          {someActedShape ? (
-            <ScriptVisuals jobId={job.job_id}
-              onAddCharacter={addCharacter} addingCharacter={charBusy === 'add'}
-              sceneIds={(job.scenes || []).map((s) => s.id)}
-              castNames={[...new Set([...castCatalogue.map((c) => c.name),
-                // Whoever is on screen anywhere — a silent take's cast never
-                // speaks, so the lines alone would hide them from "worn by".
-                ...(job.scenes || []).flatMap((s) => s.cast || []),
-                ...(job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker))].filter(Boolean))]}
-              settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
-          ) : (
-            <Card span={12} well>
-              <div className="row between center">
-                <span className="muted" style={{ fontSize: 13 }}>The people this film keeps consistent.</span>
-                <Button variant="primary" size="sm" icon="user-plus" disabled={!!charBusy}
-                  onClick={addCharacter}>{charBusy === 'add' ? 'Adding…' : 'Add character'}</Button>
-              </div>
-            </Card>
-          )}
+          {/* The SAME wall for every film — characters, locations, wardrobe,
+              references — rather than a bare list that grows controls when a
+              scene turns acted. References feed the acted takes (and painted
+              first frames); a note says so when nothing is acted yet. */}
+          <ScriptVisuals jobId={job.job_id}
+            onAddCharacter={addCharacter} addingCharacter={charBusy === 'add'}
+            sceneIds={(job.scenes || []).map((s) => s.id)}
+            castNames={[...new Set([...castCatalogue.map((c) => c.name),
+              // Whoever is on screen anywhere — a silent take's cast never
+              // speaks, so the lines alone would hide them from "worn by".
+              ...(job.scenes || []).flatMap((s) => s.cast || []),
+              ...(job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker))].filter(Boolean))]}
+            settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''}>
+            {!someActedShape && (
+              <Card span={12} well>
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  No scene is acted yet — location, wardrobe and reference images feed
+                  the acted takes, so they wait until a scene switches to
+                  <strong> Dialogue</strong> (or a silent beat is performed on H3).
+                  Characters are woven into every scene image either way.
+                </span>
+              </Card>
+            )}
+          </ScriptVisuals>
 
           {characters.length === 0 && (
             <Card span={12} well className="reveal reveal-d2">
