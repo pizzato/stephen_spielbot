@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect, RestyleForm, NO_STYLE } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, continuationHonoured, ContinuationFrameNote, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect, RestyleForm, NO_STYLE } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
@@ -1180,6 +1180,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   opening-composition reference — it anchors the space and framing
                   (faces and voices still come from their own references).
                 </div>
+              )}
+              {continuationHonoured(s, scenes[i - 1], actedSilent) && (
+                <ContinuationFrameNote acted={actedShape} />
               )}
               <div className="mt-16" onClick={() => s.has_preview && openLightbox(i)}
                 style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)', cursor: s.has_preview ? 'zoom-in' : 'default' }}>

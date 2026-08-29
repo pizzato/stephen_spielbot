@@ -460,6 +460,13 @@ step may mark it where the story flows through a boundary, and both editors carr
 Continued boundaries are **butt-joined** in assembly — the usual fade-out/fade-in
 between scenes would dip to black mid-take.
 
+Either way, the scene's **own painted first frame is not what it opens on** — the
+handoff outranks it, and an acted take drops it from its references outright. The
+image is kept rather than deleted: it is the fallback if the handoff cannot be
+extracted (that drop is logged and the boundary keeps its fade), and it is what the
+scene opens on again the moment the toggle is turned off. Both editors say so on the
+scene's *First frame* panel while continuation is on.
+
 What it costs and where it stops: scenes in a chain render **in sequence** (unrelated
 scenes still fan out across the workers), so a long unbroken chain gives up that
 parallelism — use it where the story earns it. Continuation is dropped, with a log
