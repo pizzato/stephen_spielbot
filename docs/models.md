@@ -220,6 +220,12 @@ Measured on a GB10 worker:
   of digital silence shortly after the join, longer than any pause in the
   unchained clip. Review the sound on chained films before publishing.
 
+A chained scene renders with the **same engine** as an unchained one: on a
+turbo engine (I2V Turbo, Ref2VA Turbo, Ref2VA Turbo LightX2V) each clip carries
+the engine's distill LoRA and few-step sampler. Earlier builds dropped both on
+chained clips — the base model sampled at the turbo step count, which came back
+as smeared, dreamy motion and broken audio on every chained scene.
+
 Workers need the nodes baked in — build with `H3_MOTION_CONTEXT_REF` set (see
 `docker/README.md`). Without them ComfyUI rejects the chained graph outright
 rather than quietly rendering an unchained clip.

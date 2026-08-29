@@ -146,3 +146,58 @@ class TestActedChaining(unittest.TestCase):
         plan = gapp.style_script_plan(ss)
         self.assertFalse(plan["chained"])
         self.assertTrue(plan["chained_acted"])
+
+
+class TestTurboChainGraphs(unittest.TestCase):
+    """A turbo engine's chained clips must carry its LoRA and few-step sampler.
+
+    The static chain graphs ship the base sampler (EasyCache + res_multistep);
+    filled with a turbo engine they inherit steps=4 but not the distill LoRA —
+    the base model at 4 raw steps, which is the mushy-face / broken-audio
+    failure. _apply_turbo_to_chain swaps in the engine's own nodes.
+    """
+
+    TURBO = {"requires_node": "MiniMaxH3TurboSampler",
+             "lora": "minimax_h3_turbo_4step_ckpt500.safetensors"}
+    BASE = {"requires_node": "MiniMaxH3ImageToVideo"}
+
+    CHAIN_GRAPHS = ["h3_i2v_chain_a.json", "h3_i2v_chain_b.json",
+                    "h3_ref2v_chain_a.json", "h3_ref2v_chain_b.json"]
+
+    def _load(self, name):
+        repl = {"UNET_NAME": "u", "CLIP_NAME": "c", "VIDEO_VAE": "v",
+                "AUDIO_VAE": "a", "POSITIVE_PROMPT": "p", "WIDTH": 704,
+                "HEIGHT": 1280, "LENGTH": 121, "SEED": 1, "STEPS": 4,
+                "IMAGE_NAME": "i.png", "EASYCACHE_THRESHOLD": 0.2,
+                "LORA_NAME": "", "CONTEXT_PREFIX": "t", "CLIP_INDEX": 1,
+                "CONTEXT_LENGTH": "8", "AUDIO_CONTEXT_LENGTH": 4,
+                "CONTEXT_LATENT_PATH": "t_00001.safetensors"}
+        return comfyui._fill_template(comfyui._load_workflow(name), repl)
+
+    def test_turbo_engine_swaps_lora_and_sampler_in_every_chain_graph(self):
+        for name in self.CHAIN_GRAPHS:
+            wf = self._load(name)
+            comfyui._apply_turbo_to_chain(wf, self.TURBO)
+            kinds = {n["class_type"] for n in wf.values()}
+            self.assertNotIn("EasyCache", kinds, name)
+            self.assertNotIn("KSamplerSelect", kinds, name)
+            lora = wf[comfyui._node_id(wf, "MiniMaxH3TurboLoRA")]
+            self.assertEqual(lora["inputs"]["lora_name"], self.TURBO["lora"], name)
+            self.assertEqual(lora["inputs"]["model"],
+                             [comfyui._node_id(wf, "UNETLoader"), 0], name)
+            # The swap keeps the EasyCache node id, so the scheduler and
+            # guider pick up the LoRA-wrapped model without rewiring.
+            sched = wf[comfyui._node_id(wf, "BasicScheduler")]
+            self.assertEqual(sched["inputs"]["model"][0],
+                             comfyui._node_id(wf, "MiniMaxH3TurboLoRA"), name)
+            guider = wf[comfyui._node_id(wf, "BasicGuider")]
+            self.assertEqual(guider["inputs"]["model"][0],
+                             comfyui._node_id(wf, "MiniMaxH3TurboLoRA"), name)
+            comfyui._node_id(wf, "MiniMaxH3TurboSampler")  # raises if absent
+
+    def test_base_engine_leaves_the_chain_graphs_alone(self):
+        for name in self.CHAIN_GRAPHS:
+            wf = self._load(name)
+            before = {k: dict(v) for k, v in wf.items()}
+            comfyui._apply_turbo_to_chain(wf, self.BASE)
+            self.assertEqual(wf, before, name)
