@@ -583,3 +583,46 @@ class PackagedWorkflowSanityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComfyRejectionReasonTests(unittest.TestCase):
+    """A rejection has to say WHY on its first line: callers keep only that
+    line (a film task stores ``str(e).splitlines()[0]``), so a bare status code
+    reads on screen as if nothing happened at all."""
+
+    MISSING_NODE = (
+        '{"error": {"type": "missing_node_type", "message": "Node \'FlashVSRNode\' not '
+        'found. The custom node may not be installed.", "details": "Node ID \'#3\'", '
+        '"extra_info": {"node_id": "3", "class_type": "FlashVSRNode", '
+        '"node_title": "FlashVSRNode"}}, "node_errors": {}}'
+    )
+
+    def test_missing_node_names_the_node_and_the_fix(self):
+        reason = comfyui._rejection_reason(self.MISSING_NODE)
+        self.assertIn("FlashVSRNode", reason)
+        self.assertIn("not installed", reason)
+        self.assertNotIn("\n", reason)
+
+    def test_validation_error_keeps_comfy_message(self):
+        body = '{"error": {"type": "prompt_outputs_failed_validation", "message": "Prompt outputs failed validation"}}'
+        self.assertEqual(
+            comfyui._rejection_reason(body), "Prompt outputs failed validation")
+
+    def test_unparseable_body_does_not_raise(self):
+        self.assertTrue(comfyui._rejection_reason("<html>502 Bad Gateway</html>"))
+
+    def test_queue_prompt_puts_the_reason_on_the_first_line(self):
+        import io
+        import urllib.error
+
+        err = urllib.error.HTTPError(
+            "http://s2:8188/prompt", 400, "Bad Request", {},
+            io.BytesIO(self.MISSING_NODE.encode()))
+        with mock.patch.object(comfyui.urllib.request, "urlopen", side_effect=err):
+            with self.assertRaises(RuntimeError) as ctx:
+                comfyui._queue_prompt({}, "cid", comfy_url="http://s2:8188")
+        first_line = str(ctx.exception).splitlines()[0]
+        self.assertIn("FlashVSRNode", first_line)
+        self.assertIn("http://s2:8188", first_line)
+        # The raw body still follows, for the log.
+        self.assertIn("missing_node_type", str(ctx.exception))
