@@ -447,6 +447,25 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertTrue(seen["queued_during_acquire"])
         self.assertNotIn("queued", backend._film_tasks["tid"])
 
+    def test_acquire_op_worker_marks_tracked_op_queued(self):
+        """A tracked op (image/cover edit) reads "queued" while it waits for a
+        worker, and flips to "running" once it is on a GPU."""
+        seen = {}
+
+        class FakePool:
+            def acquire(self):
+                seen["row"] = dict(next(iter(backend._current_ops.values())))
+                return "http://worker:8188"
+
+        with backend._track_op("Editing image", "scene 3") as op_id:
+            url = backend._acquire_op_worker(FakePool(), op_id)
+            self.assertEqual(backend._current_ops[op_id]["status"], "running")
+            self.assertEqual(backend._current_ops[op_id]["detail"], "scene 3")
+
+        self.assertEqual(url, "http://worker:8188")
+        self.assertEqual(seen["row"]["status"], "queued")
+        self.assertEqual(seen["row"]["detail"], "waiting for a free worker · scene 3")
+
     def test_track_op_keeps_concurrent_operations_visible(self):
         with backend._track_op("First task", "a"):
             with backend._track_op("Second task", "b"):
