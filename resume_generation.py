@@ -1444,13 +1444,17 @@ def main(work_dir: Path) -> None:
                     if name not in singer_names:
                         singer_names.append(name)
         from app import vocalist_note, voice_descriptor
-        # The song-first flow picked an explicit SINGING voice; a cast
-        # member's voice is the fallback for films that skipped that step.
+        # The song-first flow picked an explicit SINGING voice; the vocalist
+        # cast at draft time is next (the lead singer's description, or the
+        # songwriter's own); guessing from the scenes' cast voices is the
+        # last resort for films that predate both.
         note = ""
         if (song.get("voice") or "").strip():
             voices = {v.get("name"): v for v in (cfg.get("voices") or [])
                       if v.get("name")}
             note = voice_descriptor(voices.get(song["voice"].strip()))
+        if not note:
+            note = (song.get("vocalist") or "").strip()
         if not note:
             note = vocalist_note(cfg, cfg.get("style_name") or "", work_dir,
                                  singer_names)

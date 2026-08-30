@@ -54,13 +54,20 @@ characters, deleting one re-homes them to its parent (or the global pool).
   "description": "a middle-aged man, short grey beard, round glasses, navy wool coat",
   "ref_image": "char_a1b2c3.png",// filename under the characters dir; "" if text-only
   "voice": "...",                // named voice for acted scenes (see docs/performance_films.md)
+  "gender": "female",            // "male"/"female"; "" = guessed from the description
+  "age": "young",                // child/young/adult/mature/elderly; "" = unknown
+  "background": "Brazilian, sings in Portuguese", // nationality/language/accent; free text
   "enabled": true,
   "style": "Children Story"      // "" = global pool, else the owning style
 }
 ```
 
 `description` is an appearance clause with no name inside it, so it can be slotted into a
-sentence. A `ref_strength` field is stored and normalized but **not consumed anywhere**
+sentence. `gender`/`age` (set on the card, or filled by the LLM identify pass) drive the
+library-voice auto-cast, and together with `background` they define the character's
+**vocalist identity** — when a music video casts them as its lead singer, that identity is
+what the music model is told to sing as, so the voice on the track matches the person on
+camera (see [Singing films](performance_films.md#singing-films-the-music-video-format)). A `ref_strength` field is stored and normalized but **not consumed anywhere**
 (the `ReferenceLatent` node has no strength input) — it is a forward-compatible
 placeholder with no UI.
 

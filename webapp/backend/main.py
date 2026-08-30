@@ -2641,8 +2641,8 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     # Only the catalogue characters the brief NAMES — the story invents its own
     # cast otherwise (gapp._requested_characters).
-    character_sheet = gapp._character_sheet(
-        gapp._requested_characters(cfg, body.style_name, user_topic, body.video_title, extra)) or None
+    draft_chars = gapp._requested_characters(
+        cfg, body.style_name, user_topic, body.video_title, extra)
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     fmt = (body.format or "narration").strip().lower()
     # Song-first: the film's song may already exist (written and generated via
@@ -2658,6 +2658,13 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
                 song_data = json.loads((cand / "song.json").read_text())
             except Exception:
                 song_data = {}
+    # The song's cast singer joins the sheet even when the brief never names
+    # them — the story has to plan its beats around this one performer.
+    singer_char = gapp._catalogue_character_named(
+        cfg, ss["name"], song_data.get("singer") or "")
+    if singer_char is not None and singer_char not in draft_chars:
+        draft_chars = [*draft_chars, singer_char]
+    character_sheet = gapp._character_sheet(draft_chars) or None
     plan = _plan_for_generate(body, ss)
     if fmt in ("dialogue", "silent", "song"):
         # Every scene is one clip — acted, a silent beat nobody narrates, or a
@@ -2715,6 +2722,8 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
             "song doesn't sing about; the same few images the song repeats are "
             "what the camera returns to. These are the lyrics:\n"
             + song_data["lyrics"])
+    if fmt == "song":
+        dialogue_note = (dialogue_note or "") + _song_singer_story_note(song_data)
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(
@@ -2883,11 +2892,26 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     # the film's length into longer or shorter scenes) so the acted budgets the
     # writer works to match the clips the renderer will actually shoot.
     plan = story.get("scene_plan") or brief.get("scene_plan") or {}
+    # A song film's cast singer: read before the divide so the scene prompts
+    # cast them by name, in their per-video outfit, in every singing scene.
+    song_data: dict = {}
+    if fmt == "song" and (wd / "song.json").exists():
+        try:
+            song_data = json.loads((wd / "song.json").read_text())
+        except Exception:
+            song_data = {}
+        singer_char = gapp._catalogue_character_named(
+            cfg, ss["name"], song_data.get("singer") or "")
+        if singer_char is not None and singer_char not in requested_chars:
+            requested_chars = [*requested_chars, singer_char]
+            character_sheet = gapp._character_sheet(requested_chars) or None
     dialogue_note = _build_dialogue_note(
         fmt, [c.get("name", "") for c in requested_chars],
         chained=gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")),
         acted_silent=gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")),
         scene_secs=plan.get("scene_secs_target") if isinstance(plan, dict) else None)
+    if fmt == "song":
+        dialogue_note = (dialogue_note or "") + _song_singer_story_note(song_data)
     try:
         with _track_op("Dividing story into scenes", display_topic):
             scenes, music_desc, style, characters = story_mode.divide_story(
@@ -2922,13 +2946,17 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
             except Exception:
                 song = None
         if not (song and (song.get("lyrics") or "").strip()):
+            singer, singer_desc = _pick_song_singer(
+                cfg, ss, user_topic, video_title,
+                (ss.get("extra_instructions") or ""))
             try:
                 with _track_op("Writing the song", display_topic):
-                    song = story_mode.write_song(story, secs, language=language)
+                    song = story_mode.write_song(story, secs, language=language,
+                                                 singer_note=singer_desc)
             except Exception as e:
                 raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
-            (wd / "song.json").write_text(json.dumps({**song, "created_at": time.time()},
-                                                     indent=2))
+            (wd / "song.json").write_text(json.dumps(
+                {**song, "singer": singer, "created_at": time.time()}, indent=2))
         # Each singing scene gets its WINDOW of the song and the words sung in
         # it — timed against the real generated track when one exists.
         track_secs = None
@@ -3034,6 +3062,54 @@ class SongDraftBody(BaseModel):
     queue_item_id: str = ""
 
 
+def _pick_song_singer(cfg: dict, ss: dict, *texts: str) -> tuple[str, str]:
+    """Cast the film's LEAD SINGER from the style's character catalogue.
+
+    Returns ``(name, descriptor)`` — the character's name and their vocalist
+    description (sex, age, background, plus their library voice's tone/accent)
+    — or ``("", "")`` when the style has no usable catalogue character. The
+    descriptor is what makes the sung voice match the person on camera: it is
+    appended to the music caption when the track is generated, and the story
+    prompts cast the named character in the singing scenes."""
+    char = gapp.pick_song_singer(cfg, ss["name"], *texts)
+    if not char:
+        return "", ""
+    desc = gapp.singer_descriptor(char, cfg)
+    if desc:
+        gapp.logger.info("Song singer: cast %r from style %r catalogue (%s)",
+                         char.get("name"), ss["name"], desc)
+    return str(char.get("name") or ""), desc
+
+
+def _song_singer_story_note(song_data: dict) -> str:
+    """The lead-singer + wardrobe instruction a song film's story prompts get.
+
+    Whoever was cast (a catalogue character by name, else the song's own
+    vocalist description) must be the person the film SHOWS singing — sex and
+    age on camera matching the sung voice — and each video dresses them fresh
+    rather than repeating the catalogue look."""
+    name = (song_data.get("singer") or "").strip()
+    desc = (song_data.get("vocalist") or "").strip()
+    if not (name or desc):
+        return ""
+    if name:
+        who = (f"THE LEAD SINGER IS {name}" + (f" ({desc})" if desc else "")
+               + " — an existing character: cast them BY NAME")
+    else:
+        who = (f"THE LEAD SINGER IS: {desc} — invent this one performer "
+               "(give them a name) and cast them")
+    return (
+        f"\n{who} as the film's one lead performer. The person shown singing "
+        "in EVERY performance shot must be this singer — their sex and age on "
+        "camera must match that description, because the sung voice on the "
+        "track is theirs; never show anyone else mouthing the song.\n"
+        "WARDROBE: dress the lead singer in ONE distinctive outfit chosen "
+        "fresh for THIS video — name it in the scene prompts (a change of "
+        "clothes is the one thing you may describe on a named character) and "
+        "keep it identical in every scene; do not fall back to their usual "
+        "look, and pick something a different video would not pick.")
+
+
 def _register_song_job(wd: Path, *, title: str, video_title: str, topic: str,
                        minutes: float, n_scenes: int, voice: str, ss: dict,
                        caption: str, queue_item_id: str) -> tuple[str, dict]:
@@ -3086,18 +3162,25 @@ def song_draft(body: SongDraftBody) -> dict:
     extra = (ss.get("extra_instructions") or "").strip()
     topic = (body.topic or "").strip() or title
     display_topic = title.splitlines()[0][:80]
+    # The lead singer is cast BEFORE the song is written: the track is sung
+    # from this draft's caption + vocalist and reused verbatim at render, so
+    # who sings has to be settled here — not discovered from the cast later,
+    # when the vocals are already on disk.
+    singer, singer_desc = _pick_song_singer(cfg, ss, topic,
+                                            (body.video_title or ""), extra)
     try:
         with _track_op("Writing the song", display_topic):
             song = story_mode.write_song(
                 None, secs,
                 language=gapp._norm_tts_language(ss.get("tts_language")),
                 topic=f"{topic}\n\n{extra}" if extra else topic,
-                video_title=(body.video_title or "").strip())
+                video_title=(body.video_title or "").strip(),
+                singer_note=singer_desc)
     except Exception as e:
         raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
     wd = gapp._script_work_dir(title)
     song.update({"voice": (body.voice or "").strip(), "seconds": secs,
-                 "title": title, "style_name": ss["name"],
+                 "title": title, "style_name": ss["name"], "singer": singer,
                  "created_at": time.time()})
     (wd / "song.json").write_text(json.dumps(song, indent=2))
     job_id, create_brief = _register_song_job(
@@ -3215,9 +3298,15 @@ def song_import(body: SongImportBody) -> dict:
     ss = gapp.style_settings(cfg, body.style_name)
     wd = gapp._script_work_dir(title)
     topic = (body.topic or "").strip() or title
+    # An uploaded track's vocals are already baked in, but the film still needs
+    # a lead singer for the VISUALS — cast one so the story shows a consistent
+    # performer (with luck, one matching what the file sings).
+    singer, singer_desc = _pick_song_singer(cfg, ss, topic,
+                                            (body.video_title or ""))
     (wd / "song.json").write_text(json.dumps(
         {"caption": (body.caption or "").strip(), "lyrics": (body.lyrics or "").strip(),
          "voice": (body.voice or "").strip(), "title": title,
+         "singer": singer, "vocalist": singer_desc,
          "style_name": ss["name"], "created_at": time.time()}, indent=2))
     result = _import_song_file(wd, body.data, body.filename)
     song = json.loads((wd / "song.json").read_text())
@@ -3275,7 +3364,12 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     data = json.loads((wd / "song.json").read_text())
     secs = float(data.get("seconds") or 60)
     voices = {v.get("name"): v for v in (cfg.get("voices") or []) if v.get("name")}
-    vocal = gapp.voice_descriptor(voices.get((data.get("voice") or "").strip()))
+    # Who sings: an explicitly picked library voice wins (it is what a re-voice
+    # converts to), else the vocalist cast at draft time — the lead singer's
+    # description, or the songwriter's own. A track sung with NO vocalist line
+    # is the one whose voice never matches the person shown singing.
+    vocal = (gapp.voice_descriptor(voices.get((data.get("voice") or "").strip()))
+             or (data.get("vocalist") or "").strip())
     caption = ", ".join(x for x in ((data.get("caption") or "").strip(), vocal) if x)
     ss = gapp.style_settings(cfg, data.get("style_name") or "")
     engine = gapp._norm_music_engine(ss.get("music_engine"))
@@ -3757,6 +3851,7 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
                     # The sound the user kept is the direction the new words
                     # are written to (its own caption is discarded).
                     music_hint=caption,
+                    singer_note=(data.get("vocalist") or "").strip(),
                     instruction=body.instruction or "")
         except Exception as e:
             raise HTTPException(503, f"Lyric re-write failed: {str(e).splitlines()[0][:200]}")
@@ -15753,7 +15848,11 @@ def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
                     None, secs,
                     language=gapp._norm_tts_language(
                         gapp.style_settings(cfg, style_name).get("tts_language")),
-                    topic=topic, video_title=title, instruction=issues)
+                    topic=topic, video_title=title,
+                    # The critic judges words, not casting — the vocalist the
+                    # draft cast stays pinned through every re-write.
+                    singer_note=(data.get("vocalist") or "").strip(),
+                    instruction=issues)
             except Exception:
                 gapp.logger.warning("Song rewrite failed — keeping the draft",
                                     exc_info=True)

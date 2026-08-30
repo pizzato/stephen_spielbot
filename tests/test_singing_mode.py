@@ -214,6 +214,86 @@ class VocalistNoteTests(unittest.TestCase):
             self.assertEqual(app.vocalist_note({"voices": []}, "s", Path("/tmp")), "")
 
 
+class SingerCastingTests(unittest.TestCase):
+    """The lead singer cast from the style catalogue, and the vocalist line
+    that keeps the sung voice matching the person on camera."""
+
+    def test_descriptor_reads_the_characters_identity_fields(self):
+        import app
+        cfg = {"voices": [{"name": "June", "path": "/x", "gender": "female",
+                           "age": "mature", "accent": "Irish",
+                           "tone": "warm, smoky"}]}
+        char = {"name": "Ada", "gender": "female", "age": "young",
+                "background": "Brazilian, sings in Portuguese",
+                "voice": "June", "description": "a tall singer"}
+        note = app.singer_descriptor(char, cfg)
+        self.assertIn("young female vocalist", note)
+        self.assertIn("Brazilian, sings in Portuguese", note)
+        self.assertIn("warm, smoky voice", note)
+        self.assertIn("Irish accent", note)
+
+    def test_descriptor_guesses_sex_from_the_description(self):
+        import app
+        note = app.singer_descriptor(
+            {"name": "Mona", "description": "a lady with her red guitar"})
+        self.assertIn("female vocalist", note)
+
+    def test_descriptor_empty_when_nothing_is_known(self):
+        import app
+        self.assertEqual(app.singer_descriptor({"name": "X", "description": "?"}), "")
+        self.assertEqual(app.singer_descriptor(None), "")
+
+    def test_pick_prefers_the_character_the_brief_names(self):
+        import app
+        cfg = {"styles": [{"name": "pop"}], "default_style": "pop",
+               "characters": [
+                   {"name": "Ada", "description": "a singer", "enabled": True},
+                   {"name": "Ben", "description": "a drummer", "enabled": True},
+               ]}
+        char = app.pick_song_singer(cfg, "pop", "a song about Ben's drums")
+        self.assertEqual(char["name"], "Ben")
+
+    def test_pick_draws_from_the_styles_enabled_cast(self):
+        import app
+        cfg = {"styles": [{"name": "pop"}], "default_style": "pop",
+               "characters": [
+                   {"name": "Ada", "description": "a singer", "enabled": True},
+                   {"name": "Off", "description": "x", "enabled": False},
+                   {"name": "Blank", "description": "", "enabled": True},
+               ]}
+        for _ in range(5):
+            self.assertEqual(app.pick_song_singer(cfg, "pop", "hello")["name"], "Ada")
+        self.assertIsNone(app.pick_song_singer(
+            {"styles": [{"name": "pop"}], "characters": []}, "pop", "hi"))
+
+    def test_write_song_pins_the_cast_singer(self):
+        seen = {}
+
+        def fake_call(system, user, max_tokens, label, retries=0):
+            seen["user"] = user
+            return json.dumps({"caption": "synthpop, 110 BPM",
+                               "vocalist": "gravelly male vocalist",
+                               "lyrics": "[Verse]\nHello"})
+        with unittest.mock.patch.object(story, "_load_cfg", return_value={}), \
+             unittest.mock.patch.object(story, "_call_fn",
+                                        return_value=fake_call):
+            song = story.write_song(None, 60, topic="t",
+                                    singer_note="young female vocalist, Brazilian")
+        # The cast singer rides into the prompt AND outranks the model's own.
+        self.assertIn("young female vocalist, Brazilian", seen["user"])
+        self.assertEqual(song["vocalist"], "young female vocalist, Brazilian")
+
+    def test_write_song_keeps_the_models_vocalist_when_nobody_was_cast(self):
+        def fake_call(system, user, max_tokens, label, retries=0):
+            return json.dumps({"caption": "c", "vocalist": "gravelly male vocalist",
+                               "lyrics": "[Verse]\nHello"})
+        with unittest.mock.patch.object(story, "_load_cfg", return_value={}), \
+             unittest.mock.patch.object(story, "_call_fn",
+                                        return_value=fake_call):
+            song = story.write_song(None, 60, topic="t")
+        self.assertEqual(song["vocalist"], "gravelly male vocalist")
+
+
 class AudioArtifactTests(unittest.TestCase):
     def test_audio_upload_becomes_a_scoped_soundtrack(self):
         import tempfile
