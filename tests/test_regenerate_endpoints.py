@@ -447,6 +447,25 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertTrue(seen["queued_during_acquire"])
         self.assertNotIn("queued", backend._film_tasks["tid"])
 
+    def test_acquire_op_worker_marks_tracked_op_queued(self):
+        """A tracked op (image/cover edit) reads "queued" while it waits for a
+        worker, and flips to "running" once it is on a GPU."""
+        seen = {}
+
+        class FakePool:
+            def acquire(self):
+                seen["row"] = dict(next(iter(backend._current_ops.values())))
+                return "http://worker:8188"
+
+        with backend._track_op("Editing image", "scene 3") as op_id:
+            url = backend._acquire_op_worker(FakePool(), op_id)
+            self.assertEqual(backend._current_ops[op_id]["status"], "running")
+            self.assertEqual(backend._current_ops[op_id]["detail"], "scene 3")
+
+        self.assertEqual(url, "http://worker:8188")
+        self.assertEqual(seen["row"]["status"], "queued")
+        self.assertEqual(seen["row"]["detail"], "waiting for a free worker · scene 3")
+
     def test_track_op_keeps_concurrent_operations_visible(self):
         with backend._track_op("First task", "a"):
             with backend._track_op("Second task", "b"):
@@ -601,7 +620,7 @@ class InstructionSteeringTests(unittest.TestCase):
         with mock.patch.object(backend.DurableStore, "default", return_value=store), \
              mock.patch.object(backend, "job_id_from_work_dir", return_value="job1"), \
              mock.patch.object(backend, "_film_job_config", return_value={}), \
-             mock.patch.object(backend.image_history, "seed_if_empty"), \
+             mock.patch.object(backend.image_history, "capture_current"), \
              mock.patch.object(backend, "_RERENDER_JOURNAL_PATH", wd / "rerender_journal.json"), \
              mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
             result = backend.rerender_film_scene(
@@ -638,7 +657,7 @@ class RerenderJournalTests(unittest.TestCase):
         with mock.patch.object(backend.DurableStore, "default", return_value=store), \
              mock.patch.object(backend, "job_id_from_work_dir", return_value="job1"), \
              mock.patch.object(backend, "_film_job_config", return_value={}), \
-             mock.patch.object(backend.video_history, "seed_if_empty"), \
+             mock.patch.object(backend.video_history, "capture_current"), \
              mock.patch.object(backend.threading, "Thread",
                                side_effect=lambda **kw: mock.Mock(start=lambda: None)):
             tid = backend._start_scene_rerender(wd, 2, "video", "more dragons")

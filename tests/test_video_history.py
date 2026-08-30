@@ -19,9 +19,9 @@ def _final(wd: Path, sid: int = 1) -> Path:
     return wd / f"scene_{sid:02d}_final.mp4"
 
 
-def test_seed_if_empty_records_existing_as_v1(tmp_path):
+def test_capture_current_records_existing_as_v1(tmp_path):
     _write(_final(tmp_path), b"original")
-    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))
+    vh.capture_current(tmp_path, 1, _final(tmp_path))
 
     h = vh.history(tmp_path, 1)
     assert len(h["versions"]) == 1
@@ -29,16 +29,30 @@ def test_seed_if_empty_records_existing_as_v1(tmp_path):
     assert Path(h["versions"][0]["path"]).read_bytes() == b"original"
 
 
-def test_seed_if_empty_is_noop_when_history_exists(tmp_path):
+def test_capture_current_is_noop_when_already_kept(tmp_path):
     _write(_final(tmp_path), b"original")
-    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))
-    _write(_final(tmp_path), b"changed")
-    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))
+    vh.capture_current(tmp_path, 1, _final(tmp_path))
+    vh.capture_current(tmp_path, 1, _final(tmp_path))
     assert len(vh.history(tmp_path, 1)["versions"]) == 1
 
 
-def test_seed_if_empty_is_noop_when_current_missing(tmp_path):
-    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))  # no file on disk
+def test_capture_current_keeps_unrecorded_canonical_when_history_exists(tmp_path):
+    # A final written outside the editors (the full render writes finals
+    # directly) is on disk but not in history — capturing before a re-render
+    # must keep it even though history is not empty.
+    _write(_final(tmp_path), b"editor take")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    _write(_final(tmp_path), b"render take")
+    vh.capture_current(tmp_path, 1, _final(tmp_path))
+
+    h = vh.history(tmp_path, 1)
+    assert len(h["versions"]) == 2
+    assert Path(h["versions"][-1]["path"]).read_bytes() == b"render take"
+    assert h["selected"] == h["versions"][-1]["id"]
+
+
+def test_capture_current_is_noop_when_current_missing(tmp_path):
+    vh.capture_current(tmp_path, 1, _final(tmp_path))  # no file on disk
     assert vh.history(tmp_path, 1)["versions"] == []
 
 

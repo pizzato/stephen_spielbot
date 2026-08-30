@@ -24,9 +24,9 @@ def _first_frame(wd: Path, sid: int = 1) -> Path:
     return wd / f"scene_{sid:02d}_first_frame.png"
 
 
-def test_seed_if_empty_records_existing_as_v1(tmp_path):
+def test_capture_current_records_existing_as_v1(tmp_path):
     _write(_preview(tmp_path), b"original")
-    ih.seed_if_empty(tmp_path, 1, _preview(tmp_path))
+    ih.capture_current(tmp_path, 1, _preview(tmp_path))
 
     h = ih.history(tmp_path, 1)
     assert len(h["versions"]) == 1
@@ -34,18 +34,32 @@ def test_seed_if_empty_records_existing_as_v1(tmp_path):
     assert Path(h["versions"][0]["path"]).read_bytes() == b"original"
 
 
-def test_seed_if_empty_is_noop_when_history_exists(tmp_path):
+def test_capture_current_is_noop_when_already_kept(tmp_path):
     _write(_preview(tmp_path), b"original")
-    ih.seed_if_empty(tmp_path, 1, _preview(tmp_path))
-    # A second seed (even with a different image) must not add a version.
-    _write(_preview(tmp_path), b"changed")
-    ih.seed_if_empty(tmp_path, 1, _preview(tmp_path))
+    ih.capture_current(tmp_path, 1, _preview(tmp_path))
+    # Capturing the same content again must not duplicate the version.
+    ih.capture_current(tmp_path, 1, _preview(tmp_path))
 
     assert len(ih.history(tmp_path, 1)["versions"]) == 1
 
 
-def test_seed_if_empty_is_noop_when_current_missing(tmp_path):
-    ih.seed_if_empty(tmp_path, 1, _preview(tmp_path))  # no file on disk
+def test_capture_current_keeps_unrecorded_canonical_when_history_exists(tmp_path):
+    # A frame written outside the editors (render-time opening-frame painter,
+    # continuation handoff) is on disk but not in history — capturing before a
+    # regeneration must keep it even though history is not empty.
+    _write(_preview(tmp_path), b"editor version")
+    ih.record(tmp_path, 1, _preview(tmp_path))
+    _write(_preview(tmp_path), b"render-painted")
+    ih.capture_current(tmp_path, 1, _preview(tmp_path))
+
+    h = ih.history(tmp_path, 1)
+    assert len(h["versions"]) == 2
+    assert Path(h["versions"][-1]["path"]).read_bytes() == b"render-painted"
+    assert h["selected"] == h["versions"][-1]["id"]
+
+
+def test_capture_current_is_noop_when_current_missing(tmp_path):
+    ih.capture_current(tmp_path, 1, _preview(tmp_path))  # no file on disk
     assert ih.history(tmp_path, 1)["versions"] == []
 
 

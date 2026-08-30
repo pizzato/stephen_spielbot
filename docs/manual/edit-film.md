@@ -403,6 +403,10 @@ Two strips under each scene: **image takes** and **video takes**. Click one to s
 or delete the ones you don't want. Selecting a take re-muxes the final film atomically, so
 there's never a half-updated video on disk.
 
+Whatever is being replaced is kept first — including a frame or clip the render itself
+produced (an acted scene's painted opening frame, the take from the original render), which
+joins the strip the first time you regenerate over it.
+
 Video takes keep the last ten (plus whichever is selected).
 
 ### Restructuring

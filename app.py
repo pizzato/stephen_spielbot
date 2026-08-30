@@ -4292,8 +4292,14 @@ def _generate_active_scene_preview(
         raise RuntimeError("No cluster workers reachable for scene preview generation.")
 
     out = work_dir / f"scene_{sid:02d}_preview.png"
-    # Preserve the image we're about to overwrite so the user can return to it.
-    image_history.seed_if_empty(work_dir, sid, out)
+    first_frame = work_dir / f"scene_{sid:02d}_first_frame.png"
+    # Preserve the images we're about to overwrite so the user can return to
+    # them. Both canonical files: an acted scene's frame may live only in
+    # _first_frame.png (painted at render time), and the two can differ (a
+    # continuation handoff rewrites the first frame alone). capture_current
+    # skips content that is already the kept selected version.
+    image_history.capture_current(work_dir, sid, out)
+    image_history.capture_current(work_dir, sid, first_frame)
     # Which model bundle generates this style's scenes (defaults to flux1-schnell).
     engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
     # An upscale-only target (QHD/4K) renders at its underlying render size, so
@@ -4336,6 +4342,10 @@ def _generate_active_scene_preview(
             reference_images=reference_images,
             comfy_url=url,
         )
+        # Keep the first frame in sync so the film screen and a re-render use
+        # the regenerated image, not the stale frame (mirrors select/inpaint).
+        if first_frame.exists():
+            shutil.copy2(out, first_frame)
         store = DurableStore.default()
         try:
             store.update_scene_preview(job_id, sid, out)

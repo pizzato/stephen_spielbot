@@ -521,7 +521,7 @@ def _track_op(name: str, detail: str = "", work_dir: str = "", title: str = "",
         )
     status = "done"
     try:
-        yield
+        yield op_id
     except BaseException:
         # A failed op must not land in the history claiming it succeeded.
         status = "error"
@@ -535,6 +535,29 @@ def _track_op(name: str, detail: str = "", work_dir: str = "", title: str = "",
                 work_dir=work_dir, title=title, status=status,
                 category=category,
             )
+
+
+def _acquire_op_worker(pool, op_id: str) -> str:
+    """pool.acquire() that shows the wait: while it blocks on a busy GPU the
+    tracked op's Activity row reads "queued" instead of a green "running" one.
+    The _track_op twin of _acquire_render_worker; *op_id* is what _track_op
+    yields. started_at is left alone so the elapsed clock keeps ticking and the
+    wait itself stays visible."""
+    with _op_lock:
+        detail = str((_current_ops.get(op_id) or {}).get("detail") or "")
+
+    def _set(status: str, text: str) -> None:
+        with _op_lock:
+            ev = _current_ops.get(op_id)
+            if ev:
+                ev["status"], ev["detail"] = status, text
+
+    _set("queued", f"waiting for a free worker · {detail}" if detail
+         else "waiting for a free worker")
+    try:
+        return pool.acquire()
+    finally:
+        _set("running", detail)
 
 
 def _film_task_started_at(task_id: str) -> float:
@@ -5145,7 +5168,7 @@ def _restyle_script(wd: Path, *, style_name: str, style: str,
         for suffix in ("_preview.png", "_first_frame.png"):
             p = wd / f"scene_{sid:02d}{suffix}"
             if p.exists():
-                image_history.seed_if_empty(wd, sid, p)
+                image_history.capture_current(wd, sid, p)
                 p.unlink()
                 retired.append(p.name)
     gapp._persist_script_snapshot(wd, rows)
@@ -5715,7 +5738,10 @@ def remove_scene_preview(job_id: str, scene_id: int) -> dict:
     versions survive, so re-selecting one brings it back."""
     wd = _job_wd_or_404(job_id)
     sid = int(scene_id)
+    # Keep the frames being removed as history versions — re-selecting one must
+    # work even for a frame painted at render time that was never recorded.
     for f in (wd / f"scene_{sid:02d}_preview.png", wd / f"scene_{sid:02d}_first_frame.png"):
+        image_history.capture_current(wd, sid, f)
         f.unlink(missing_ok=True)
     store = DurableStore.default()
     try:
@@ -5855,7 +5881,7 @@ def _decode_data_url(data: str) -> bytes:
 
 
 def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: str, job_id: str,
-                       engine: dict, denoise: float | None = None) -> dict:
+                       engine: dict, denoise: float | None = None, op_id: str = "") -> dict:
     """Run a masked image edit on a scene image and record it as a new version.
 
     Shared by the Script and Film inpaint endpoints. *engine* is the resolved edit
@@ -5879,15 +5905,18 @@ def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: s
     prompt = (prompt or "").strip()[:1000]
     dn = None if denoise is None else max(0.3, min(1.0, float(denoise)))
 
-    # Preserve the current image so the user can return to it (mirrors regen/rerender).
-    image_history.seed_if_empty(wd, sid, base)
+    # Preserve the current images so the user can return to them (mirrors
+    # regen/rerender — the edit overwrites the preview and syncs the first
+    # frame, and the two can differ).
+    image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_preview.png")
+    image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_first_frame.png")
 
     out = wd / f"scene_{sid:02d}_preview.png"
     mask_tmp = wd / f"_inpaint_mask_{sid:02d}.png"
     mask_tmp.write_bytes(mask_bytes)
 
     pool = gapp.WorkerPool(worker_urls)
-    url = pool.acquire()
+    url = _acquire_op_worker(pool, op_id)
     try:
         edit_with_engine(engine, prompt, base, mask_tmp, out, denoise=dn, comfy_url=url)
     finally:
@@ -5943,8 +5972,9 @@ def inpaint_scene_preview(job_id: str, scene_id: int, body: InpaintBody) -> dict
     engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, style_name).get("edit_engine"))
 
     try:
-        with _track_op("Editing image", f"scene {sid} · {engine['key']}"):
-            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, engine, denoise=body.denoise)
+        with _track_op("Editing image", f"scene {sid} · {engine['key']}") as op_id:
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, engine,
+                                      denoise=body.denoise, op_id=op_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -7714,7 +7744,7 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
                 "current": idx,
                 "total": len(order),
             }
-            video_history.seed_if_empty(wd, int(sid), wd / f"scene_{int(sid):02d}_final.mp4")
+            video_history.capture_current(wd, int(sid), wd / f"scene_{int(sid):02d}_final.mp4")
             _render_scene_narration(task_id, wd, int(sid), jc, row, voice_name)
 
         scene_finals = [
@@ -7950,16 +7980,21 @@ def _localize_synthesize_scenes(task_id: str, wd: Path, jc: dict, lang: str,
     def synth_one(sid: int, row: dict) -> int:
         _film_checkpoint(task_id)
         sub_id = f"film:{task_id}#s{sid}"
-        _register_film_subjob(
-            sub_id,
+        sub_fields = dict(
             name=f"Voicing scene {sid} in {LANGUAGES.get(lang, lang)}",
             detail=f"{n} scene{'s' if n != 1 else ''} → {LANGUAGES.get(lang, lang)}",
             work_dir=str(wd),
             title=film_title,
             est_seconds=per_scene_est,
         )
-        sub_started = time.time()
+        # In line for a worker until acquire() returns — show it that way.
+        _register_film_subjob(sub_id, **sub_fields, queued=True)
         host = pool.acquire()
+        # On a GPU now — flip the row to running and start its ETA clock. The
+        # timing sample starts here too: the queue wait is not synthesis time,
+        # and folding it in would inflate every later scene's ETA.
+        _register_film_subjob(sub_id, **sub_fields)
+        sub_started = time.time()
         try:
             _render_scene_narration(
                 task_id, wd, sid, jc, row,
@@ -8448,7 +8483,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         # The original track was already seeded (with its own prompt) by the endpoint,
         # before the prompt was overwritten — see remix_regen_music.
         _film_tasks[task_id] = {"status": "running", "step": "music"}
-        url = pool.acquire()
+        url = _acquire_render_worker(pool, task_id)
         try:
             # acquire() can block behind a busy GPU — re-check before submitting.
             _film_checkpoint(task_id)
@@ -11727,14 +11762,16 @@ def inpaint_cover(body: CoverInpaintBody) -> dict:
     bg = wd / COVER_BASE_NAME
     target = bg if bg.exists() and bg.stat().st_size > 1000 else cover
     pool = gapp.WorkerPool(worker_urls)
-    url = pool.acquire()
+    url = None
     try:
-        with _track_op("Editing cover", f"{engine['key']}"):
+        with _track_op("Editing cover", f"{engine['key']}") as op_id:
+            url = _acquire_op_worker(pool, op_id)
             edit_with_engine(engine, prompt, target, mask_tmp, target, denoise=dn, comfy_url=url)
     except Exception as e:
         raise HTTPException(503, f"Cover edit failed: {str(e).splitlines()[0][:300]}")
     finally:
-        pool.release(url)
+        if url:
+            pool.release(url)
         mask_tmp.unlink(missing_ok=True)
 
     if target is bg:
@@ -14992,6 +15029,10 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                 break
 
         if scene_first_frame is None:
+            # Keep the frame we're about to replace (it may never have been
+            # recorded — e.g. painted at render time), and record the new one
+            # so the version strip shows the frame this take was shot from.
+            image_history.capture_current(wd, sid, first_frame)
             _film_tasks[task_id] = {"status": "running", "step": "image"}
             url = _acquire_render_worker(pool, task_id)
             try:
@@ -15007,6 +15048,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             finally:
                 pool.release(url)
             scene_first_frame = first_frame
+            image_history.record(wd, sid, first_frame)
 
         # Determine narration duration from existing narration wav
         narration_path = wd / f"scene_{sid:02d}_narration.wav"
@@ -15124,7 +15166,7 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
         _film_checkpoint(task_id)
         _film_tasks[task_id] = {"status": "running", "step": "acted scene"}
-        url = pool.acquire()
+        url = _acquire_render_worker(pool, task_id)
         try:
             # Guided re-generation: the user's note steers this take only, as
             # the prompt's [DIRECTION] block.
@@ -15258,13 +15300,14 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         # Pre-deleting final.mp4 would leave the scene with no video if the re-mux is
         # interrupted (backend restart / crash mid-render). Keep the current video as a
         # take so the re-mux can be reverted.
-        video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
+        video_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
     elif component == "image":
-        # Preserve the current image before deleting it so the user can return to it.
-        cur = wd / f"scene_{sid:02d}_preview.png"
-        if not cur.exists():
-            cur = wd / f"scene_{sid:02d}_first_frame.png"
-        image_history.seed_if_empty(wd, sid, cur)
+        # Preserve the current images before deleting them so the user can
+        # return to them — both canonical files, since the two can differ (a
+        # continuation handoff rewrites the first frame alone) and
+        # capture_current skips content that is already kept.
+        image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_preview.png")
+        image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_first_frame.png")
         for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
             (wd / f).unlink(missing_ok=True)
     elif component == "video":
@@ -15274,7 +15317,7 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         # render is interrupted mid-flight — e.g. a backend restart while the LTX
         # render runs — leaving the scene with no video at all. Snapshot the current
         # video as a take so the user can flip back to it.
-        video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
+        video_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
 
     # A fresh re-render supersedes any earlier attempt shown on this scene —
     # clear a stale "failed" badge and stop terminal records accumulating.
@@ -15442,8 +15485,10 @@ def upload_film_preview(scene_id: int, body: FilmPreviewUploadBody) -> dict:
 
     first_frame = wd / f"scene_{sid:02d}_first_frame.png"
     preview = wd / f"scene_{sid:02d}_preview.png"
-    # Preserve the image we're about to overwrite so the user can return to it.
-    image_history.seed_if_empty(wd, sid, preview if preview.exists() else first_frame)
+    # Preserve the images we're about to overwrite so the user can return to
+    # them (both — they can differ, and capture skips content already kept).
+    image_history.capture_current(wd, sid, preview)
+    image_history.capture_current(wd, sid, first_frame)
 
     jc = _film_job_config(wd)
     resolution = jc.get("resolution") or ""
@@ -15508,8 +15553,8 @@ def trim_film_scene(scene_id: int, body: FilmTrimBody) -> dict:
         raise HTTPException(400, f"That is the full clip ({duration:.1f}s) — drag the handle back to trim.")
 
     # Snapshot the current final first, so the untrimmed take survives even if
-    # this scene had no history yet.
-    video_history.seed_if_empty(wd, sid, final_path)
+    # it was never recorded as a take (a full render writes finals directly).
+    video_history.capture_current(wd, sid, final_path)
     staged = wd / f"scene_{sid:02d}_final.staging.mp4"
     try:
         with _track_op("Trimming scene", f"scene {sid} · {end:.1f}s", work_dir=str(wd)):
@@ -15597,7 +15642,7 @@ def _run_scene_continue(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         _film_checkpoint(task_id)
         # Keep the shorter take before the join — "that went on too long" is the
         # other half of "that finished too early".
-        video_history.seed_if_empty(wd, sid, final_path)
+        video_history.capture_current(wd, sid, final_path)
         _concat_video_chunks([final_path, clip], staged)
         staged.replace(final_path)
         clip.unlink(missing_ok=True)
@@ -15757,8 +15802,9 @@ def inpaint_film_scene(scene_id: int, body: FilmInpaintBody) -> dict:
 
     job_id = job_id_from_work_dir(wd)
     try:
-        with _track_op("Editing image", f"scene {sid} · {engine['key']}"):
-            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, engine, denoise=body.denoise)
+        with _track_op("Editing image", f"scene {sid} · {engine['key']}") as op_id:
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, engine,
+                                      denoise=body.denoise, op_id=op_id)
     except HTTPException:
         raise
     except Exception as e:
