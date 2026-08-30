@@ -200,9 +200,12 @@ DEFAULT_CFG = {
     "ambient_vol": 0,
     "resolution": _DEFAULT_RESOLUTION,
     # Upscaler that finishes a render whose target is an upscale-only size
-    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode ("flashvsr", "ltx_latent",
-    # "ic_lora", "h3_latent" — see pipeline/assembler.temporal_ai_upscale_video).
-    "default_finish_upscale_mode": "flashvsr",
+    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode. "flashvsr_2x",
+    # "flashvsr_4x" and "ltx_latent_2x" finish at the render size times their
+    # factor — those engines only do whole factors, so the requested target
+    # says only THAT a finishing pass runs. "ic_lora" and "h3_latent" land on
+    # the target itself. See pipeline/assembler.temporal_ai_upscale_video.
+    "default_finish_upscale_mode": "flashvsr_2x",
     "max_clip_secs": 0,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;

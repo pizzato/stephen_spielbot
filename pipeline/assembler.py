@@ -63,6 +63,62 @@ _TEMPORAL_UPSCALE_CHUNK_OVERLAP = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_C
 # Floor for the halve-and-retry after a blank result: below this the overlapped
 # pieces cost more to stitch than the retry saves.
 _TEMPORAL_UPSCALE_MIN_CHUNK_SECONDS = 2.0
+# Upscale modes that name their own scale factor. FlashVSR's node and the LTX
+# latent upsampler only produce whole-number factors, so the factor is the only
+# honest way to say what a film ends up at: the target is the source times the
+# factor and nothing else. Asking those two for an arbitrary resolution instead
+# meant resampling the model's output the rest of the way with Lanczos — the
+# part of a "FlashVSR 1440x1440" that was not FlashVSR at all.
+#
+# The modes that are NOT here (fast, h3_latent, ic_lora) keep taking a target
+# resolution, because each can actually land on one: h3_latent's node takes a
+# continuous 1.1-4.0 factor, and fast IS a resample.
+FACTOR_UPSCALE_MODES = {
+    "flashvsr_2x":   ("flashvsr", 2),
+    "flashvsr_4x":   ("flashvsr", 4),
+    "ltx_latent_2x": ("ltx_latent", 2),
+}
+# Pre-factor spellings, kept readable so styles and job configs written before
+# the split keep rendering. Both resolve to 2x: LTX latent has never done
+# anything else, and FlashVSR's old auto-pick chose 2x for everything up to a
+# 2.5x jump, which covered every size this project renders at.
+_LEGACY_FACTOR_MODES = {"flashvsr": "flashvsr_2x", "ltx_latent": "ltx_latent_2x"}
+# Modes that take a target resolution rather than a factor.
+TARGET_UPSCALE_MODES = ("fast", "h3_latent", "ic_lora")
+
+
+def parse_upscale_mode(mode: str) -> tuple[str, int | None]:
+    """Split an upscale mode into (engine, factor).
+
+    *factor* is None for the modes that take a target resolution instead. Legacy
+    factor-less spellings resolve to their 2x equivalent; anything unrecognised
+    comes back as-is with no factor, so callers keep their own validation.
+    """
+    m = (mode or "").strip().lower()
+    m = _LEGACY_FACTOR_MODES.get(m, m)
+    if m in FACTOR_UPSCALE_MODES:
+        return FACTOR_UPSCALE_MODES[m]
+    return m, None
+
+
+def upscale_target_dims(
+    source_w: int, source_h: int, mode: str,
+    requested: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """The size a film will actually come out at.
+
+    A factor mode derives it from the source — the requested target is not used,
+    because the engine cannot honour it. A target mode returns *requested*.
+    Dimensions are forced even so the H.264 encoders downstream accept them.
+    """
+    _engine, factor = parse_upscale_mode(mode)
+    if factor is None:
+        if requested is None:
+            raise ValueError(f"Upscale mode {mode!r} needs a target resolution.")
+        return requested
+    return (int(source_w) * factor // 2 * 2, int(source_h) * factor // 2 * 2)
+
+
 # A silently-failed upscale is uniformly black, so compare brightness against
 # the source rather than a fixed floor — a genuinely dark scene must still pass.
 _UPSCALE_MIN_LUMA_RATIO = 0.35
@@ -365,10 +421,20 @@ def ensure_video_resolution(video_path: Path, width: int, height: int) -> Path:
         return video_path
 
     tmp_path = video_path.with_name(f"{video_path.stem}.{width}x{height}.tmp{video_path.suffix}")
-    logger.info(
-        "[ffmpeg] normalize_resolution: %dx%d → %dx%d (%s)",
-        actual_w, actual_h, width, height, video_path.name,
-    )
+    # Shrinking back from an overshoot is free detail; stretching UP is Lanczos
+    # inventing the difference, and after an AI upscale that silently undoes
+    # part of what the model just did. Say which one this is.
+    if width > actual_w or height > actual_h:
+        logger.warning(
+            "[ffmpeg] normalize_resolution: ENLARGING %dx%d → %dx%d by resample (%s) "
+            "— the extra pixels are interpolated, not generated",
+            actual_w, actual_h, width, height, video_path.name,
+        )
+    else:
+        logger.info(
+            "[ffmpeg] normalize_resolution: %dx%d → %dx%d (%s)",
+            actual_w, actual_h, width, height, video_path.name,
+        )
     _run([
         _FFMPEG, "-y",
         "-i", str(video_path),
@@ -520,7 +586,7 @@ def temporal_ai_upscale_video(
             f"Target {width}x{height} is not larger than source {actual_w}x{actual_h}."
         )
 
-    eng = (engine or "flashvsr").strip().lower()
+    eng, factor = parse_upscale_mode(engine or "flashvsr_2x")
     if eng in {"temporal_ai", "ic-lora", "iclora"}:
         eng = "ic_lora"
     if eng in {"latent", "latent_ai", "ltx_latent_upsampler"}:
@@ -529,6 +595,18 @@ def temporal_ai_upscale_video(
         eng = "h3_latent"
     if eng not in {"ic_lora", "ltx_latent", "h3_latent", "flashvsr"}:
         raise ValueError(f"Unknown AI upscale engine: {engine!r}")
+    # A factor mode's caller is expected to have sized the target with
+    # upscale_target_dims(); if it asked for something else the engine cannot
+    # reach it, and the difference would be made up by a resample.
+    if factor is not None:
+        derived = upscale_target_dims(actual_w, actual_h, engine)
+        if (width, height) != derived:
+            logger.warning(
+                "[upscale] %s is a %dx mode: %dx%d gives %dx%d, not the requested "
+                "%dx%d — using %dx%d",
+                eng, factor, actual_w, actual_h, *derived, width, height, *derived,
+            )
+            width, height = derived
 
     template = command_template or os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD", "")
     timeout = timeout_seconds or int(os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "7200"))
@@ -582,6 +660,7 @@ def temporal_ai_upscale_video(
                     comfy_url=cu,
                     source_width=actual_w,
                     source_height=actual_h,
+                    scale=factor,
                 )
             return upscale_video_ltx(
                 inp, out, w, h,
@@ -623,6 +702,7 @@ def temporal_ai_upscale_video(
                     source, output_path, width, height,
                     fps=fps, timeout_seconds=timeout, comfy_url=url,
                     source_width=actual_w, source_height=actual_h,
+                    scale=factor,
                 )
             else:
                 upscale_video_ltx(

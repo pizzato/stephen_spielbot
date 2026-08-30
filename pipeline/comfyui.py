@@ -1896,12 +1896,16 @@ def upscale_video_flashvsr(
     *,
     source_width: int | None = None,
     source_height: int | None = None,
+    scale: int | None = None,
 ) -> Path:
     """Upscale an existing MP4 with FlashVSR.
 
-    Picks 2x unless the target needs more, then 4x; anything in between is
-    overshot and scaled back to exactly what was asked for. Output length equals
-    the input (no VAE padding drift), and the source audio is carried through.
+    *scale* is the node's factor, 2 or 4 — the caller picks it and the output is
+    the source at exactly that multiple. Without one, the factor is inferred
+    from the target (2x unless it needs 4x) and whatever the node's whole-number
+    factor could not reach is made up by a resample at the end; only the
+    resolution-targeted callers should rely on that. Output length equals the
+    input (no VAE padding drift), and the source audio is carried through.
     """
     from pipeline.assembler import _get_duration, _get_video_dimensions
 
@@ -1915,7 +1919,10 @@ def upscale_video_flashvsr(
     # 4x costs ~10x the time of 2x (it has to tile), so a target only a little
     # past 2x — e.g. an H3 1920x1024 render finishing at 3840x2160 — stays at
     # 2x and lets the final normalize cover the remainder.
-    scale = 2 if needed <= _FLASHVSR_2X_TOLERANCE else 4
+    if scale is None:
+        scale = 2 if needed <= _FLASHVSR_2X_TOLERANCE else 4
+    elif scale not in (2, 4):
+        raise ValueError(f"FlashVSR does only 2x and 4x, not {scale!r}.")
     fps_val = max(1.0, float(fps or LTX_FPS))
     frames = max(1, round(_get_duration(src) * fps_val))
     out_pixel_frames = int(source_width) * int(source_height) * scale * scale * frames
