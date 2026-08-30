@@ -13871,10 +13871,16 @@ def _start_queue_item(item: dict) -> dict:
         fmt = auto["auto_format"]
         song_wd = ""
         if fmt == "song" and auto["auto_song"]:
-            song_wd = _auto_song_first(
-                cfg, title=title, topic=topic, minutes=minutes,
-                style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
-                queue_item_id=item.get("id") or "")["work_dir"]
+            # An item parked at the song gate already has its track rendered —
+            # draft the story from that one rather than singing a second.
+            if item.get("song_parked") and (item.get("work_dir") or "") \
+                    and Path(item["work_dir"]).is_dir():
+                song_wd = item["work_dir"]
+            else:
+                song_wd = _auto_song_first(
+                    cfg, title=title, topic=topic, minutes=minutes,
+                    style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
+                    queue_item_id=item.get("id") or "")["work_dir"]
         gen = _do_script_generate(GenerateScriptBody(
             video_title=title, topic=topic, minutes=minutes, resolution=resolution,
             style_name=style_name, format=fmt, work_dir=song_wd,
@@ -13888,7 +13894,7 @@ def _start_queue_item(item: dict) -> dict:
             style_name=gen.get("style_name", "")))
         # See above: re-link the work dir to this queue item so auto-post finds it.
         _link_queue_item_to_work_dir(item, Path(gen["work_dir"]))
-        yt.update_queue_item(item["id"], status="creating",
+        yt.update_queue_item(item["id"], status="creating", song_parked=False,
                              video_job_id=gen["job_id"], work_dir=gen["work_dir"])
         return {"job_id": gen["job_id"], "work_dir": gen["work_dir"], "title": title}
     except Exception as exc:
@@ -16085,6 +16091,20 @@ def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
     return {"work_dir": str(wd), "job_id": drafted["job_id"]}
 
 
+def _song_hold_released(q: dict, auto: dict) -> bool:
+    """Is a parked song's review hold lifted for this item?
+
+    Parking is a hold, not a state an item is stuck in for good: a style that
+    starts auto-approving its songs releases the ones already waiting on that
+    flag, and the story is then drafted from the track already on disk rather
+    than from a second one nobody asked for. A style that has since left the
+    song format behind keeps its parked items for the Song tab — song approval
+    has nothing to say about a film that is no longer a music video."""
+    return bool(q.get("song_parked") and q.get("work_dir")
+                and auto["auto_format"] == "song"
+                and auto["auto_song"] and auto["auto_song_approve"])
+
+
 def _auto_write_scripts(cfg: dict) -> int:
     """Write — but DON'T render — a script for every pending queue item that
     lacks one, leaving it unapproved so the user can review / edit / approve it
@@ -16102,12 +16122,13 @@ def _auto_write_scripts(cfg: dict) -> int:
     for q in _ordered_pending(cfg):
         if q.get("script_ready") and q.get("work_dir") and q.get("video_job_id"):
             continue  # already has a parked script
-        if q.get("song_parked"):
-            continue  # its song is waiting in the Song tab to be reviewed
         item_id = q.get("id")
         title = q.get("final_title", "")
         style_name = (q.get("gen_style_name") or "").strip()
         auto = gapp.automation_settings(cfg, style_name)
+        released = _song_hold_released(q, auto)
+        if q.get("song_parked") and not released:
+            continue  # its song is waiting in the Song tab to be reviewed
         if not auto["auto_write_scripts"]:
             continue  # this style prepares nothing unattended
         ss = gapp.style_settings(cfg, style_name)
@@ -16119,11 +16140,17 @@ def _auto_write_scripts(cfg: dict) -> int:
         try:
             if fmt == "song" and auto["auto_song"]:
                 # Music video: the song comes first and the story follows it.
-                song = _auto_song_first(
-                    cfg, title=title, topic=topic, minutes=minutes,
-                    style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
-                    queue_item_id=item_id)
-                song_wd = song["work_dir"]
+                # A released hold already has its track — carry on from that one
+                # instead of singing a second. If its folder has since been
+                # deleted there is nothing to carry on from, so it sings again.
+                if released and Path(q["work_dir"]).is_dir():
+                    song_wd = q["work_dir"]
+                else:
+                    song = _auto_song_first(
+                        cfg, title=title, topic=topic, minutes=minutes,
+                        style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
+                        queue_item_id=item_id)
+                    song_wd = song["work_dir"]
                 if not auto["auto_song_approve"]:
                     # Song review gate: stop here. Nothing — story, scenes or
                     # render — gets built on a song nobody has heard yet. The
@@ -16157,7 +16184,8 @@ def _auto_write_scripts(cfg: dict) -> int:
         # neither this nor _auto_start_best renders it until the user approves.
         yt.update_queue_item(
             item_id, video_job_id=gen["job_id"], work_dir=gen["work_dir"],
-            script_ready=True, approved=False,
+            # The song hold, if there was one, is spent: the story is written.
+            script_ready=True, approved=False, song_parked=False,
             suggested_minutes=round(minutes, 2),
             suggested_scene_count=len(gen.get("scenes") or []) or None,
             gen_style=gen.get("style", ""), gen_resolution=resolution,
@@ -16177,9 +16205,11 @@ def _auto_start_best() -> dict | None:
         auto = gapp.automation_settings(cfg, (q.get("gen_style_name") or "").strip())
         if not auto["auto_start_job"]:
             return False   # this style's films wait to be started by hand
-        if q.get("song_parked") and not q.get("script_ready"):
+        if (q.get("song_parked") and not q.get("script_ready")
+                and not _song_hold_released(q, auto)):
             # Its song is parked for review: the film waits for the song to be
-            # approved, however freely this style approves scripts.
+            # approved — by hand in the Song tab, or by the style itself
+            # switching to auto-approve — however freely it approves scripts.
             return False
         if auto["auto_approve_script"]:
             # Auto-approve on: render it end-to-end, writing the script first

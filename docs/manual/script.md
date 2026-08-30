@@ -122,7 +122,9 @@ the format does to the render.
 Every step on this tab can also run unattended — see
 [what automation makes](settings.md#what-automation-makes). With its song review gate on,
 automation writes and generates the song and then leaves it here: listen, change what you
-want, and **Draft the story →** picks the film back up in its queue slot.
+want, and **Draft the story →** picks the film back up in its queue slot. Turning that gate
+off later releases the songs still waiting on it — automation drafts each story from the
+track already made, so nothing is sung twice.
 
 ## Story
 

@@ -459,7 +459,10 @@ way round from every other film — the song comes first and the pictures follow
 - **Auto-approve songs** — off, automation stops once the song exists and parks it in the
   Song tab: no story, no scenes and no render are built on a song you haven't heard. Open
   the film's Song tab, listen, and **Draft the story** to carry it on into the normal
-  script review
+  script review. Turning it back on releases the songs already parked on it: the next
+  automation tick drafts each story from the track that is already there, without singing
+  a second one. A style that has since left the *song* format keeps its parked items —
+  those still wait for the Song tab
 
 ### YouTube automation
 

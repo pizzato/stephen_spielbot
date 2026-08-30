@@ -289,3 +289,157 @@ class SongWordBudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleasedSongHoldTests(TempConfigCase):
+    """Auto-approving songs releases the ones already parked on that flag.
+
+    Parking is a review hold, not a one-way door: the whole point of turning
+    auto-approve ON is that the songs waiting for it carry on — from the track
+    already rendered, not from a second one sung over the top of it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.updates = {}
+        self.queue = [{"id": "q1", "status": "pending", "final_title": "The Long Way Home",
+                       "video_prompt": "a drive at dusk"}]
+        self.song_dir = self.output_dir / "the-song"
+
+        def _update(item_id, **kw):
+            self.updates.setdefault(item_id, {}).update(kw)
+            for row in self.queue:
+                if row["id"] == item_id:
+                    row.update(kw)
+            return True
+
+        for name, fn in [("load_queue", lambda: [dict(q) for q in self.queue]),
+                         ("update_queue_item", _update)]:
+            p = mock.patch.object(backend.yt, name, side_effect=fn)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _run(self, cfg_extra=None):
+        self.write_config({**SONG_CFG, **(cfg_extra or {})})
+        with mock.patch.object(backend, "_auto_song_first",
+                               return_value={"work_dir": str(self.song_dir),
+                                             "job_id": "job-song"}) as first, \
+             mock.patch.object(backend, "_do_script_generate",
+                               return_value={"job_id": "job-song", "work_dir": str(self.song_dir),
+                                             "scenes": [{}, {}], "style": "", "music_desc": "",
+                                             "style_name": "Default"}) as gen:
+            written = backend._auto_write_scripts(app.load_config())
+        return written, first, gen
+
+    def _park(self):
+        self._run({"youtube_auto_song_approve": False})
+        self.assertTrue(self.queue[0]["song_parked"])
+
+    def test_turning_auto_approve_on_carries_the_parked_song_on(self):
+        self._park()
+        self.song_dir.mkdir(parents=True, exist_ok=True)
+        written, first, gen = self._run()
+        self.assertEqual(written, 1)
+        # The track that was parked, not a second one sung over it.
+        first.assert_not_called()
+        self.assertEqual(gen.call_args.args[0].work_dir, str(self.song_dir))
+        self.assertEqual(gen.call_args.args[0].format, "song")
+        self.assertTrue(self.updates["q1"]["script_ready"])
+        self.assertFalse(self.updates["q1"]["song_parked"])
+
+    def test_a_released_song_whose_folder_is_gone_is_sung_again(self):
+        # Nothing left on disk to carry on from (the folder was cleaned up):
+        # the hold still lifts, it just costs a fresh song.
+        self._park()
+        written, first, _ = self._run()
+        self.assertEqual(written, 1)
+        first.assert_called_once()
+
+    def test_a_style_that_left_the_song_format_keeps_its_parked_items(self):
+        # Song approval has nothing to say about a film that is no longer a
+        # music video — that one waits for the Song tab.
+        self._park()
+        self.song_dir.mkdir(parents=True, exist_ok=True)
+        written, first, gen = self._run({"youtube_auto_format": "narration"})
+        self.assertEqual(written, 0)
+        first.assert_not_called()
+        gen.assert_not_called()
+
+    def test_the_hold_still_holds_while_songs_are_reviewed(self):
+        self._park()
+        self.song_dir.mkdir(parents=True, exist_ok=True)
+        written, first, gen = self._run({"youtube_auto_song_approve": False})
+        self.assertEqual(written, 0)
+        first.assert_not_called()
+        gen.assert_not_called()
+
+
+class ReleasedSongStartTests(TempConfigCase):
+    """_auto_start_best on an item whose song hold has been lifted."""
+
+    def _start(self, queue, cfg_extra=None):
+        self.write_config({**SONG_CFG, "youtube_auto_start_job": True,
+                           "youtube_auto_approve_script": True, **(cfg_extra or {})})
+        with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
+             mock.patch.object(backend.yt, "load_queue", return_value=queue), \
+             mock.patch.object(backend.gapp, "_auto_pick_suggestion", return_value=None), \
+             mock.patch.object(backend, "_start_queue_item",
+                               side_effect=lambda item: {"id": item["id"]}):
+            return backend._auto_start_best()
+
+    def _parked(self):
+        return {"id": "q1", "status": "pending", "final_title": "Parked",
+                "song_parked": True, "work_dir": str(self.output_dir / "the-song"),
+                "video_job_id": "job-q1"}
+
+    def test_auto_approving_songs_starts_a_parked_item(self):
+        self.assertEqual(self._start([self._parked()]), {"id": "q1"})
+
+    def test_it_still_waits_while_songs_are_reviewed(self):
+        self.assertIsNone(
+            self._start([self._parked()], {"youtube_auto_song_approve": False}))
+
+
+class ParkedSongRenderTests(TempConfigCase):
+    """_start_queue_item: a parked item renders from the track it already has."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config(SONG_CFG)
+        self.song_dir = self.output_dir / "the-song"
+        self.song_dir.mkdir()
+        self.updates = {}
+        for name, fn in [
+                ("load_queue", lambda: [{"id": "q1", "status": "pending"}]),
+                ("update_queue_item",
+                 lambda qid, **kw: bool(self.updates.setdefault(qid, {}).update(kw)) or True)]:
+            p = mock.patch.object(backend.yt, name, side_effect=fn)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _render(self, item):
+        with mock.patch.object(
+                backend, "_auto_song_first",
+                return_value={"work_dir": str(self.output_dir / "a-second-song"),
+                              "job_id": "job-2"}) as first, \
+             mock.patch.object(backend, "_do_script_generate",
+                               return_value={"job_id": "job-song", "work_dir": str(self.song_dir),
+                                             "scenes": [{}], "style": "", "music_desc": "",
+                                             "style_name": "Default"}) as gen, \
+             mock.patch.object(backend, "start_generation", return_value={}), \
+             mock.patch.object(backend, "_link_queue_item_to_work_dir"):
+            backend._start_queue_item(item)
+        return first, gen
+
+    def test_the_parked_track_is_used_instead_of_a_second_one(self):
+        first, gen = self._render({"id": "q1", "final_title": "Parked", "song_parked": True,
+                                   "work_dir": str(self.song_dir), "video_job_id": "job-song"})
+        first.assert_not_called()
+        self.assertEqual(gen.call_args.args[0].work_dir, str(self.song_dir))
+        self.assertFalse(self.updates["q1"]["song_parked"])
+
+    def test_an_item_with_no_song_yet_still_gets_one(self):
+        first, gen = self._render({"id": "q1", "final_title": "Fresh"})
+        first.assert_called_once()
+        self.assertEqual(gen.call_args.args[0].work_dir,
+                         str(self.output_dir / "a-second-song"))
