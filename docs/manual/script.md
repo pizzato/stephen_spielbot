@@ -57,20 +57,24 @@ the format does to the render.
   drafted from. Give the direction here rather than in a *tell it how* instruction:
   the instruction steers one re-write and is then forgotten.
 - **Sound** — what the music model is told about the song (genre, tempo, mood,
-  arrangement). The film's vocalist — the lead singer cast from the style's character
-  catalogue at draft time (see [Singing films](../performance_films.md#singing-films-the-music-video-format)),
-  or the songwriter's own vocalist line — is described on top of this when the track is
-  sung, so leave the vocalist out.
+  arrangement). The Vocalist below is appended to this automatically when the track is
+  sung, so leave the vocalist out of the Sound itself.
+- **Vocalist** — WHO sings, in one editable line: sex, age, background, voice quality
+  (e.g. *"adult male vocalist, Australian"*). Filled at draft time from the lead singer
+  cast out of the style's character catalogue (the hint names the character), or by the
+  songwriter itself when the style has no usable cast (see
+  [Singing films](../performance_films.md#singing-films-the-music-video-format)). Edit it
+  and generate again to change who sings.
 - **Lyrics** — sung exactly as written, section tags (`[Verse]`, `[Chorus]`, …) on their
   own lines.
-- Both boxes have a **Re-generate** button with a *tell it how* caret: re-writing the
-  lyrics keeps the sound you have (and writes to it), re-writing the sound describes the
-  music for the lyrics you have. Either way both halves are saved, unsaved edits included.
-- **Singing voice** — the library voice the song is sung in. At generation it only
-  *describes* the vocalist to the music model (gender, age, tone — the engines cannot be
-  handed a voice); left on *the model's own vocalist* the film's cast lead singer
-  decides (their sex, age and background — the vocalist line stored with the song). It
-  is also the target of the re-voicing below, which is an actual clone.
+- The Sound and Lyrics boxes have a **Re-generate** button with a *tell it how* caret:
+  re-writing the lyrics keeps the sound you have (and writes to it, in the Vocalist's
+  voice), re-writing the sound describes the music for the lyrics you have. Either way
+  everything is saved, unsaved edits included.
+- **Singing voice** — a library voice whose casting metadata (gender, age, tone)
+  *replaces* the Vocalist description at generation (the engines cannot be handed a
+  voice — either way the vocalist is only described). It is also the target of the
+  re-voicing below, which is an actual clone.
 - **Save edits** keeps your typing (**Discard edits** throws it away); **Generate the
   song** renders the track on a worker, and **Sing this as [voice]** re-voices it with
   seed-vc — always converting the sung

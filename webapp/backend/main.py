@@ -3354,6 +3354,9 @@ class SongGenerateBody(BaseModel):
     caption: str = ""
     lyrics: str = ""
     voice: str = ""
+    # The vocalist line as the studio shows it — saved before the render so an
+    # unsaved edit is what the track is sung as. None = keep the stored one.
+    vocalist: str | None = None
     # "Re-generate X seconds longer": added to the song's current length before
     # it is sung again, so the model has room to land an ending it was cutting
     # off. 0 = generate at the length it already has.
@@ -3478,6 +3481,8 @@ def song_generate(body: SongGenerateBody) -> dict:
         data["caption"] = body.caption.strip()
     if body.voice is not None:
         data["voice"] = (body.voice or "").strip()
+    if body.vocalist is not None:
+        data["vocalist"] = body.vocalist.strip()
     add = float(body.add_seconds or 0)
     if add and not (0.5 <= add <= _MAX_SONG_EXTEND):
         raise HTTPException(400, f"Extend by between 0.5 and {int(_MAX_SONG_EXTEND)} seconds.")
@@ -3696,6 +3701,12 @@ def get_job_song(job_id: str) -> dict:
             # The film's direction — editable in the studio because a song is
             # often steered long after Create, and a re-write needs it.
             "direction": _brief_direction(wd, data),
+            # WHO sings: the vocalist line appended to the caption when the
+            # track is generated, and the catalogue character it was cast
+            # from. Surfaced so the studio can show and edit it — appended
+            # silently, it looked like the model was picking its own singer.
+            "vocalist": str(data.get("vocalist") or ""),
+            "singer": str(data.get("singer") or ""),
             "voice": str(data.get("voice") or ""),
             "sung_as": str(data.get("sung_as") or ""),
             # The generated track's real length (else the asked-for length) —
@@ -3777,20 +3788,28 @@ def delete_song_version(job_id: str, body: dict) -> dict:
 class SongUpdateBody(BaseModel):
     caption: str = ""
     lyrics: str = ""
+    # The vocalist line (sex, age, background, voice quality) appended to the
+    # caption when the track is sung. None = leave it alone (an older client
+    # that doesn't send the field must not clear it).
+    vocalist: str | None = None
     # The film's direction, saved into the create brief. None = leave it alone
     # (an older client that doesn't send the field must not clear it).
     direction: str | None = None
 
 
-def _save_song_text(wd: Path, caption: str, lyrics: str) -> dict:
+def _save_song_text(wd: Path, caption: str, lyrics: str,
+                    vocalist: str | None = None) -> dict:
     """Write the song's words and sound into song.json (and the job_config
-    mirror a rendered film re-sings from). Returns the saved song.json."""
+    mirror a rendered film re-sings from). *vocalist* None leaves the stored
+    line untouched. Returns the saved song.json."""
     path = wd / "song.json"
     try:
         data = json.loads(path.read_text())
     except Exception:
         data = {}
     data.update({"caption": caption, "lyrics": lyrics, "updated_at": time.time()})
+    if vocalist is not None:
+        data["vocalist"] = vocalist.strip()
     path.write_text(json.dumps(data, indent=2))
     # A film that already rendered stamped the song into job_config.json for
     # the Remix regen — keep that mirror fresh so a re-sing uses the edit.
@@ -3816,8 +3835,10 @@ def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
     if not (body.lyrics or "").strip():
         raise HTTPException(400, "The lyrics can't be empty — the song is the film's audio.")
     _save_brief_direction(wd, body.direction)
-    data = _save_song_text(wd, (body.caption or "").strip(), body.lyrics.strip())
+    data = _save_song_text(wd, (body.caption or "").strip(), body.lyrics.strip(),
+                           vocalist=body.vocalist)
     return {"ok": True, "caption": data["caption"], "lyrics": data["lyrics"],
+            "vocalist": str(data.get("vocalist") or ""),
             "direction": _brief_direction(wd, data)}
 
 
@@ -3830,6 +3851,9 @@ class SongRegenBody(BaseModel):
     # brief BEFORE the re-write, so it both steers this one and survives for
     # the next (and for the Brief button). None = leave the brief alone.
     direction: str | None = None
+    # The vocalist line as the studio shows it — an unsaved edit steers the
+    # re-write and is saved with it. None = keep what song.json has.
+    vocalist: str | None = None
 
 
 @api.post("/api/jobs/{job_id}/song/regenerate")
@@ -3851,6 +3875,8 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
         raise HTTPException(500, "song.json is unreadable.")
     caption = (body.caption or data.get("caption") or "").strip()
     lyrics = (body.lyrics or data.get("lyrics") or "").strip()
+    vocalist = (body.vocalist if body.vocalist is not None
+                else str(data.get("vocalist") or "")).strip()
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, data.get("style_name") or "")
     _save_brief_direction(wd, body.direction)
@@ -3874,7 +3900,7 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
                     # The sound the user kept is the direction the new words
                     # are written to (its own caption is discarded).
                     music_hint=caption,
-                    singer_note=(data.get("vocalist") or "").strip(),
+                    singer_note=vocalist,
                     instruction=body.instruction or "")
         except Exception as e:
             raise HTTPException(503, f"Lyric re-write failed: {str(e).splitlines()[0][:200]}")
@@ -3899,9 +3925,10 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
         except Exception as e:
             raise HTTPException(503, f"Sound re-write failed: {str(e).splitlines()[0][:200]}")
 
-    saved = _save_song_text(wd, caption, lyrics)
+    saved = _save_song_text(wd, caption, lyrics, vocalist=vocalist)
     return {"ok": True, "field": body.field,
             "caption": saved["caption"], "lyrics": saved["lyrics"],
+            "vocalist": str(saved.get("vocalist") or ""),
             "direction": _brief_direction(wd, saved)}
 
 

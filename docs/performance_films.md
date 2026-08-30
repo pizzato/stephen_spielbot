@@ -117,7 +117,7 @@ pipeline changes in three places:
   wins, otherwise one is drawn at random so a channel's videos rotate through its cast —
   and their identity (sex, age, **background** — the character card's fields, plus their
   library voice's tone and accent) becomes the song's **vocalist** line, stored in
-  `song.json`. That one line is enforced everywhere it matters: it is appended to the
+  `song.json` and shown as the Song tab's editable **Vocalist** field. That one line is enforced everywhere it matters: it is appended to the
   caption when the track is sung, so the voice on the track matches; the lyrics are
   written in that singer's voice; and the story and divide prompts cast that character
   by name as the one performer in every singing scene, so the person shown singing is
