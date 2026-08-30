@@ -1,0 +1,24 @@
+# ComfyUI node classes the worker image must provide, one per line, with the
+# custom-node pack that installs it after '#'. Every entry is used by a workflow
+# in workflows/ — a worker missing one fails the render that needs it with
+# "the node 'X' is not installed on this worker".
+#
+# Checked against each worker's /object_info by scripts/check_worker_nodes.sh
+# after install and after start, so a stale or half-built image is caught while
+# you are at the keyboard instead of minutes into a render. This catches what a
+# build cannot: a pack that clones fine but fails to import at runtime (upstream
+# dependency drift — see the kornia patch in this directory's Dockerfile).
+#
+# Every pack listed here is installed by default. If you deliberately build a
+# worker without one (H3_MOTION_CONTEXT_REF / H3_LATENT_UPSCALER_REF /
+# FLASHVSR_NODES_REF set empty), drop its lines here too.
+
+VHS_LoadVideoFFmpeg              # ComfyUI-VideoHelperSuite
+VHS_VideoCombine                 # ComfyUI-VideoHelperSuite
+LTXICLoRALoaderModelOnly         # ComfyUI-LTXVideo (IC-LoRA spatial upscaler)
+MiniMaxH3TurboLoRA               # ComfyUI-MiniMax-H3-Turbo
+MiniMaxH3MotionContext           # ComfyUI-H3-Motion-Context (chained scenes)
+MiniMaxH3AudioTrack              # docker/comfyui/h3_audio_track (singing films)
+MinimaxH3LatentUpscalerNode3D    # Comfyui_Minimax_h3_latent_Upscaler
+FlashVSRNode                     # ComfyUI-FlashVSR_Ultra_Fast (default upscaler)
+AudioLatentExtendMask            # docker/comfyui/ace_audio_extend (song extend)

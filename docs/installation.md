@@ -54,7 +54,8 @@ arguments and it prompts once. An existing `config.yaml` is never overwritten.
 1. Creates `.venv` and installs the Python requirements
 2. Seeds `~/.config/video-generator/config.yaml` with your worker list (first run only)
 3. Downloads the [models](models.md) (~90 GB) and the 10-voice LibriVox character voice library
-4. Builds and deploys the [worker containers](cluster.md) over SSH, and points the config at them
+4. Builds and deploys the [worker containers](cluster.md) over SSH, verifies each one
+   registers the ComfyUI nodes the workflows need, and points the config at them
 5. Installs the web backend deps and builds the React frontend
 
 The macOS login service (a LaunchAgent that keeps the app running) is opt-in — the
@@ -72,6 +73,11 @@ make logs W=s2  # tail one worker's container logs
 
 `start`, `stop`, `restart`, `status`, and `logs` all accept `W=<host>` to target a single
 worker. `make restart-server` restarts only the web app and leaves the workers running.
+
+`make start` also keeps the workers in step with the repo: a host whose image predates a
+change to `docker/` is rebuilt before the app starts, and every worker is checked for the
+ComfyUI nodes the workflows need. See
+[workers stay in step with the repo](cluster.md#workers-stay-in-step-with-the-repo).
 
 !!! note "Frontend changes need a rebuild"
     The backend serves the *built* SPA. After changing frontend code run `make web-build`
