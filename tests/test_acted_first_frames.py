@@ -90,6 +90,36 @@ class OpeningFrameTests(unittest.TestCase):
         self.assertTrue(str(got).endswith("scene_03_preview.png"))
         self.assertEqual(made, [])   # nothing regenerated
 
+    def test_the_cast_is_anchored_to_their_reference_portraits(self):
+        """The painted frame binds each named character to their portrait —
+        the same anchoring the Create screen and the film editor use. Without
+        it this painter invents a face and the take opens on a stranger."""
+        import app
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            saved = app._write_script_characters(
+                wd, [{"name": "Ana", "description": "a woman with green eyes"}])
+            cid = saved[0]["id"]
+            d = app._script_characters_dir(wd)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{cid}.png").write_bytes(b"png")
+            saved[0]["ref_image"] = f"{cid}.png"
+            app._write_script_characters(wd, saved)
+            seen = {}
+
+            def _fake_gen(engine, prompt, out, **kw):
+                Path(out).write_bytes(b"png")
+                seen.update(prompt=prompt, refs=kw.get("reference_images"))
+                return out
+
+            with unittest.mock.patch.object(rg, "generate_with_engine", _fake_gen):
+                rg.ensure_opening_frame(_dialogue(image_prompt="Ana waits."), wd, ON,
+                                        comfy_url="http://x",
+                                        vid_width=512, vid_height=256)
+        self.assertEqual([Path(p).name for p in seen["refs"]], [f"{cid}.png"])
+        self.assertIn("green eyes", seen["prompt"])
+
     def test_a_location_reference_still_stops_the_paint(self):
         import resume_generation as rg
         with tempfile.TemporaryDirectory() as td:

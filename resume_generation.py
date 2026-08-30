@@ -446,10 +446,18 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
                     "take opens on its references alone", scene.id)
         return None
     engine = _engines.resolve(cfg, cfg.get("image_engine"))
+    # Anchor every character named in the frame to their reference portrait —
+    # the same binding the Create-screen preview and the film editor's image
+    # re-render use. Without it this painter alone invents a face, and the
+    # scene opens on a stranger who then rides into the take as its "frame".
+    from app import _characters_prompt_and_refs
+    prompt, reference_images = _characters_prompt_and_refs(
+        prompt, {}, cfg, style_name, work_dir, engine=engine)
     out = work_dir / f"scene_{scene.id:02d}_first_frame.png"
     logger.info("Scene %d: opening frame for the silent take (%s) on %s",
                 scene.id, engine.get("key"), comfy_url)
     generate_with_engine(engine, prompt, out, width=vid_width, height=vid_height,
+                         reference_images=reference_images or None,
                          comfy_url=comfy_url)
     return out
 
