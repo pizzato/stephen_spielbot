@@ -355,13 +355,30 @@ finishing upscale automatically (the style's **Finishing upscaler** picks the mo
 Measured on a GB10: the H3 latent upscaler reached 4096×4096 from a 1024×1024 source
 in ~13 min for a 6 s clip.
 
-The Edit film screen's final-video upscale has five modes; **FlashVSR** is the default:
+### Factors, not targets
+
+FlashVSR's node and the LTX latent upsampler only produce **whole-number factors**.
+Those modes are therefore named by their factor and the film finishes at exactly the
+source times that factor — you pick **FlashVSR 2×**, not a resolution. Ask an engine
+like that for an arbitrary size and only part of the result is the upscaler: reaching
+576×576 → 1440×1440 meant running FlashVSR at 2× to 1152×1152 and then stretching the
+last 25% with Lanczos, which visibly softened what the model had just sharpened.
+
+`Fast`, `LTX IC-LoRA` and `H3 latent` still take a target resolution, because each can
+land on one — H3's node takes a continuous 1.1–4.0 factor, and `Fast` *is* a resample.
+
+For a **render** aimed at QHD/4K, a factor mode uses the requested size only to decide
+*that* a finishing pass runs; the film ends up at the render size × the factor, and the
+size it actually reached is recorded so later rebuilds restore that rather than
+stretching to the nominal target. Settings shows the resulting size under the picker.
+
+The Edit film screen's final-video upscale has six modes; **FlashVSR 2×** is the default:
 
 | Mode | What it does |
 |---|---|
-| **FlashVSR** | [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) v1.1 — one-step diffusion *video* super-resolution (Wan2.1-based, Apache-2.0), run in its `tiny` streaming mode through [ComfyUI-FlashVSR_Ultra_Fast](https://github.com/lihaoyun6/ComfyUI-FlashVSR_Ultra_Fast). A true pixel upscaler, not a latent resize: it recovers texture (stone, foliage, signage) without the latent modes' artefacts, keeps colour, and returns exactly the source frame count. Runs at **2×** unless the target needs more than 2.5× the source, then **4×**; the remainder is a plain resample. On a GB10 a 5 s 1280×704 scene takes ~4 min at 2×; big outputs (above ~1 G output pixel-frames — long clips, or 4×) go through the node's tiling and take several times longer, and an untiled run that still exhausts the worker is retried tiled |
+| **FlashVSR 2× / 4×** | [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) v1.1 — one-step diffusion *video* super-resolution (Wan2.1-based, Apache-2.0), run in its `tiny` streaming mode through [ComfyUI-FlashVSR_Ultra_Fast](https://github.com/lihaoyun6/ComfyUI-FlashVSR_Ultra_Fast). A true pixel upscaler, not a latent resize: it recovers texture (stone, foliage, signage) without the latent modes' artefacts, keeps colour, and returns exactly the source frame count. On a GB10 a 5 s 1280×704 scene takes ~4 min at 2×; 4× costs roughly ten times that, because big outputs (above ~1 G output pixel-frames — long clips, or any 4×) go through the node's tiling. An untiled run that still exhausts the worker is retried tiled |
 | **Fast** | Plain ffmpeg scale |
-| **LTX latent** | Simple model path: `LTXVLatentUpsampler` + `ltx-2.3-spatial-upscaler-x2-1.1` |
+| **LTX latent 2×** | Simple model path: `LTXVLatentUpsampler` + `ltx-2.3-spatial-upscaler-x2-1.1`. 2× is the only factor it has |
 | **LTX IC-LoRA** | Generative [Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler) (2×/4× IC-LoRA via ComfyUI-LTXVideo) |
 | **H3 latent** | Encodes with MiniMax H3's video VAE, resizes the 24-channel latent with the [H3 latent upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler), decodes (any factor up to 4×). ~2 min per 5 s scene on a GB10. H3's VAE pads clips to its 17k+5 latent grid, so the decode is trimmed back to the source length — otherwise every scene would run long and desync the captions |
 

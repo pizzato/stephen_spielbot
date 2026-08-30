@@ -15,6 +15,7 @@ import json
 import logging
 import logging.handlers
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -199,9 +200,12 @@ DEFAULT_CFG = {
     "ambient_vol": 0,
     "resolution": _DEFAULT_RESOLUTION,
     # Upscaler that finishes a render whose target is an upscale-only size
-    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode ("flashvsr", "ltx_latent",
-    # "ic_lora", "h3_latent" — see pipeline/assembler.temporal_ai_upscale_video).
-    "default_finish_upscale_mode": "flashvsr",
+    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode. "flashvsr_2x",
+    # "flashvsr_4x" and "ltx_latent_2x" finish at the render size times their
+    # factor — those engines only do whole factors, so the requested target
+    # says only THAT a finishing pass runs. "ic_lora" and "h3_latent" land on
+    # the target itself. See pipeline/assembler.temporal_ai_upscale_video.
+    "default_finish_upscale_mode": "flashvsr_2x",
     "max_clip_secs": 0,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;
@@ -777,13 +781,17 @@ def _norm_characters(value) -> list[dict]:
             # the library-voice auto-pick; "" ⟹ unconstrained.
             "gender": str(raw.get("gender") or "").strip().lower(),
             "age": str(raw.get("age") or "").strip().lower(),
+            # Cultural background — nationality, language, accent ("Brazilian,
+            # sings in Portuguese"). Rides into a song film's vocalist
+            # description so the sung voice matches the person on camera.
+            "background": str(raw.get("background") or "").strip(),
         })
     return out
 
 
 _FEMALE_CUES = ("woman", "female", "she ", "her ", "girl", "lady", "queen", "mrs", "miss", "mother", "sister")
 _MALE_CUES = ("man", "male", "he ", "his ", "boy", "gentleman", "king", "mr ", "mr.", "father", "brother", "sir ")
-_AGE_NEIGHBORS = {"young": "adult", "adult": "mature", "mature": "adult", "elderly": "mature"}
+_AGE_NEIGHBORS = {"child": "young", "young": "adult", "adult": "mature", "mature": "adult", "elderly": "mature"}
 
 
 def _guess_gender(char: dict) -> str:
@@ -4110,6 +4118,60 @@ def voice_descriptor(voice: dict | None) -> str:
         bits.append(f"{voice['accent'].strip()} accent")
     note = ", ".join(b for b in bits if b)
     return "" if note == "vocalist" else note
+
+
+def singer_descriptor(char: dict | None, cfg: dict | None = None) -> str:
+    """A catalogue character as a vocalist description — "young female
+    vocalist, Brazilian, warm smoky voice, Irish accent".
+
+    The identity half (sex, age, background) comes from the CHARACTER — its
+    gender/age casting hints (else a cue-word guess from the description) and
+    its background field — so the sung voice matches the person the film shows
+    singing. The voice-quality half (tone/accent) is borrowed from the
+    character's library voice when one is set. Empty when nothing identifying
+    is known."""
+    if not char:
+        return ""
+    gender = _guess_gender(char)
+    age = str(char.get("age") or "").strip().lower()
+    if age not in _AGE_NEIGHBORS:
+        age = ""
+    bits = [" ".join(x for x in (age, gender, "vocalist") if x).strip()]
+    if (char.get("background") or "").strip():
+        bits.append(char["background"].strip())
+    voice = None
+    if cfg is not None and (char.get("voice") or "").strip():
+        voice = next((v for v in (cfg.get("voices") or [])
+                      if isinstance(v, dict) and v.get("name") == char["voice"].strip()), None)
+    if voice:
+        if (voice.get("tone") or "").strip():
+            bits.append(f"{voice['tone'].strip().lower()} voice")
+        if (voice.get("accent") or "").strip():
+            bits.append(f"{voice['accent'].strip()} accent")
+    note = ", ".join(b for b in bits if b)
+    return "" if note == "vocalist" else note
+
+
+def pick_song_singer(cfg: dict, style_name: str, *texts: str | None) -> dict | None:
+    """The catalogue character who fronts a song film — its LEAD SINGER.
+
+    A character the brief NAMES (topic, title, style instructions) wins, in
+    catalogue order — asking for "a song about Ada" casts Ada. Otherwise one is
+    drawn at random from the style's enabled, described characters, so a
+    channel's videos rotate through its cast rather than always fronting the
+    same face. None when the style has no usable catalogue character — the
+    song then defines its own vocalist."""
+    usable = [c for c in _style_characters(cfg, style_name)
+              if c.get("enabled", True) and (c.get("name") or "").strip()
+              and (c.get("description") or "").strip()]
+    if not usable:
+        return None
+    blob = "\n".join(t for t in texts if (t or "").strip())
+    if blob.strip():
+        for c in usable:
+            if _character_mentions(blob, c):
+                return c
+    return random.choice(usable)
 
 
 def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,

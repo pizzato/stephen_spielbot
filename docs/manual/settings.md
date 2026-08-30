@@ -296,9 +296,12 @@ top — **Global** first, then the style hierarchy, each pill counting the chara
 live there — and clicking a pill lists that home's characters. **Global characters** are
 inherited by every style automatically; a character that **belongs to a style** is used
 only by that style and the styles under it — so a parent style's cast flows to all its
-children. Each card has **name**, **also known as**, **appearance**, **voice**, an
-enabled switch, and a **Belongs to** picker to move it between the global pool and any
-style. Reference images stay visible while you edit; uploading, portrait rolls, and
+children. Each card has **name**, **also known as**, **appearance**, **sex**, **age**,
+**background** (nationality, language, accent — free text), **voice**, an enabled
+switch, and a **Belongs to** picker to move it between the global pool and any style.
+Sex and age drive the library-voice auto-cast; together with background they also define
+the character's vocalist identity when a music video casts them as its lead singer (see
+[Singing films](../performance_films.md#singing-films-the-music-video-format)). Reference images stay visible while you edit; uploading, portrait rolls, and
 version picks apply after **Save settings**. Generated portraits use the owning style's
 image model and visual look (global characters use the default style's). Films inherit
 their style's cast and can add film-specific characters of their own.
@@ -446,7 +449,10 @@ way round from every other film — the song comes first and the pictures follow
   clock, singability, hook, subject) before the track is rendered. A pass is one LLM call;
   a bad song caught after the render costs a worker slot
 - **Singing voice** — the [voice](#voices) automation asks for, described to the music
-  model by gender, age and tone. Left on *the model's own vocalist*, the song decides
+  model by gender, age and tone. Left on *the model's own vocalist*, the film's cast
+  lead singer decides — the character drawn from the style's
+  [catalogue](../characters.md) whose sex, age and background the track is sung to
+  match (a style with no catalogue lets the songwriter define the vocalist)
 - **Re-voice the finished track as that voice** — runs the voice conversion on the
   controller, as the Song tab's *Sing this as…* does. The sung original is kept as a
   version either way, so you can put it back

@@ -842,7 +842,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [locSaveBusy, setLocSaveBusy] = useState(false)
   const [locAudioBusy, setLocAudioBusy] = useState('')
   const [upscaleResolution, setUpscaleResolution] = useState('')
-  const [upscaleMode, setUpscaleMode] = useState('flashvsr')
+  const [upscaleMode, setUpscaleMode] = useState('flashvsr_2x')
   // Re-render the same script at another resolution (a separate film, not a
   // version of this one) — see the "Render at another size" card.
   const [reRenderResolution, setReRenderResolution] = useState('')
@@ -965,6 +965,24 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const upscaleOptions = (meta?.upscale_resolutions || meta?.resolutions || [])
     .filter((r) => String(r || '').startsWith(`${orientation} `) || String(r || '').startsWith(`${orientation} (`))
     .filter((r) => resPixels(r) > currentPixels)
+  // FlashVSR and the LTX latent upsampler only do whole-number factors, so
+  // those modes are named by their factor and the final size follows from the
+  // film — picking a size they cannot reach is what used to leave the rest of
+  // the way to be covered by a plain resample.
+  const UPSCALE_FACTORS = { flashvsr_2x: 2, flashvsr_4x: 4, ltx_latent_2x: 2 }
+  const upscaleFactor = UPSCALE_FACTORS[upscaleMode] || null
+  const filmDims = videoDims || (() => {
+    const m = /\((\d+)[×x](\d+)\)/.exec(currentResolution || '')
+    return m ? { w: +m[1], h: +m[2] } : null
+  })()
+  const factorDims = (upscaleFactor && filmDims)
+    ? {
+      w: Math.floor(filmDims.w * upscaleFactor / 2) * 2,
+      h: Math.floor(filmDims.h * upscaleFactor / 2) * 2,
+    }
+    : null
+  const factorSizeLabel = factorDims ? `${factorDims.w} × ${factorDims.h}` : ''
+  const canUpscale = upscaleFactor ? !!factorDims : !!upscaleResolution
 
   useEffect(() => {
     if (!upscaleOptions.length) {
@@ -1162,7 +1180,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     try {
       const { task_id } = await api.upscaleRemixVideo({
         work_dir: data.work_dir,
-        target_resolution: upscaleResolution,
+        // A factor mode sizes itself off the film; there is no target to send.
+        target_resolution: upscaleFactor ? '' : upscaleResolution,
         upscale_mode: upscaleMode,
       })
       await new Promise((resolve, reject) => {
@@ -1171,7 +1190,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             const t = await api.filmTaskStatus(task_id)
             if (t.status === 'done') {
               clearInterval(poll)
-              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url, resolution: upscaleResolution }))
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url, resolution: upscaleFactor ? factorSizeLabel : upscaleResolution }))
               if (t.video_history) setVideoHistory(t.video_history)
               setStatus('Created an upscaled final-video version.')
               resolve()
@@ -1972,10 +1991,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
             Upscale the finished film and keep it as a selectable final version.
             <strong> FlashVSR</strong> is the default: real video super-resolution with{' '}
-            <a href="https://github.com/OpenImagingLab/FlashVSR" target="_blank" rel="noreferrer">FlashVSR</a>{' '}
-            (2× normally, 4× when the target needs it).
+            <a href="https://github.com/OpenImagingLab/FlashVSR" target="_blank" rel="noreferrer">FlashVSR</a>.
+            It does whole 2× and 4× only, so you pick the factor and the film ends up at
+            exactly that multiple — 4× costs around ten times what 2× does.
             <strong> Fast</strong> is plain ffmpeg.
-            <strong> LTX latent</strong> is the simple model upscaler (latent 2×).
+            <strong> LTX latent</strong> is the simple model upscaler, 2× and nothing else.
             <strong> LTX IC-LoRA</strong> is the generative{' '}
             <a href="https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler" target="_blank" rel="noreferrer">Pixel Spatial Upscaler</a>.
             <strong> H3 latent</strong> resizes inside MiniMax H3's latent space with the{' '}
@@ -1983,28 +2003,39 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             (any factor up to 4×) — best suited to films rendered on H3.
           </p>
           <div className="stack gap-14 mt-24">
-            <Field label="Target resolution">
-              <select className="select" value={upscaleResolution} disabled={anyBusy || upscaleOptions.length === 0}
-                onChange={(e) => setUpscaleResolution(e.target.value)}>
-                {upscaleOptions.length === 0
-                  ? <option value="">No larger target</option>
-                  : upscaleOptions.map((r) => <option key={r} value={r}>{r.replace(`${orientation} `, '')}</option>)}
-              </select>
-            </Field>
             <Field label="Mode">
-              <select className="select" value={upscaleMode} disabled={anyBusy || !upscaleResolution}
+              <select className="select" value={upscaleMode} disabled={anyBusy}
                 onChange={(e) => setUpscaleMode(e.target.value)}>
-                <option value="flashvsr">FlashVSR (video super-resolution)</option>
+                <option value="flashvsr_2x">FlashVSR 2× (video super-resolution)</option>
+                <option value="flashvsr_4x">FlashVSR 4× (video super-resolution, slow)</option>
                 <option value="fast">Fast (ffmpeg)</option>
-                <option value="ltx_latent">LTX latent (simple model)</option>
+                <option value="ltx_latent_2x">LTX latent 2× (simple model)</option>
                 <option value="ic_lora">LTX IC-LoRA (generative)</option>
                 <option value="h3_latent">H3 latent (MiniMax H3)</option>
               </select>
             </Field>
+            {upscaleFactor ? (
+              <Field label="Final size" hint="The factor decides this — nothing is resampled to reach a different number.">
+                <div className="input" style={{ display: 'flex', alignItems: 'center', opacity: 0.85 }}>
+                  {factorDims
+                    ? `${factorSizeLabel}${filmDims ? `  (from ${filmDims.w} × ${filmDims.h})` : ''}`
+                    : 'Measuring the film…'}
+                </div>
+              </Field>
+            ) : (
+              <Field label="Target resolution">
+                <select className="select" value={upscaleResolution} disabled={anyBusy || upscaleOptions.length === 0}
+                  onChange={(e) => setUpscaleResolution(e.target.value)}>
+                  {upscaleOptions.length === 0
+                    ? <option value="">No larger target</option>
+                    : upscaleOptions.map((r) => <option key={r} value={r}>{r.replace(`${orientation} `, '')}</option>)}
+                </select>
+              </Field>
+            )}
           </div>
           <div className="mt-24">
             <Button variant="primary" block icon="up-right-and-down-left-from-center"
-              disabled={anyBusy || !upscaleResolution}
+              disabled={anyBusy || !canUpscale}
               onClick={upscaleVideo}>
               {upscaleBusy ? 'Upscaling…' : 'Upscale film'}
             </Button>

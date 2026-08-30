@@ -94,8 +94,8 @@ function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
 
   return (
     <div className="stack gap-8" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-      <div className="row gap-8" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
-        <span className="label-sm">Turnaround sheet</span>
+      <div className="stack gap-2">
+        <span className="label-sm" style={{ whiteSpace: 'nowrap' }}>Turnaround sheet</span>
         {sheet.status === 'ready' && <span className="muted" style={{ fontSize: 11 }}>
           {sheet.engine === 'orbit' ? 'From a camera orbit' : 'From the image model'}
         </span>}
@@ -2767,16 +2767,33 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   .some((r) => r && upscaleOnly(resolutionTier(meta, r)))
                 if (!anyFinishing) return null
                 return (
-                  <Field label="Finishing upscaler" hint="How a QHD/4K target is reached from the rendered film. AI modes shoot each scene through a ComfyUI upscaler; Fast is a plain resample.">
-                    <select className="select" value={eff.finish_upscale_mode || 'flashvsr'}
+                  <Field label="Finishing upscaler" hint="How a QHD/4K target is reached from the rendered film. AI modes shoot each scene through a ComfyUI upscaler; Fast is a plain resample. The ×-factor modes finish at the render size times their factor rather than at the target — those upscalers only do whole factors, and stretching them the rest of the way undoes part of the upscale.">
+                    <select className="select" value={eff.finish_upscale_mode || 'flashvsr_2x'}
                       onChange={(e) => setStyleField('finish_upscale_mode', e.target.value)}>
-                      <option value="flashvsr">FlashVSR (video super-resolution)</option>
+                      <option value="flashvsr_2x">FlashVSR 2× (video super-resolution)</option>
+                      <option value="flashvsr_4x">FlashVSR 4× (video super-resolution, slow)</option>
                       <option value="fast">Fast (ffmpeg)</option>
-                      <option value="ltx_latent">LTX latent (simple model)</option>
+                      <option value="ltx_latent_2x">LTX latent 2× (simple model)</option>
                       <option value="ic_lora">LTX IC-LoRA (generative)</option>
                       <option value="h3_latent">H3 latent (MiniMax H3)</option>
                     </select>
                     <ParentVal k="finish_upscale_mode" />
+                    {(() => {
+                      const f = { flashvsr_2x: 2, flashvsr_4x: 4, ltx_latent_2x: 2 }[eff.finish_upscale_mode]
+                      if (!f) return null
+                      const m = /\((\d+)[×x](\d+)\)/.exec(eff.resolution || '')
+                      if (!m) return null
+                      // The render tier behind a QHD/4K target, not the target.
+                      const tier = (meta.pixel_tiers || []).find((t) => t.key === resolutionTier(meta, eff.resolution))
+                      if (tier?.upscale_only) {
+                        return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          Finishes at the render size × {f} — the chosen target only decides that a finishing pass runs.
+                        </div>
+                      }
+                      return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        Finishes at {Math.floor(+m[1] * f / 2) * 2} × {Math.floor(+m[2] * f / 2) * 2}.
+                      </div>
+                    })()}
                   </Field>
                 )
               })()}
@@ -3011,84 +3028,111 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           }
           const charCard = ({ c, i }) => (
             <div key={c.id || `row-${i}`} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
-              <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
-                <div className="grow"><Field label="Name">
-                  <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
-                    onChange={(e) => updateChar(i, { name: e.target.value })} />
-                </Field></div>
-                <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
-                  <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
-                    key={`alias-${c.id || i}`}
-                    onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
-                </Field></div>
-                <div style={{ minWidth: 210 }}><Field label="Belongs to" hint="Global, or one style (plus the styles under it).">
-                  <select className="select" value={c.style || ''} onChange={(e) => updateChar(i, { style: e.target.value })}>
-                    {scopeOptionsFor(c.style || '')}
-                  </select>
-                </Field></div>
-              </div>
-              <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
-                <textarea className="textarea" rows={3} value={c.description || ''}
-                  onChange={(e) => updateChar(i, { description: e.target.value })} />
-              </Field>
-              <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes. Blank = the style's narrator voice.">
-                <select className="input" style={{ maxWidth: 260 }} value={c.voice || ''}
-                  onChange={(e) => updateChar(i, { voice: e.target.value })}>
-                  <option value="">Style narrator (default)</option>
-                  {(cfg.voices || []).map((v) => (
-                    <option key={v.name} value={v.name}>
-                      {v.name}{[v.gender, v.age, v.accent].filter(Boolean).length ? ` — ${[v.gender, v.age, v.accent].filter(Boolean).join(', ')}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
-                  label="Enabled — available to use in scripts and renders" />
-                <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
-              </div>
-              {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only).
-                  The image and kept versions are ALWAYS visible; only the ops that
-                  persist server-side immediately (upload / portrait / version picks)
-                  wait for a clean form, so staged edits can't be clobbered. */}
-              {c.id ? (
-                <div className="stack gap-12">
-                  <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
+              {/* Two columns: text fields on the left, the IMAGE PANEL on the
+                  right — portrait, upload/re-roll, versions and the turnaround
+                  sheet live together there instead of dangling at the card's
+                  foot (where the portrait read as the next character's). Every
+                  multi-field row is TOP-aligned: Field renders its hint BELOW
+                  the control, so bottom-aligning a row whose hints differ in
+                  height shoves the labels and inputs out of line. */}
+              <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
+                <div className="grow stack gap-12" style={{ minWidth: 320 }}>
+                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-start' }}>
+                    <div className="grow" style={{ minWidth: 160 }}><Field label="Name" hint="How scripts refer to this character.">
+                      <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
+                        onChange={(e) => updateChar(i, { name: e.target.value })} />
+                    </Field></div>
+                    <div className="grow" style={{ minWidth: 180 }}><Field label="Also known as" hint="Comma-separated aliases for this character.">
+                      <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
+                        key={`alias-${c.id || i}`}
+                        onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+                    </Field></div>
+                    <div style={{ minWidth: 200 }}><Field label="Belongs to" hint="Global, or one style (plus the styles under it).">
+                      <select className="select" value={c.style || ''} onChange={(e) => updateChar(i, { style: e.target.value })}>
+                        {scopeOptionsFor(c.style || '')}
+                      </select>
+                    </Field></div>
+                  </div>
+                  <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
+                    <textarea className="textarea" rows={3} value={c.description || ''}
+                      onChange={(e) => updateChar(i, { description: e.target.value })} />
+                  </Field>
+                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-start' }}>
+                    <div style={{ width: 120 }}><Field label="Sex">
+                      <select className="input" value={c.gender || ''}
+                        onChange={(e) => updateChar(i, { gender: e.target.value })}>
+                        {['', 'male', 'female'].map((g) => <option key={g} value={g}>{g || 'unset…'}</option>)}
+                      </select>
+                    </Field></div>
+                    <div style={{ width: 120 }}><Field label="Age">
+                      <select className="input" value={c.age || ''}
+                        onChange={(e) => updateChar(i, { age: e.target.value })}>
+                        {['', 'child', 'young', 'adult', 'mature', 'elderly'].map((a) => <option key={a} value={a}>{a || 'unset…'}</option>)}
+                      </select>
+                    </Field></div>
+                    <div className="grow" style={{ minWidth: 220 }}><Field label="Background" hint="Nationality, language, accent — e.g. “Brazilian, sings in Portuguese-accented English”. Sex and age drive voice auto-casting; all three shape the sung voice when they front a music video.">
+                      <input className="input" value={c.background || ''} placeholder="e.g. Brazilian, light Portuguese accent"
+                        onChange={(e) => updateChar(i, { background: e.target.value })} />
+                    </Field></div>
+                  </div>
+                  <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes. Blank = the style's narrator voice.">
+                    <select className="input" style={{ maxWidth: 260 }} value={c.voice || ''}
+                      onChange={(e) => updateChar(i, { voice: e.target.value })}>
+                      <option value="">Style narrator (default)</option>
+                      {(cfg.voices || []).map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.name}{[v.gender, v.age, v.accent].filter(Boolean).length ? ` — ${[v.gender, v.age, v.accent].filter(Boolean).join(', ')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+                {/* The image panel. Portrait ops persist server-side immediately,
+                    so they wait for a clean form; the image and kept versions
+                    stay visible while editing. */}
+                <div className="stack gap-10" style={{ width: 260, flex: '0 0 auto' }}>
+                  {c.id ? (<>
                     {c.ref_image
-                      ? <div onClick={() => setCharLightbox(c.id)}
-                          style={{ position: 'relative', width: 120, height: 120, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
+                      ? <div onClick={() => setCharLightbox(c.id)} title="Full size"
+                          style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
                           <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
                             style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                          <span style={{ position: 'absolute', right: 6, bottom: 6, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 10.5, fontWeight: 600, padding: '2px 7px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, backdropFilter: 'blur(4px)' }}>
-                            <Icon name="up-right-and-down-left-from-center" /> Full size
-                          </span>
                         </div>
-                      : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+                      : <div className="muted" style={{ width: '100%', aspectRatio: '1 / 1', borderRadius: 8, border: '1px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, textAlign: 'center', padding: 12 }}>
+                          No reference image — text only.
+                        </div>}
                     {dirty
                       ? <span className="muted" style={{ fontSize: 12 }}><Icon name="circle-info" /> Unsaved edits — <strong>Save settings</strong> to upload or re-roll the look.</span>
-                      : (<>
-                        <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
-                          <Icon name="upload" /> Upload image
-                          <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
-                            onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
-                        </label>
-                        <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
-                          onClick={() => genCharPortrait(c)}>
-                          {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
-                        </Button>
-                        {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
-                      </>)}
-                  </div>
-                  <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
-                    onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
-                    aspect="1 / 1" busy={charBusy === c.id || dirty} />
-                  <CharacterSheet char={c} initial={c.sheet} disabled={dirty}
-                    disabledNote="Unsaved edits — Save settings to build a sheet."
-                    onLightbox={(url) => setSheetLightbox(url)} />
+                      : (
+                        <div className="row gap-8 row--wrap" style={{ alignItems: 'center' }}>
+                          <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
+                            <Icon name="upload" /> Upload
+                            <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
+                              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
+                          </label>
+                          <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
+                            onClick={() => genCharPortrait(c)}>
+                            {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll' : 'Generate')}
+                          </Button>
+                          {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove</Button>}
+                        </div>
+                      )}
+                    <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
+                      onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
+                      aspect="1 / 1" busy={charBusy === c.id || dirty} />
+                    <CharacterSheet char={c} initial={c.sheet} disabled={dirty}
+                      disabledNote="Unsaved edits — Save settings to build a sheet."
+                      onLightbox={(url) => setSheetLightbox(url)} />
+                  </>) : (
+                    <span className="muted" style={{ fontSize: 12 }}>Save settings, then upload or generate a reference image that pins this character's look (FLUX.2 only).</span>
+                  )}
                 </div>
-              ) : (
-                <span className="muted" style={{ fontSize: 12 }}>Save settings, then upload or generate a reference image that pins this character's look (FLUX.2 only).</span>
-              )}
+              </div>
+              <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
+                  label="Enabled — available to use in scripts and renders" />
+                <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove character</Button>
+              </div>
             </div>
           )
           return (<>

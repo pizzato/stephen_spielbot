@@ -300,7 +300,8 @@ class EndpointTests(unittest.TestCase):
         """The AI upscales rebuild the film from the scene clips, so the
         burns and cards the published final carried must go back on; the
         fast upscale resizes the final itself (burns included) and must not."""
-        def fake_scenes(task_id, wd, staged, w, h, cfg, command_template=None, engine=""):
+        def fake_scenes(task_id, wd, staged, w, h, cfg, command_template=None,
+                        engine="", film_dims=None):
             staged.write_bytes(b"rebuilt")
             return staged
 

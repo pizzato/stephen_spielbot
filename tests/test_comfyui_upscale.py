@@ -626,3 +626,129 @@ class ComfyRejectionReasonTests(unittest.TestCase):
         self.assertIn("http://s2:8188", first_line)
         # The raw body still follows, for the log.
         self.assertIn("missing_node_type", str(ctx.exception))
+
+
+class FactorUpscaleModeTests(unittest.TestCase):
+    """The factor modes end up at source x factor, and say so up front."""
+
+    def test_parse_splits_engine_and_factor(self):
+        from pipeline.assembler import parse_upscale_mode
+
+        self.assertEqual(parse_upscale_mode("flashvsr_2x"), ("flashvsr", 2))
+        self.assertEqual(parse_upscale_mode("flashvsr_4x"), ("flashvsr", 4))
+        self.assertEqual(parse_upscale_mode("ltx_latent_2x"), ("ltx_latent", 2))
+
+    def test_pre_factor_spellings_resolve_to_2x(self):
+        """Styles and job configs written before the split keep working."""
+        from pipeline.assembler import parse_upscale_mode
+
+        self.assertEqual(parse_upscale_mode("flashvsr"), ("flashvsr", 2))
+        self.assertEqual(parse_upscale_mode("ltx_latent"), ("ltx_latent", 2))
+
+    def test_target_sized_modes_have_no_factor(self):
+        from pipeline.assembler import parse_upscale_mode
+
+        for mode in ("fast", "h3_latent", "ic_lora"):
+            self.assertEqual(parse_upscale_mode(mode), (mode, None), mode)
+
+    def test_factor_dims_come_from_the_source(self):
+        from pipeline.assembler import upscale_target_dims
+
+        # The case that made a "FlashVSR 1440x1440" three quarters FlashVSR and
+        # one quarter Lanczos: 576 -> 1440 is 2.5x, which no factor reaches.
+        self.assertEqual(upscale_target_dims(576, 576, "flashvsr_2x"), (1152, 1152))
+        self.assertEqual(upscale_target_dims(576, 576, "flashvsr_4x"), (2304, 2304))
+        self.assertEqual(upscale_target_dims(720, 720, "flashvsr_2x"), (1440, 1440))
+
+    def test_target_modes_keep_the_requested_size(self):
+        from pipeline.assembler import upscale_target_dims
+
+        self.assertEqual(
+            upscale_target_dims(576, 576, "fast", (1440, 1440)), (1440, 1440))
+        self.assertEqual(
+            upscale_target_dims(576, 576, "h3_latent", (1440, 1440)), (1440, 1440))
+
+    def test_target_mode_without_a_target_is_an_error(self):
+        from pipeline.assembler import upscale_target_dims
+
+        with self.assertRaises(ValueError):
+            upscale_target_dims(576, 576, "fast")
+
+    def test_odd_source_stays_even(self):
+        """H.264 will not take odd dimensions."""
+        from pipeline.assembler import upscale_target_dims
+
+        self.assertEqual(upscale_target_dims(577, 405, "flashvsr_2x"), (1154, 810))
+
+
+class FlashVsrExplicitScaleTests(unittest.TestCase):
+    """An explicit factor is used verbatim — no inferring from the target."""
+
+    def _workflow(self, scale, w, h, src_w, src_h):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            queued = {}
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt",
+                                   side_effect=lambda wf, cid, comfy_url: (
+                                       queued.setdefault("wf", wf), "p1")[1]), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "x.mp4", "subfolder": "", "type": "output"}]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=5.0), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_flashvsr(
+                    src, out, w, h, fps=24,
+                    source_width=src_w, source_height=src_h, scale=scale)
+            return queued["wf"]
+
+    def test_explicit_2x_is_not_promoted_by_a_bigger_target(self):
+        """Left to infer, 576 -> 2304 would pick 4x; the caller said 2x."""
+        wf = self._workflow(2, 1152, 1152, 576, 576)
+        self.assertEqual(wf["3"]["inputs"]["scale"], 2)
+
+    def test_explicit_4x_is_not_demoted_by_a_smaller_target(self):
+        wf = self._workflow(4, 2304, 2304, 576, 576)
+        self.assertEqual(wf["3"]["inputs"]["scale"], 4)
+
+    def test_only_2x_and_4x_exist(self):
+        with self.assertRaises(ValueError):
+            self._workflow(3, 1728, 1728, 576, 576)
+
+
+class FactorModeDispatchTests(unittest.TestCase):
+    def test_dispatcher_sizes_the_target_from_the_factor(self):
+        """A caller that asks a factor mode for a size it cannot reach gets the
+        factor's size, not a resample up to the request."""
+        from pipeline import assembler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mp4"
+            src.write_bytes(b"video")
+            out = Path(tmp) / "out.mp4"
+            seen = {}
+
+            def fake_up(inp, outp, w, h, **kw):
+                seen["dims"] = (w, h)
+                seen["scale"] = kw.get("scale")
+                outp.write_bytes(b"upscaled")
+                return outp
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(576, 576)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=5.0), \
+                 mock.patch.object(assembler, "_constant_rate_source",
+                                   side_effect=lambda inp, _o: (inp, 24.0)), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank"), \
+                 mock.patch.object(assembler, "_restore_source_clock",
+                                   side_effect=lambda v, _s, o, _d: (o.write_bytes(v.read_bytes()), o)[1]), \
+                 mock.patch("pipeline.comfyui.upscale_video_flashvsr", side_effect=fake_up), \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                assembler.temporal_ai_upscale_video(
+                    src, out, 1440, 1440, engine="flashvsr_2x", comfy_url="http://w:8188")
+
+            self.assertEqual(seen["dims"], (1152, 1152))
+            self.assertEqual(seen["scale"], 2)
