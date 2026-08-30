@@ -363,6 +363,9 @@ source times that factor — you pick **FlashVSR 2×**, not a resolution. Ask an
 like that for an arbitrary size and only part of the result is the upscaler: reaching
 576×576 → 1440×1440 meant running FlashVSR at 2× to 1152×1152 and then stretching the
 last 25% with Lanczos, which visibly softened what the model had just sharpened.
+The source is always the film's **rendered** size: re-running a factor mode while one
+of its own upscales is the selected final version produces the same size again (reusing
+the cached scene upscales), rather than compounding the factor off the upscaled cut.
 
 `Fast`, `LTX IC-LoRA` and `H3 latent` still take a target resolution, because each can
 land on one — H3's node takes a continuous 1.1–4.0 factor, and `Fast` *is* a resample.

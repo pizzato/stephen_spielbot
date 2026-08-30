@@ -27,6 +27,10 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# shellcheck source=scripts/_worker_build.sh
+source "$REPO_ROOT/scripts/_worker_build.sh"
+
 COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 TTS_PORT="${TTS_PORT:-8189}"
 STOP_NATIVE="${STOP_NATIVE:-true}"
@@ -259,6 +263,32 @@ for svc in comfyui tts; do
     fi
 done
 
+# ── 8. Verify the custom nodes the workflows need are registered ──────────────
+# The build can succeed while a node pack fails to IMPORT at runtime (upstream
+# dependency drift — see the kornia patch in docker/comfyui/Dockerfile), and
+# ComfyUI answers /system_stats either way. Reading /object_info is the only
+# check that matches what a render will find.
 echo ""
-echo "✅ Containerized worker ready on $TARGET"
+echo "[deploy] verifying required ComfyUI nodes on $TARGET ..."
+NODES_OK=true
+bash "$REPO_ROOT/scripts/check_worker_nodes.sh" "$TARGET" "$COMFYUI_PORT" || NODES_OK=false
+
+# ── 9. Stamp the build context this host now runs ─────────────────────────────
+# `make start` compares this against the repo and re-deploys when they differ,
+# so a node added to the Dockerfile later reaches every worker without a full
+# re-install. Only written when the nodes verified — a half-built worker must
+# stay stale so the next start retries it.
+if $NODES_OK; then
+    _sh "mkdir -p ~/spielbot-worker && cat > ~/$WORKER_STAMP" <<< "$(build_stamp "$REPO_ROOT")"
+else
+    _sh "rm -f ~/$WORKER_STAMP" || true
+fi
+
+echo ""
+if $NODES_OK; then
+    echo "✅ Containerized worker ready on $TARGET"
+else
+    echo "⚠️  Worker on $TARGET is missing nodes listed above — renders needing them will fail."
+    echo "   Check the build output for the failing pack, then re-run: bash scripts/install_worker_container.sh $TARGET"
+fi
 echo "   ComfyUI: http://${TARGET}:${COMFYUI_PORT}    F5-TTS: http://${TARGET}:${TTS_PORT}"
