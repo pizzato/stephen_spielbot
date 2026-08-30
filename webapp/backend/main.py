@@ -8728,9 +8728,24 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
 
         mode = _normalize_upscale_mode(upscale_mode)
         _engine, factor = parse_upscale_mode(mode)
+        final_video_history.seed_if_empty(wd, final_path, "Original")
+        _hist_before = final_video_history.history(wd)
         actual_w, actual_h = _get_video_dimensions(final_path)
         # A factor mode sizes itself off the film; only the target-sized modes
         # need a resolution picked, and the UI hides that control for the rest.
+        if factor is not None:
+            # ...and "the film" is the RENDERED film, not whichever version is
+            # selected right now: re-running a 2× while its own 2× output is
+            # the selected final must not compound to 4× — that stretches the
+            # scene finals to the selected size before upscaling and misses the
+            # per-scene cache. The newest base version is the plain concat of
+            # the scene parts at their rendered size.
+            base = next(
+                (v for v in reversed(_hist_before["versions"]) if final_video_history.is_base(v)),
+                None,
+            )
+            if base:
+                actual_w, actual_h = _get_video_dimensions(Path(base["path"]))
         target_dims = None
         if factor is None:
             target_dims = gapp._UPSCALE_RESOLUTIONS.get((target_name or "").strip())
@@ -8742,10 +8757,8 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
                 f"Final video is already {actual_w}x{actual_h}; choose a larger target than {target_w}x{target_h}."
             )
 
-        final_video_history.seed_if_empty(wd, final_path, "Original")
         # Carry the currently-selected version's language forward, so upscaling
         # a localized cut doesn't lose its language tag in the new entry.
-        _hist_before = final_video_history.history(wd)
         cur_lang = next(
             (v.get("lang") for v in _hist_before["versions"] if v["id"] == _hist_before["selected"]),
             None,

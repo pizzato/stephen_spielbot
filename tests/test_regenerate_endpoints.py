@@ -300,6 +300,49 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(run(cached_is_fresher=True), [])
         self.assertEqual(run(cached_is_fresher=False), [scene])
 
+    def test_factor_upscale_sizes_off_rendered_film_not_selected_upscale(self):
+        """Re-running FlashVSR 2× while its own 2× output is the selected final
+        must target rendered×2 (1408), not selected×2 (2816) — compounding would
+        stretch the scene finals to the selected size and miss the scene cache."""
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        final = wd.with_suffix(".mp4")
+        # The rendered 704x704 cut is the base version in the history...
+        final.write_bytes(b"rendered-704" * 1000)
+        backend.final_video_history.record(wd, final, label="Original")
+        # ...and the published final is a selected FlashVSR 2x (1408x1408) pass.
+        final.write_bytes(b"flashvsr-1408" * 1000)
+        backend.final_video_history.record(
+            wd, final, label="FlashVSR 2× 1408x1408", kind="upscale")
+        scene = wd / "scene_01_final.mp4"
+        scene.write_bytes(b"scene-one" * 1500)
+
+        def fake_dims(p):
+            return (1408, 1408) if b"1408" in Path(p).read_bytes() else (704, 704)
+
+        calls = []
+
+        def fake_temporal(src, out, width, height, **kw):
+            calls.append((src, width, height))
+            out.write_bytes(b"re-upscaled-scene" * 1000)
+            return out
+
+        with mock.patch.object(backend.gapp, "load_config", return_value={"comfy_workers": ["http://w1:8188"]}), \
+             mock.patch("pipeline.worker_pool.alive_workers", return_value=["http://w1:8188"]), \
+             mock.patch("pipeline.assembler._get_video_dimensions", side_effect=fake_dims), \
+             mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
+             mock.patch("pipeline.assembler.concatenate_scenes",
+                        side_effect=lambda paths, out, fade=0.3, **kw: out.write_bytes(b"joined-1408") or out):
+            backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
+            backend._run_final_video_upscale("tid", wd, "", "flashvsr_2x")
+
+        self.assertEqual(backend._film_tasks["tid"]["status"], "done")
+        # Sized off the rendered film (704×2), fed the raw scene — no conform pass.
+        self.assertEqual(calls, [(scene, 1408, 1408)])
+        # Cached under the rendered-size key a later re-run can find again.
+        self.assertTrue((wd / "final_upscale_scenes" / "flashvsr_2x-1408x1408").is_dir())
+        history = backend.final_video_history.history(wd)
+        self.assertEqual(history["versions"][-1]["label"], "FlashVSR 2× 1408x1408")
+
     def test_remix_upscale_endpoint_accepts_target_and_mode(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
         wd.with_suffix(".mp4").write_bytes(b"low-res-final")
