@@ -10706,6 +10706,16 @@ def get_activity(limit: int = 80) -> dict:
         active_ops = [dict(op) for op in _current_ops.values()]
         log = list(_activity_log[: max(10, limit_n)])
 
+    # A _track_op row is built once, at op start, so its elapsed_s is frozen at
+    # ~0 — re-derive it from started_at so a long wait or a long edit reads as
+    # one. (Film tasks and sub-jobs build a fresh event per poll already.)
+    _now = time.time()
+    for _op in active_ops:
+        try:
+            _op["elapsed_s"] = round(max(0.0, _now - float(_op.get("started_at") or _now)), 1)
+        except (TypeError, ValueError):
+            pass
+
     # Film edit tasks run in daemon threads that record progress in _film_tasks
     # rather than _track_op. Surface all running ones so final upscales, music
     # regeneration, narrator changes, and concurrent scene re-renders all appear.
