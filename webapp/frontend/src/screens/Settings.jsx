@@ -3012,6 +3012,16 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           const charCard = ({ c, i }) => (
             <div key={c.id || `row-${i}`} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
               <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
+                {/* Portrait rides beside the name — at the card's foot it read as
+                    belonging to the NEXT character. Upload/re-roll/version ops
+                    stay below with the version strip. */}
+                {c.id && c.ref_image && (
+                  <div onClick={() => setCharLightbox(c.id)} title="Full size"
+                    style={{ position: 'relative', width: 96, height: 96, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
+                    <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                )}
                 <div className="grow"><Field label="Name">
                   <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
                     onChange={(e) => updateChar(i, { name: e.target.value })} />
@@ -3031,20 +3041,22 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <textarea className="textarea" rows={3} value={c.description || ''}
                   onChange={(e) => updateChar(i, { description: e.target.value })} />
               </Field>
-              <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
-                <Field label="Sex" hint="Drives voice auto-casting and, on music videos, the sung voice.">
-                  <select className="input" style={{ width: 120 }} value={c.gender || ''}
+              {/* flex-start: only Background carries a hint, so bottom-aligning
+                  the row pushed the hint-less selects out of line. */}
+              <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-start' }}>
+                <div style={{ width: 130 }}><Field label="Sex">
+                  <select className="input" value={c.gender || ''}
                     onChange={(e) => updateChar(i, { gender: e.target.value })}>
                     {['', 'male', 'female'].map((g) => <option key={g} value={g}>{g || 'unset…'}</option>)}
                   </select>
-                </Field>
-                <Field label="Age">
-                  <select className="input" style={{ width: 120 }} value={c.age || ''}
+                </Field></div>
+                <div style={{ width: 130 }}><Field label="Age">
+                  <select className="input" value={c.age || ''}
                     onChange={(e) => updateChar(i, { age: e.target.value })}>
                     {['', 'child', 'young', 'adult', 'mature', 'elderly'].map((a) => <option key={a} value={a}>{a || 'unset…'}</option>)}
                   </select>
-                </Field>
-                <div className="grow"><Field label="Background" hint="Nationality, language, accent — e.g. “Brazilian, sings in Portuguese-accented English”. Shapes the sung voice when they front a music video.">
+                </Field></div>
+                <div className="grow"><Field label="Background" hint="Nationality, language, accent — e.g. “Brazilian, sings in Portuguese-accented English”. Sex and age drive voice auto-casting; all three shape the sung voice when they front a music video.">
                   <input className="input" value={c.background || ''} placeholder="e.g. Brazilian, light Portuguese accent"
                     onChange={(e) => updateChar(i, { background: e.target.value })} />
                 </Field></div>
@@ -3072,16 +3084,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {c.id ? (
                 <div className="stack gap-12">
                   <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
-                    {c.ref_image
-                      ? <div onClick={() => setCharLightbox(c.id)}
-                          style={{ position: 'relative', width: 120, height: 120, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
-                          <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
-                            style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                          <span style={{ position: 'absolute', right: 6, bottom: 6, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 10.5, fontWeight: 600, padding: '2px 7px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, backdropFilter: 'blur(4px)' }}>
-                            <Icon name="up-right-and-down-left-from-center" /> Full size
-                          </span>
-                        </div>
-                      : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+                    {!c.ref_image && <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
                     {dirty
                       ? <span className="muted" style={{ fontSize: 12 }}><Icon name="circle-info" /> Unsaved edits — <strong>Save settings</strong> to upload or re-roll the look.</span>
                       : (<>
