@@ -17,6 +17,7 @@ a half-written file.
 """
 from __future__ import annotations
 
+import filecmp
 import json
 import os
 import shutil
@@ -104,11 +105,33 @@ def _add_version(work_dir: Path, scene_id: int, image: Path, entry: dict) -> dic
     return entry
 
 
-def seed_if_empty(work_dir: Path, scene_id: int, current: Path) -> None:
-    """Record *current* as the first kept version if this scene has no history yet.
+def _already_kept(work_dir: Path, entry: dict, current: Path) -> bool:
+    """True if *current* is the selected kept version's content (same fallback to
+    the newest as ``history``), so capturing it again would only duplicate it."""
+    versions = entry.get("versions", [])
+    ids = [int(v["id"]) for v in versions]
+    selected = entry.get("selected")
+    if selected not in ids:
+        selected = ids[-1] if ids else None
+    if selected is None:
+        return False
+    match = next(v for v in versions if int(v["id"]) == selected)
+    kept = _hist_dir(work_dir) / match["file"]
+    try:
+        return kept.exists() and filecmp.cmp(current, kept, shallow=False)
+    except OSError:
+        return False
 
-    Captures a pre-existing preview (made before this feature, or before history was
-    first touched) so the next regeneration doesn't silently discard it."""
+
+def capture_current(work_dir: Path, scene_id: int, current: Path) -> None:
+    """Record *current* (the canonical image about to be overwritten or deleted)
+    as a kept version, unless it already IS the selected version's content.
+
+    Unlike a seed-only snapshot this also protects an image written outside the
+    editors — the render's inline/opening-frame painters and continuation
+    handoffs put images on disk without recording them, and once history holds
+    any version at all a seed would skip them and the next regeneration would
+    silently discard the frame on screen."""
     work_dir = Path(work_dir)
     current = Path(current)
     if not current.exists():
@@ -116,7 +139,7 @@ def seed_if_empty(work_dir: Path, scene_id: int, current: Path) -> None:
     with _LOCK:
         data = _load(work_dir)
         entry = _entry(data, scene_id)
-        if entry.get("versions"):
+        if _already_kept(work_dir, entry, current):
             return
         _add_version(work_dir, scene_id, current, entry)
         data[str(int(scene_id))] = entry

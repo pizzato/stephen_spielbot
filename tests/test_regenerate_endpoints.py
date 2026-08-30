@@ -601,7 +601,7 @@ class InstructionSteeringTests(unittest.TestCase):
         with mock.patch.object(backend.DurableStore, "default", return_value=store), \
              mock.patch.object(backend, "job_id_from_work_dir", return_value="job1"), \
              mock.patch.object(backend, "_film_job_config", return_value={}), \
-             mock.patch.object(backend.image_history, "seed_if_empty"), \
+             mock.patch.object(backend.image_history, "capture_current"), \
              mock.patch.object(backend, "_RERENDER_JOURNAL_PATH", wd / "rerender_journal.json"), \
              mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
             result = backend.rerender_film_scene(
@@ -638,7 +638,7 @@ class RerenderJournalTests(unittest.TestCase):
         with mock.patch.object(backend.DurableStore, "default", return_value=store), \
              mock.patch.object(backend, "job_id_from_work_dir", return_value="job1"), \
              mock.patch.object(backend, "_film_job_config", return_value={}), \
-             mock.patch.object(backend.video_history, "seed_if_empty"), \
+             mock.patch.object(backend.video_history, "capture_current"), \
              mock.patch.object(backend.threading, "Thread",
                                side_effect=lambda **kw: mock.Mock(start=lambda: None)):
             tid = backend._start_scene_rerender(wd, 2, "video", "more dragons")
