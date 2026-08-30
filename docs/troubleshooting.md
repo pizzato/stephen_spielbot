@@ -79,15 +79,34 @@ as failed scene tasks that succeed on retry — reduce concurrency by removing a
 
 The worker's ComfyUI does not register a node the workflow needs, so it rejects the job
 the moment it is submitted — every scene fails within seconds, which looks like nothing
-happened at all. Confirm which workers are missing it (an empty `{}` means missing):
+happened at all. Check every worker at once:
 
 ```bash
-curl -s http://s2:8188/object_info/FlashVSRNode
+bash scripts/check_worker_nodes.sh s2
 ```
 
-Custom nodes live inside the container image and are **not** on a mounted volume, so a
-container that was patched by hand loses them on the next recreate. Rebuild the worker
-images so the pinned nodes in `docker/comfyui/Dockerfile` are baked back in.
+It reads the worker's `/object_info` and names each missing node together with the pack
+that provides it. (Do not use `/object_info/<NodeClass>` by hand — current ComfyUI
+answers `{}` for a node that is present *and* for one that is not, so it tells you
+nothing.) `make status` runs the same check for every worker.
+
+The usual cause is an image built before the node was added to `docker/comfyui/Dockerfile`
+— custom nodes live inside the image, not on a mounted volume, so a worker keeps whatever
+it was installed with. `make start` now detects this on its own: it fingerprints the build
+context, compares it with what each host is running, and re-deploys any worker that has
+fallen behind. So the fix is simply:
+
+```bash
+make start
+```
+
+The first start after a Dockerfile change rebuilds the images and takes a few minutes.
+To rebuild one host directly: `bash scripts/install_worker_container.sh s2`.
+
+The nodes that must be present are listed in `docker/comfyui/required_nodes.txt`. If a
+node is still missing right after a successful rebuild, the pack cloned but failed to
+import — read the build output (`make logs W=s2` shows the container's startup errors),
+usually upstream dependency drift.
 
 ## Renders
 
