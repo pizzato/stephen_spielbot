@@ -181,8 +181,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setBusy('song-save'); setError(''); setSongMsg('')
     try {
       const cur = songDraft ?? song
-      const s = await api.saveSong(job.job_id, cur.caption, cur.lyrics, cur.direction ?? null)
+      const s = await api.saveSong(job.job_id, cur.caption, cur.lyrics, cur.direction ?? null,
+                                   cur.vocalist ?? null)
       setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
+                vocalist: s.vocalist ?? (cur.vocalist || ''),
                 direction: s.direction ?? (cur.direction || '') })
       setSongDraft(null)
       syncBriefTopic(s.direction ?? cur.direction)
@@ -198,8 +200,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       const cur = songDraft ?? song
       const s = await api.regenSong(job.job_id, field, cur.caption, cur.lyrics,
-                                    instruction, cur.direction ?? null)
+                                    instruction, cur.direction ?? null, cur.vocalist ?? null)
       setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
+                vocalist: s.vocalist ?? (cur.vocalist || ''),
                 direction: s.direction ?? (cur.direction || '') })
       setSongDraft(null)
       syncBriefTopic(s.direction ?? cur.direction)
@@ -218,6 +221,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const cur = songDraft ?? song
       const s = await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
                                          lyrics: cur.lyrics, voice: songVoiceSel,
+                                         vocalist: cur.vocalist ?? null,
                                          add_seconds: addSeconds })
       setSongDraft(null); await refreshSong()
       setSongMsg(!addSeconds
@@ -1487,10 +1491,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <RegenLabel busy={busy === 'song-regen-caption'} disabled={!!busy}
                   onRegen={(instr) => regenSong('caption', instr)}
                   chips={REGEN_CHIPS.sound}>Sound</RegenLabel>}
-                hint="What the music model is told about the song — genre, tempo, mood, arrangement. The lead performer's cast voice (gender, age, tone) is described automatically on top of this at render time. Re-generating it writes a new sound for the lyrics below.">
+                hint="What the music model is told about the song — genre, tempo, mood, arrangement. The Vocalist below is appended to this automatically when the track is sung. Re-generating it writes a new sound for the lyrics below.">
                 <textarea className="textarea" rows={3}
                   value={(songDraft ?? song).caption}
                   onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
+              </Field>
+              <Field label="Vocalist"
+                hint={`Who sings — sex, age, background, voice quality. Appended to the Sound description when the track is generated, so the voice matches the singer on camera.${song.singer ? ` Cast from the style catalogue: ${song.singer}.` : ''} Picking a Singing voice below overrides it.`}>
+                <input className="input"
+                  placeholder="e.g. young female vocalist, Brazilian, warm airy voice"
+                  value={(songDraft ?? song).vocalist || ''}
+                  onChange={(e) => setSongDraft({ ...(songDraft ?? song), vocalist: e.target.value })} />
               </Field>
               <Field label={
                 <RegenLabel busy={busy === 'song-regen-lyrics'} disabled={!!busy}
@@ -1508,10 +1519,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               </div>
 
               <Field label="Singing voice"
-                hint="Steers the described vocalist at generation, and is the target for re-voicing below.">
+                hint="A library voice whose gender/age/tone replaces the Vocalist description at generation, and the target for re-voicing below.">
                 <select className="select" style={{ maxWidth: 340 }} value={songVoiceSel}
                   disabled={!!busy} onChange={(e) => setSongVoiceSel(e.target.value)}>
-                  <option value="">The model’s own vocalist</option>
+                  <option value="">{((songDraft ?? song).vocalist || '').trim()
+                    ? 'The Vocalist described above' : 'The model’s own vocalist'}</option>
                   {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
                 </select>
               </Field>

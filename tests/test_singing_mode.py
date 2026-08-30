@@ -590,6 +590,39 @@ class SongRewriteTests(TempConfigCase):
         self.assertEqual(backend.get_job_song(self.job_id)["direction"],
                          "a rooftop wedding")
 
+    def test_vocalist_is_shown_saved_and_survives_an_omitting_client(self):
+        """The vocalist line (who sings) must be visible and editable in the
+        studio — appended silently it looked like the model picked its own
+        singer — and a client that doesn't send the field must not clear it."""
+        data = json.loads((self.wd / "song.json").read_text())
+        data.update({"vocalist": "adult male vocalist, Australian", "singer": "Bob"})
+        (self.wd / "song.json").write_text(json.dumps(data))
+        shown = backend.get_job_song(self.job_id)
+        self.assertEqual(shown["vocalist"], "adult male vocalist, Australian")
+        self.assertEqual(shown["singer"], "Bob")
+        # An edit persists…
+        backend.update_job_song(self.job_id, backend.SongUpdateBody(
+            caption="c", lyrics="[Verse]\nwords",
+            vocalist="young female vocalist, Brazilian"))
+        self.assertEqual(backend.get_job_song(self.job_id)["vocalist"],
+                         "young female vocalist, Brazilian")
+        # …and a save WITHOUT the field leaves it untouched.
+        backend.update_job_song(self.job_id, backend.SongUpdateBody(
+            caption="c2", lyrics="[Verse]\nwords"))
+        self.assertEqual(backend.get_job_song(self.job_id)["vocalist"],
+                         "young female vocalist, Brazilian")
+
+    def test_re_written_lyrics_are_pinned_to_the_edited_vocalist(self):
+        with unittest.mock.patch.object(
+                backend.story_mode, "write_song",
+                return_value={"caption": "c", "lyrics": "[Chorus]\nnew"}) as ws:
+            self._regen(field="lyrics", caption="fast punk", lyrics="x",
+                        vocalist="elderly male vocalist, Irish")
+        self.assertEqual(ws.call_args.kwargs["singer_note"],
+                         "elderly male vocalist, Irish")
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["vocalist"],
+                         "elderly male vocalist, Irish")
+
     def test_a_title_only_brief_shows_a_blank_direction(self):
         # A film created with an empty Direction box stores the bare title as
         # its topic — the studio must show that as "no direction yet", not

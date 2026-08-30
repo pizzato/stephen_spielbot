@@ -3342,7 +3342,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           }
           const fmtAutoVal = (k, v) => {
             if (k === 'auto_format') return { narration: 'Narration', dialogue: 'Dialogue', mixed: 'Mixed', silent: 'Silent', song: 'Music video' }[v] || String(v)
-            if (k === 'auto_song_voice') return v ? String(v) : 'the model’s own vocalist'
+            if (k === 'auto_song_voice') return v ? String(v) : 'the cast singer'
             if (k === 'auto_critic_passes') return Number(v) ? `${v} passes` : 'until stable'
             if (k === 'auto_song_critic_passes') return Number(v) ? `${v} passes` : 'off'
             return v ? 'on' : 'off'
@@ -3525,7 +3525,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       <span className="muted" style={{ fontSize: 12.5 }}>Singing voice</span>
                       <select className="select" value={av.auto_song_voice || ''}
                         onChange={(e) => setAuto('auto_song_voice', e.target.value)} style={{ maxWidth: 260 }}>
-                        <option value="">The model’s own vocalist</option>
+                        <option value="">The cast singer (from the style catalogue)</option>
                         {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => (
                           <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(cfg.voices))}</option>
                         ))}
