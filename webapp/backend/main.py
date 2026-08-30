@@ -8932,7 +8932,11 @@ def _temporal_upscale_scenes_to_final(
         """True when a previous run already produced this scene at this size
         from the scene as it is now — a re-shot or re-voiced scene of the same
         length must not pass off its old upscale."""
-        from pipeline.assembler import _get_duration, _get_video_dimensions
+        from pipeline.assembler import (
+            _get_duration,
+            _get_video_dimensions,
+            _get_video_stream_duration,
+        )
         if not out.exists() or out.stat().st_size <= 10_000:
             return False
         if out.stat().st_mtime < scene_path.stat().st_mtime:
@@ -8941,6 +8945,14 @@ def _temporal_upscale_scenes_to_final(
             if _get_video_dimensions(out) != (target_w, target_h):
                 return False
             if abs(_get_duration(out) - _get_duration(scene_path)) > 0.2:
+                return False
+            # The PICTURE has to be on length too. A chunk written before the
+            # source-clock fix carries full audio over a frames-short video —
+            # its container duration matches, but reusing it would put the
+            # rebuilt film right back out of sync. Tight on purpose: the
+            # drift is cumulative, so even one missing frame (42ms at 24fps)
+            # per scene adds up across a film.
+            if abs(_get_video_stream_duration(out) - _get_duration(scene_path)) > 0.03:
                 return False
             # A run that died mid-write can leave a blank file behind; the
             # same check the upscaler itself uses keeps it from being reused.

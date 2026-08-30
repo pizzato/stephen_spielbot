@@ -167,6 +167,27 @@ def _get_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
+def _get_video_stream_duration(path: Path) -> float:
+    """Duration of the video stream alone, not the container's.
+
+    The format duration is the LONGEST stream's, so once full-length source
+    audio is muxed onto an upscaled picture that came back a few frames short,
+    the missing frames vanish from _get_duration — the audio hides them. A
+    length check that guards lip-sync has to read the video stream itself.
+    """
+    result = subprocess.run(
+        [_FFPROBE, "-v", "quiet", "-select_streams", "v:0",
+         "-show_entries", "stream=duration", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        # Container doesn't record per-stream duration — the format duration
+        # is then the only estimate there is.
+        return _get_duration(path)
+
+
 def write_silence_wav(path: Path, seconds: float, rate: int = 24000) -> Path:
     """A silent WAV of *seconds* — the 'narration' of a silent scene, so the
     normal duration/mux/concat pipeline runs unchanged with no spoken audio."""
@@ -328,7 +349,11 @@ def _restore_source_clock(video_path: Path, source_path: Path, output_path: Path
     long result); only a length that is still off is re-encoded to conform.
     """
     _mux_source_audio(video_path, source_path, output_path, target_duration=duration)
-    if abs(_get_duration(output_path) - duration) > 0.01:
+    # Measured on the video stream, not the container: the mux above just gave
+    # the file full-length audio, so the format duration reads as on-target
+    # even when the picture is frames short — and short picture against full
+    # audio is exactly the drift this exists to stop.
+    if abs(_get_video_stream_duration(output_path) - duration) > 0.01:
         conformed = output_path.with_name(f"{output_path.stem}.conformed{output_path.suffix}")
         try:
             conform_video_to_source(output_path, source_path, conformed, duration)
@@ -1288,7 +1313,7 @@ def conform_video_to_source(
     The audio is taken from *source_path* rather than the processed copy — it was
     never upscaled, only carried along, and the round-trip can clip its tail.
     """
-    pad = max(0.0, duration - _get_duration(video_path))
+    pad = max(0.0, duration - _get_video_stream_duration(video_path))
     cmd = [_FFMPEG, "-y", "-i", str(video_path), "-i", str(source_path)]
     if pad > 0.001:
         cmd += ["-filter_complex", f"[0:v]tpad=stop_mode=clone:stop_duration={pad:.3f}[v]",
