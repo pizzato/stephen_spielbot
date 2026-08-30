@@ -48,7 +48,8 @@ from pipeline.assembler import (
     _verify_upscale_not_blank,
     concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
     extract_frame_at, extract_last_frame, ensure_video_resolution, mix_background_music,
-    temporal_ai_upscale_video, trim_video, upscale_video,
+    parse_upscale_mode, temporal_ai_upscale_video, trim_video, upscale_video,
+    upscale_target_dims,
     write_silence_wav as _write_silence_wav,
 )
 from pipeline import cadence as _cadence
@@ -1316,10 +1317,18 @@ def _finish_upscale_scenes(
     concatenated, mixed and stamped done is already at the target size, so
     publishing never sees the smaller intermediate.
 
-    Per-scene outputs are cached in finish_upscale_scenes/ and reused when
-    fresher than their source, so a resumed render skips finished scenes. Any
-    AI-upscale failure falls back to the fast ffmpeg path for that scene — a
-    finished film at fast-upscale quality beats a failed render.
+    A factor mode (FlashVSR 2x/4x, LTX latent 2x) ignores the requested target
+    size and finishes at the render size times its factor — those engines only
+    do whole-number factors, and stretching their output to an arbitrary target
+    was Lanczos undoing part of the upscale. The requested size still decides
+    THAT a finishing step happens, and every other mode still lands on it.
+
+    Per-scene outputs are cached in finish_upscale_scenes/ under the size they
+    were made at and reused when fresher than their source, so a resumed render
+    skips finished scenes while a changed target or factor rebuilds instead of
+    joining clips of two different sizes. Any AI-upscale failure falls back to
+    the fast ffmpeg path for that scene — a finished film at fast-upscale
+    quality beats a failed render.
 
     Returns (clips, width, height); unchanged when there is nothing to do.
     """
@@ -1327,14 +1336,25 @@ def _finish_upscale_scenes(
     target = _UPSCALE_RESOLUTIONS.get(target_name)
     if not target:
         return scene_finals, vid_width, vid_height
-    target_w, target_h = target
-    if target_w <= vid_width and target_h <= vid_height:
-        return scene_finals, vid_width, vid_height
 
     mode = str(cfg.get("finish_upscale_mode") or "fast").strip().lower()
-    if mode not in {"fast", "ltx_latent", "ic_lora", "h3_latent", "flashvsr"}:
+    engine, factor = parse_upscale_mode(mode)
+    if engine not in {"fast", "ltx_latent", "ic_lora", "h3_latent", "flashvsr"}:
         logger.warning("Unknown finish_upscale_mode %r — using fast", mode)
-        mode = "fast"
+        mode, factor = "fast", None
+    # A factor mode ends up at the render size times its factor. The requested
+    # finishing size still says a finishing step is wanted — it just no longer
+    # decides how big, because these engines cannot land on an arbitrary size
+    # and reaching one meant resampling the rest of the way.
+    target_w, target_h = upscale_target_dims(vid_width, vid_height, mode, target)
+    if factor is not None:
+        target_name = f"{target_w}×{target_h}"
+        logger.info(
+            "[upscale] finishing %s at %dx: %dx%d → %dx%d",
+            mode, factor, vid_width, vid_height, target_w, target_h,
+        )
+    if target_w <= vid_width and target_h <= vid_height:
+        return scene_finals, vid_width, vid_height
 
     out_dir = work_dir / "finish_upscale_scenes"
     out_dir.mkdir(exist_ok=True)
@@ -1345,14 +1365,14 @@ def _finish_upscale_scenes(
     upscaled: list[Path] = []
     n = len(scene_finals)
     for i, clip in enumerate(scene_finals):
-        out = out_dir / f"{clip.stem}.up.mp4"
+        out = out_dir / f"{clip.stem}.{target_w}x{target_h}.up.mp4"
         if (out.exists() and out.stat().st_size > 10_000
                 and out.stat().st_mtime >= clip.stat().st_mtime):
             upscaled.append(out)
             continue
         write_progress(status_file, 90.0,
                        f"Upscaling scene {i + 1}/{n} to {target_name}…")
-        staging = out_dir / f"{clip.stem}.up.staging.mp4"
+        staging = out_dir / f"{clip.stem}.{target_w}x{target_h}.up.staging.mp4"
         staging.unlink(missing_ok=True)
         done = False
         if mode != "fast":
@@ -2274,9 +2294,23 @@ def main(work_dir: Path) -> None:
     # The scene clips are lifted to the target size BEFORE assembly, so the
     # concat/crossfade, audio mix and cover burn below all run once at the
     # final size and the job is only stamped done at the target resolution.
+    _pre_finish_dims = (vid_width, vid_height)
     scene_finals, vid_width, vid_height = _finish_upscale_scenes(
         work_dir, scene_finals, cfg, status_file, worker_pool,
         vid_width, vid_height)
+    if (vid_width, vid_height) != _pre_finish_dims:
+        # The size the film ACTUALLY finished at. A factor mode lands where its
+        # factor puts it, which is not the requested finishing size, and a
+        # rebuild that read the requested size instead would stretch the film
+        # to it — the resample this whole path exists to avoid.
+        try:
+            jc_path = work_dir / "job_config.json"
+            jc = json.loads(jc_path.read_text()) if jc_path.exists() else {}
+            jc["finish_achieved_dims"] = [vid_width, vid_height]
+            jc_path.write_text(json.dumps(jc, indent=2))
+        except Exception:
+            logger.warning("Could not stamp finish_achieved_dims into job_config.json",
+                           exc_info=True)
 
     # ── Final assembly (90–100%) ─────────────────────────────────────────────
     combined     = work_dir / "combined.mp4"

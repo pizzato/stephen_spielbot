@@ -6825,7 +6825,7 @@ def start_generation(body: GenerateBody) -> dict:
         # upscaler that gets it there ("" = no finishing step). Stamped flat so
         # resume_generation.py reads them like every other render key.
         "finish_resolution": finish_resolution,
-        "finish_upscale_mode": ss.get("finish_upscale_mode") or "flashvsr",
+        "finish_upscale_mode": ss.get("finish_upscale_mode") or "flashvsr_2x",
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         # 0 = natural; >0 robotizes at that strength (the on/off toggle was
         # folded into the level).
@@ -7398,8 +7398,10 @@ class RemixNarratorBody(BaseModel):
 
 class RemixUpscaleBody(BaseModel):
     work_dir: str
-    target_resolution: str
-    upscale_mode: str = "flashvsr"
+    # Blank for the factor modes (flashvsr_2x/4x, ltx_latent_2x): they finish at
+    # the film's size times their factor, so there is no target to choose.
+    target_resolution: str = ""
+    upscale_mode: str = "flashvsr_2x"
 
 
 class RemixVideoSelectBody(BaseModel):
@@ -8674,7 +8676,9 @@ def select_music(body: MusicSelectBody) -> dict:
 
 def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_mode: str) -> None:
     """Background thread: upscale the completed film, preserving selectable masters."""
-    from pipeline.assembler import _get_video_dimensions, upscale_video
+    from pipeline.assembler import (
+        _get_video_dimensions, parse_upscale_mode, upscale_target_dims, upscale_video,
+    )
 
     final_path = gapp._final_path_for_work_dir(wd)
     staged = wd / "final_upscale.staging.mp4"
@@ -8684,13 +8688,17 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         if not final_path.exists() or final_path.stat().st_size <= 0:
             raise RuntimeError("Final video not found; render the film first.")
 
-        target_dims = gapp._UPSCALE_RESOLUTIONS.get((target_name or "").strip())
-        if not target_dims:
-            raise RuntimeError("Choose a valid upscale resolution.")
         mode = _normalize_upscale_mode(upscale_mode)
-
-        target_w, target_h = target_dims
+        _engine, factor = parse_upscale_mode(mode)
         actual_w, actual_h = _get_video_dimensions(final_path)
+        # A factor mode sizes itself off the film; only the target-sized modes
+        # need a resolution picked, and the UI hides that control for the rest.
+        target_dims = None
+        if factor is None:
+            target_dims = gapp._UPSCALE_RESOLUTIONS.get((target_name or "").strip())
+            if not target_dims:
+                raise RuntimeError("Choose a valid upscale resolution.")
+        target_w, target_h = upscale_target_dims(actual_w, actual_h, mode, target_dims)
         if actual_w >= target_w and actual_h >= target_h:
             raise RuntimeError(
                 f"Final video is already {actual_w}x{actual_h}; choose a larger target than {target_w}x{target_h}."
@@ -8706,19 +8714,20 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         )
         _film_tasks[task_id] = {"status": "running", "step": "final_upscale"}
         cfg = gapp.load_config()
-        if mode in {"ic_lora", "ltx_latent", "h3_latent", "flashvsr"}:
+        if mode != "fast":
             command_template = cfg.get("temporal_video_upscaler_cmd") or None
             _temporal_upscale_scenes_to_final(
                 task_id, wd, staged, target_w, target_h, cfg,
                 command_template=command_template,
                 engine=mode,
+                film_dims=(actual_w, actual_h),
             )
         else:
             upscale_video(final_path, staged, target_w, target_h)
 
         _film_checkpoint(task_id)
         staged.replace(final_path)
-        if mode in {"ic_lora", "ltx_latent", "h3_latent", "flashvsr"}:
+        if mode != "fast":
             # The by-scene upscale is a rebuild from the clean scene clips, so
             # it has to put back what the published final carried on top of
             # them — like every other rebuild. (The fast path upscales the
@@ -8729,11 +8738,14 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
             _maybe_apply_title_cards(wd, final_path)
         mode_label = {
             "fast": "Fast",
-            "ltx_latent": "LTX latent",
+            "ltx_latent_2x": "LTX latent 2×",
             "ic_lora": "LTX IC-LoRA",
             "h3_latent": "H3 latent",
-            "flashvsr": "FlashVSR",
+            "flashvsr_2x": "FlashVSR 2×",
+            "flashvsr_4x": "FlashVSR 4×",
         }.get(mode, mode)
+        # The size is the one the film actually came out at, so a version named
+        # "FlashVSR 2× 1152x1152" is exactly what FlashVSR produced.
         label = f"{mode_label} {target_w}x{target_h}"
         final_video_history.record(wd, final_path, label=label, lang=cur_lang, kind="upscale")
         _film_tasks[task_id] = {
@@ -8816,22 +8828,30 @@ def _normalize_upscale_mode(mode: str | None) -> str:
     - ltx_latent: LTXVLatentUpsampler + latent spatial-upscaler-x2
     - ic_lora: LTX-2.3 IC-LoRA Pixel Spatial Upscaler (generative)
     - h3_latent: MiniMax H3 24-channel latent upscaler (learned 3D resize)
-    - flashvsr: FlashVSR one-step diffusion video super-resolution (2x/4x)
-    ``temporal_ai`` is accepted as an alias of ``ic_lora`` for older clients.
+    - flashvsr_2x / flashvsr_4x: FlashVSR one-step diffusion video super-resolution
+    - ltx_latent_2x: LTXVLatentUpsampler (the only factor it does)
+
+    The factor modes finish at the source times their factor, so they take no
+    target resolution — see pipeline.assembler.FACTOR_UPSCALE_MODES. Bare
+    ``flashvsr`` / ``ltx_latent`` are the pre-factor spellings and resolve to
+    2x; ``temporal_ai`` is an alias of ``ic_lora`` for older clients.
     """
     m = (mode or "fast").strip().lower()
     if m in {"ic_lora", "temporal_ai", "ic-lora", "iclora", "ai_temporal"}:
         return "ic_lora"
-    if m in {"ltx_latent", "latent", "latent_ai", "simple_model"}:
-        return "ltx_latent"
+    if m in {"ltx_latent", "latent", "latent_ai", "simple_model", "ltx_latent_2x"}:
+        return "ltx_latent_2x"
     if m in {"h3_latent", "h3", "minimax_h3_latent"}:
         return "h3_latent"
-    if m in {"flashvsr", "flash_vsr"}:
-        return "flashvsr"
+    if m in {"flashvsr", "flash_vsr", "flashvsr_2x"}:
+        return "flashvsr_2x"
+    if m == "flashvsr_4x":
+        return "flashvsr_4x"
     if m in {"fast", "ffmpeg"}:
         return "fast"
     raise RuntimeError(
-        "Choose a valid upscale mode (fast, flashvsr, ltx_latent, ic_lora, or h3_latent)."
+        "Choose a valid upscale mode (fast, flashvsr_2x, flashvsr_4x, "
+        "ltx_latent_2x, ic_lora, or h3_latent)."
     )
 
 
@@ -8844,16 +8864,30 @@ def _temporal_upscale_scenes_to_final(
     cfg: dict,
     command_template: str | None = None,
     engine: str = "ic_lora",
+    film_dims: tuple[int, int] | None = None,
 ) -> Path:
-    """Upscale rendered scene clips as separate worker jobs, then rebuild final."""
+    """Upscale rendered scene clips as separate worker jobs, then rebuild final.
+
+    *film_dims* is the assembled film's size, which the rendered scene clips do
+    not all share — a re-shot scene can sit at its own size and only becomes
+    uniform when the film is concatenated. A factor mode multiplies the FILM,
+    so an odd-sized scene is conformed to the film first and then upscaled;
+    that keeps the factor's output exact for every scene instead of leaving
+    some to be stretched to match the others afterwards.
+    """
     import concurrent.futures
     import shutil
     from pipeline.assembler import (
+        _get_video_dimensions,
         _verify_upscale_not_blank,
         concatenate_scenes,
+        ensure_video_resolution,
         mix_background_music,
+        parse_upscale_mode,
         temporal_ai_upscale_video,
     )
+
+    _engine_name, factor = parse_upscale_mode(engine)
     from pipeline.worker_pool import WorkerPool, alive_workers
 
     scene_finals = _rendered_scene_finals(wd)
@@ -8936,9 +8970,25 @@ def _temporal_upscale_scenes_to_final(
             _register_film_subjob(sub_id, **sub_fields)
         # Started after acquire so film_timing learns GPU time, not queue wait.
         sub_started = time.time()
+        src_path = scene_path
+        conformed: Path | None = None
+        if factor is not None and film_dims:
+            # Conform to the film's size BEFORE the factor, not the target size
+            # after it: this scene is resampled to the film's size by the concat
+            # regardless, and doing it first leaves the upscale itself exact.
+            scene_dims = _get_video_dimensions(scene_path)
+            if scene_dims != tuple(film_dims):
+                conformed = tmp_dir / f"{scene_path.stem}.conformed.mp4"
+                shutil.copy2(scene_path, conformed)
+                ensure_video_resolution(conformed, film_dims[0], film_dims[1])
+                gapp.logger.info(
+                    "[upscale] scene %d is %dx%d in a %dx%d film — conformed before the %dx",
+                    index + 1, *scene_dims, *film_dims, factor,
+                )
+                src_path = conformed
         try:
             temporal_ai_upscale_video(
-                scene_path,
+                src_path,
                 out,
                 target_w,
                 target_h,
@@ -8958,6 +9008,8 @@ def _temporal_upscale_scenes_to_final(
             out.unlink(missing_ok=True)
             raise
         finally:
+            if conformed is not None:
+                conformed.unlink(missing_ok=True)
             _clear_film_subjob(sub_id)
             if pool and url:
                 pool.release(url)
@@ -14418,8 +14470,17 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
         # back to its render size on a rebuild. The fast path keeps the size
         # without re-running an AI upscale on every edit; the Remix card can
         # restore AI-upscale quality afterwards.
-        finish_dims = gapp._UPSCALE_RESOLUTIONS.get(
-            str(jc.get("finish_resolution") or "").strip())
+        # The size the render's finishing upscale actually reached, when it
+        # recorded one — a factor mode ends up at its factor's size, not at the
+        # requested finishing size, and restoring the latter would stretch the
+        # film past what the upscaler ever produced.
+        _achieved = jc.get("finish_achieved_dims")
+        finish_dims = (
+            (int(_achieved[0]), int(_achieved[1]))
+            if isinstance(_achieved, (list, tuple)) and len(_achieved) == 2
+            else gapp._UPSCALE_RESOLUTIONS.get(
+                str(jc.get("finish_resolution") or "").strip())
+        )
         if finish_dims and finish_dims != (vid_w, vid_h):
             from pipeline.assembler import upscale_video
             target_w, target_h = finish_dims

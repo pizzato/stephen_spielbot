@@ -2767,16 +2767,33 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   .some((r) => r && upscaleOnly(resolutionTier(meta, r)))
                 if (!anyFinishing) return null
                 return (
-                  <Field label="Finishing upscaler" hint="How a QHD/4K target is reached from the rendered film. AI modes shoot each scene through a ComfyUI upscaler; Fast is a plain resample.">
-                    <select className="select" value={eff.finish_upscale_mode || 'flashvsr'}
+                  <Field label="Finishing upscaler" hint="How a QHD/4K target is reached from the rendered film. AI modes shoot each scene through a ComfyUI upscaler; Fast is a plain resample. The ×-factor modes finish at the render size times their factor rather than at the target — those upscalers only do whole factors, and stretching them the rest of the way undoes part of the upscale.">
+                    <select className="select" value={eff.finish_upscale_mode || 'flashvsr_2x'}
                       onChange={(e) => setStyleField('finish_upscale_mode', e.target.value)}>
-                      <option value="flashvsr">FlashVSR (video super-resolution)</option>
+                      <option value="flashvsr_2x">FlashVSR 2× (video super-resolution)</option>
+                      <option value="flashvsr_4x">FlashVSR 4× (video super-resolution, slow)</option>
                       <option value="fast">Fast (ffmpeg)</option>
-                      <option value="ltx_latent">LTX latent (simple model)</option>
+                      <option value="ltx_latent_2x">LTX latent 2× (simple model)</option>
                       <option value="ic_lora">LTX IC-LoRA (generative)</option>
                       <option value="h3_latent">H3 latent (MiniMax H3)</option>
                     </select>
                     <ParentVal k="finish_upscale_mode" />
+                    {(() => {
+                      const f = { flashvsr_2x: 2, flashvsr_4x: 4, ltx_latent_2x: 2 }[eff.finish_upscale_mode]
+                      if (!f) return null
+                      const m = /\((\d+)[×x](\d+)\)/.exec(eff.resolution || '')
+                      if (!m) return null
+                      // The render tier behind a QHD/4K target, not the target.
+                      const tier = (meta.pixel_tiers || []).find((t) => t.key === resolutionTier(meta, eff.resolution))
+                      if (tier?.upscale_only) {
+                        return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          Finishes at the render size × {f} — the chosen target only decides that a finishing pass runs.
+                        </div>
+                      }
+                      return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        Finishes at {Math.floor(+m[1] * f / 2) * 2} × {Math.floor(+m[2] * f / 2) * 2}.
+                      </div>
+                    })()}
                   </Field>
                 )
               })()}

@@ -166,8 +166,11 @@ class FilmUpscaleTests(unittest.TestCase):
         scene.write_bytes(b"scene-one" * 1500)
 
         def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora", chunk_seconds=None):
-            self.assertEqual(engine, "ltx_latent")
+            self.assertEqual(engine, "ltx_latent_2x")
             self.assertEqual(src, scene)
+            # A 2x mode finishes at twice the film, not at the FHD target that
+            # was passed in — the upsampler cannot reach an arbitrary size.
+            self.assertEqual((width, height), (1024, 576))
             out.write_bytes(b"latent-upscaled-scene")
             return out
 
@@ -341,7 +344,9 @@ class FilmUpscaleTests(unittest.TestCase):
                     upscale_mode="ltx_latent",
                 ),
             )
-        self.assertEqual(started[0][3], "ltx_latent")
+        # The pre-factor spelling resolves to the 2x mode — the only factor the
+        # LTX latent upsampler has ever produced.
+        self.assertEqual(started[0][3], "ltx_latent_2x")
 
     def test_remix_upscale_endpoint_accepts_canonical_ic_lora_mode(self):
         """UI sends upscale_mode=ic_lora; normalizer must accept the canonical key."""
