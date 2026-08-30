@@ -79,6 +79,39 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             self.assertEqual(result, out)
             fallback.assert_called_once_with([scene_1, scene_2], out, fade=0.0)
 
+    def test_concatenate_scenes_normalises_to_the_source_rate(self):
+        """Uniform 24fps inputs must concat at 24fps — forcing 25 quantised
+        each scene's video a few ms short and drifted audio/video apart."""
+        with tempfile.TemporaryDirectory() as tmp:
+            scenes = [Path(tmp) / f"scene_{i}.mp4" for i in range(3)]
+            out = Path(tmp) / "out.mp4"
+            for p in scenes:
+                p.write_bytes(b"video")
+            seen = {}
+
+            with mock.patch.object(assembler, "_get_duration", return_value=5.083), \
+                 mock.patch.object(assembler, "_has_audio_stream", return_value=True), \
+                 mock.patch.object(assembler, "_video_frame_rates", return_value=(24.0, 24.0)), \
+                 mock.patch.object(assembler, "_run", side_effect=lambda cmd, **kw: seen.setdefault("cmd", cmd)):
+                assembler.concatenate_scenes(scenes, out)
+
+            fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+            self.assertIn("fps=24,", fc)
+            self.assertNotIn("fps=25", fc)
+
+    def test_concat_frame_rate_takes_the_majority_and_falls_back_to_25(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scenes = [Path(tmp) / f"scene_{i}.mp4" for i in range(3)]
+            for p in scenes:
+                p.write_bytes(b"video")
+
+            rates = iter([(24.0, 24.0), (50.0, 50.0), (24.0, 24.0)])
+            with mock.patch.object(assembler, "_video_frame_rates", side_effect=lambda p: next(rates)):
+                self.assertEqual(assembler._concat_frame_rate(scenes), 24.0)
+
+            with mock.patch.object(assembler, "_video_frame_rates", side_effect=RuntimeError("probe failed")):
+                self.assertEqual(assembler._concat_frame_rate(scenes), 25.0)
+
     def test_temporal_chunks_keep_their_audio(self):
         """Every packaged upscale workflow feeds VHS's audio into VideoCombine,
         and VHS fails the prompt outright when the input has no audio track."""
