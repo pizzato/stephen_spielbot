@@ -493,7 +493,7 @@ class TimelineSafetyTests(unittest.TestCase):
                 p.write_bytes(b"x")
             with mock.patch.object(assembler, "_mux_source_audio",
                                    side_effect=lambda v, s, o, target_duration=None: o.write_bytes(b"muxed") or o), \
-                 mock.patch.object(assembler, "_get_duration", return_value=3.0), \
+                 mock.patch.object(assembler, "_get_video_stream_duration", return_value=3.0), \
                  mock.patch.object(assembler, "conform_video_to_source") as conform:
                 assembler._restore_source_clock(video, src, out, 3.0)
             conform.assert_not_called()
@@ -504,12 +504,42 @@ class TimelineSafetyTests(unittest.TestCase):
 
             with mock.patch.object(assembler, "_mux_source_audio",
                                    side_effect=lambda v, s, o, target_duration=None: o.write_bytes(b"muxed") or o), \
-                 mock.patch.object(assembler, "_get_duration", return_value=3.4), \
+                 mock.patch.object(assembler, "_get_video_stream_duration", return_value=3.4), \
                  mock.patch.object(assembler, "conform_video_to_source", side_effect=fake_conform) as conform:
                 assembler._restore_source_clock(video, src, out, 3.0)
             conform.assert_called_once()
             self.assertEqual(conform.call_args.args[3], 3.0)
             self.assertEqual(out.read_bytes(), b"conformed")
+
+    def test_restore_source_clock_reads_the_video_stream_not_the_container(self):
+        """Muxing full-length audio onto a frames-short picture makes the
+        container's duration read on-target; the picture must still be
+        conformed or every scene ends a beat early and the film drifts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            video, src, out = Path(tmp) / "v.mp4", Path(tmp) / "s.mp4", Path(tmp) / "o.mp4"
+            for p in (video, src):
+                p.write_bytes(b"x")
+
+            def fake_conform(v, s, o, duration):
+                o.write_bytes(b"conformed")
+                return o
+
+            with mock.patch.object(assembler, "_mux_source_audio",
+                                   side_effect=lambda v, s, o, target_duration=None: o.write_bytes(b"muxed") or o), \
+                 mock.patch.object(assembler, "_get_duration", return_value=5.083), \
+                 mock.patch.object(assembler, "_get_video_stream_duration", return_value=4.917), \
+                 mock.patch.object(assembler, "conform_video_to_source", side_effect=fake_conform) as conform:
+                assembler._restore_source_clock(video, src, out, 5.083)
+            conform.assert_called_once()
+            self.assertEqual(out.read_bytes(), b"conformed")
+
+    def test_video_stream_duration_falls_back_to_the_container(self):
+        """A container with no per-stream duration (e.g. mkv) still measures."""
+        probe = mock.Mock(stdout="N/A\n")
+        with mock.patch.object(assembler.subprocess, "run", return_value=probe), \
+             mock.patch.object(assembler, "_get_duration", return_value=4.2) as fallback:
+            self.assertEqual(assembler._get_video_stream_duration(Path("x.mkv")), 4.2)
+        fallback.assert_called_once()
 
     def test_whole_clip_result_goes_back_on_the_source_clock(self):
         """Only the chunked path used to do this; the whole clip came back with
