@@ -48,3 +48,6 @@ youtube_queue.json
 *.swp
 *.swo
 .claude/
+
+# Paper submissions — never commit
+submission/
