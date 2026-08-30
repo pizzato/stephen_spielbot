@@ -9083,12 +9083,17 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
     target_name = (body.target_resolution or "").strip()
-    if target_name not in gapp._UPSCALE_RESOLUTIONS:
-        raise HTTPException(400, "Choose a valid upscale resolution.")
     try:
         mode = _normalize_upscale_mode(body.upscale_mode)
     except RuntimeError as e:
         raise HTTPException(400, str(e))
+    # A factor mode finishes at the film's size times its factor, so the UI
+    # hides the resolution picker and sends nothing — only the target-sized
+    # modes need one chosen.
+    from pipeline.assembler import parse_upscale_mode
+    _engine, factor = parse_upscale_mode(mode)
+    if factor is None and target_name not in gapp._UPSCALE_RESOLUTIONS:
+        raise HTTPException(400, "Choose a valid upscale resolution.")
     if not gapp._final_path_for_work_dir(wd).exists():
         raise HTTPException(404, f"Final video not found for {wd.name}.")
 

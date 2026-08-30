@@ -348,6 +348,27 @@ class FilmUpscaleTests(unittest.TestCase):
         # LTX latent upsampler has ever produced.
         self.assertEqual(started[0][3], "ltx_latent_2x")
 
+    def test_remix_upscale_endpoint_accepts_factor_mode_without_resolution(self):
+        """A factor mode sizes itself off the film, so no target is sent."""
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        wd.with_suffix(".mp4").write_bytes(b"low-res-final")
+        started = []
+
+        def fake_thread(target, args, daemon):
+            started.append(args)
+            return mock.Mock(start=lambda: None)
+
+        with mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
+            backend.remix_upscale_video(
+                backend.RemixUpscaleBody(
+                    work_dir=str(wd),
+                    target_resolution="",
+                    upscale_mode="flashvsr_2x",
+                ),
+            )
+        self.assertEqual(started[0][2], "")
+        self.assertEqual(started[0][3], "flashvsr_2x")
+
     def test_remix_upscale_endpoint_accepts_canonical_ic_lora_mode(self):
         """UI sends upscale_mode=ic_lora; normalizer must accept the canonical key."""
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
