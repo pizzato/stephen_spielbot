@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 logger = logging.getLogger("video_gen")
@@ -1352,6 +1353,28 @@ def trim_video(input_path: Path, output_path: Path, duration: float) -> Path:
     return output_path
 
 
+def _concat_frame_rate(scene_paths: list[Path]) -> float:
+    """The frame rate to normalise every input to before the concat filter.
+
+    Hard-coding _FILM_FPS here quantised each 24fps H3 scene's video a few
+    milliseconds short while the audio concat kept exact lengths — across a
+    long film the final's video ran ~0.2s ahead of its audio. Use the majority
+    nominal rate of the inputs so a uniform 24fps film stays 24fps; oddballs
+    (e.g. a 50fps dialogue re-encode) are still conformed to that rate.
+    """
+    rates: list[float] = []
+    for p in scene_paths:
+        try:
+            nominal, _ = _video_frame_rates(p)
+        except Exception:
+            continue
+        if 0 < nominal <= 120:
+            rates.append(round(nominal, 3))
+    if not rates:
+        return float(_FILM_FPS)
+    return Counter(rates).most_common(1)[0][0]
+
+
 def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float = 0.3,
                        hard_boundaries: set[int] | None = None) -> Path:
     """Concatenate scenes with fade-out/fade-in between them.
@@ -1371,8 +1394,9 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
     n = len(scene_paths)
     hard = set(hard_boundaries or ())
     durations = [_get_duration(p) for p in scene_paths]
-    logger.info("[ffmpeg] concatenate_scenes: %d scenes, total %.1fs%s",
-                n, sum(durations),
+    rate = _concat_frame_rate(scene_paths)
+    logger.info("[ffmpeg] concatenate_scenes: %d scenes, total %.1fs at %gfps%s",
+                n, sum(durations), rate,
                 f", hard joins at {sorted(hard)}" if hard else "")
 
     inputs = []
@@ -1406,7 +1430,7 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         # Normalise fps + SAR before concat: the concat filter demands identical
         # video params across inputs, but scene finals can differ (e.g. a dialogue
         # scene's within-concat re-encode lands at 50fps while narration is 25).
-        vf = [f"fps={_FILM_FPS}", "setsar=1", "setpts=PTS-STARTPTS"]
+        vf = [f"fps={rate:g}", "setsar=1", "setpts=PTS-STARTPTS"]
         if fade > 0 and i > 0 and (i - 1) not in hard:
             vf.append(f"fade=t=in:st=0:d={fade:.2f}")
         if fade > 0 and i < n - 1 and i not in hard:
