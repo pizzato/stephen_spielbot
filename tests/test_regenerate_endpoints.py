@@ -509,6 +509,26 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(seen["row"]["status"], "queued")
         self.assertEqual(seen["row"]["detail"], "waiting for a free worker · scene 3")
 
+    def test_activity_refreshes_tracked_op_elapsed(self):
+        """A _track_op row is built once at op start, so its stored elapsed_s is
+        ~0 forever — /api/activity re-derives it, which is what the queue card's
+        "queued 4m 18s" reads."""
+        op_id = "op-elapsed"
+        backend._current_ops[op_id] = backend._make_activity_event(
+            name="Editing cover", detail="waiting for a free worker",
+            started_at=time.time() - 90, status="queued",
+            event_id=op_id, category="film",
+        )
+        try:
+            with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
+                 mock.patch.object(backend.yt, "load_queue", return_value=[]):
+                activity = backend.get_activity()
+        finally:
+            backend._current_ops.pop(op_id, None)
+
+        row = next(o for o in activity["live"] if o["id"] == op_id)
+        self.assertGreaterEqual(row["elapsed_s"], 89)
+
     def test_track_op_keeps_concurrent_operations_visible(self):
         with backend._track_op("First task", "a"):
             with backend._track_op("Second task", "b"):

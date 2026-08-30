@@ -25,6 +25,16 @@ function fmtDuration(secs) {
   return `${h}h ${m % 60}m`
 }
 
+// Queued rows carry a "waiting for a free worker · …" detail for the inline
+// list. Inside the queue card the heading already says that, so drop it.
+function queueDetail(ev) {
+  const d = String(ev.detail || '').replace(/^waiting for a free worker(\s·\s)?/, '')
+  // Film-task details already end with the film's title; tracked ops don't.
+  const title = String(ev.title || '')
+  if (title && !d.includes(title)) return [title, d].filter(Boolean).join(' · ')
+  return d || title
+}
+
 function wallTime(ts) {
   if (!ts) return ''
   try {
@@ -271,6 +281,18 @@ export default function Activity({ go }) {
   const liveCount = data.live_count || (data.live || []).length || 0
   const isActive = liveCount > 0 || data.render_active
 
+  // "Running" is work on a worker; "queued" is work that has been accepted and
+  // is waiting for one (one job per worker, fleet-wide). Longest wait first —
+  // roughly the order they'll start, though leases are taken per worker so it
+  // isn't a strict position.
+  const queuedItems = useMemo(
+    () => (data.live || [])
+      .filter((e) => e.status === 'queued')
+      .sort((a, b) => (a.started_at || 0) - (b.started_at || 0)),
+    [data.live],
+  )
+  const runningCount = Math.max(0, liveCount - queuedItems.length)
+
   // One follow row per film with live work, so everything in flight can be
   // reached from the top of the screen — not just the render. Rank picks the
   // row that best represents the film: its running render, else any running
@@ -292,7 +314,7 @@ export default function Activity({ go }) {
     ? liveFilms.find((e) => e.work_dir === data.render_work_dir)
       || liveFilms.find((e) => e.category === 'render' && e.status === 'running')
     : null
-  const otherLiveFilms = liveFilms.filter((e) => e !== bannerRender)
+  const otherLiveFilms = liveFilms.filter((e) => e !== bannerRender && e.status !== 'queued')
 
   const openLive = (e) => {
     if (e.category === 'render' && e.status === 'running') go('progress', { workDir: e.work_dir })
@@ -312,9 +334,14 @@ export default function Activity({ go }) {
           </p>
         </div>
         <div className="row center gap-10 reveal reveal-d1">
-          {isActive
-            ? <Chip tone="accent" dot>{liveCount || 1} live</Chip>
-            : <Chip tone="neutral" dot>Idle</Chip>}
+          {isActive ? (
+            <>
+              <Chip tone="accent" dot>{runningCount || (queuedItems.length ? 0 : 1)} running</Chip>
+              {queuedItems.length > 0 ? (
+                <Chip tone="info" dot>{queuedItems.length} queued</Chip>
+              ) : null}
+            </>
+          ) : <Chip tone="neutral" dot>Idle</Chip>}
           {data.render_active && data.render_eta ? (
             <Chip tone="info" dot>{data.render_eta} left</Chip>
           ) : null}
@@ -369,7 +396,7 @@ export default function Activity({ go }) {
                     <div className="grow" style={{ minWidth: 180 }}>
                       <span style={{ fontWeight: 600, fontSize: 13.5 }}>{e.title || e.name}</span>
                       <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
-                        {e.status === 'queued' ? 'queued — ' : ''}{e.detail || e.name}
+                        {e.detail || e.name}
                       </span>
                     </div>
                     <span className="muted mono" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
@@ -392,6 +419,51 @@ export default function Activity({ go }) {
               </div>
             </div>
           )}
+        </Card>
+      )}
+
+      {queuedItems.length > 0 && (
+        <Card span={12} padLg className="reveal reveal-d1" style={{ marginBottom: 16 }}>
+          <div className="row center between gap-10" style={{ flexWrap: 'wrap' }}>
+            <span className="label-sm">
+              In the queue · {queuedItems.length} waiting
+            </span>
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              Accepted, waiting for a free worker — longest wait first
+            </span>
+          </div>
+          <div className="stack gap-10" style={{ marginTop: 12 }}>
+            {queuedItems.map((e) => (
+              <div
+                key={e.id || `${e.name}-${e.started_at}`}
+                className="row center gap-12"
+                style={{ flexWrap: 'wrap' }}
+              >
+                <Icon name="hourglass-half" style={{ color: 'var(--ink-4)', width: 14, flexShrink: 0 }} />
+                <div className="grow" style={{ minWidth: 180 }}>
+                  <span style={{ fontWeight: 600, fontSize: 13.5 }}>{e.name}</span>
+                  <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
+                    {queueDetail(e)}
+                  </span>
+                </div>
+                {e.elapsed_s != null ? (
+                  <span className="muted mono" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
+                    queued {fmtDuration(e.elapsed_s)}
+                  </span>
+                ) : null}
+                {e.work_dir ? (
+                  <button
+                    type="button"
+                    className="btn btn--quiet"
+                    style={{ padding: '4px 10px', fontSize: 12 }}
+                    onClick={() => openLive(e)}
+                  >
+                    Open film
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 

@@ -105,11 +105,23 @@ is actually running — creating another film while one renders doesn't steal it
 whose script or song is still being written before its render starts appears in its own
 group as **Render queued** until the render takes over.
 
-Under the banner, **Also in flight** lists every other film with live work — one line per
-film showing its current step (writing the song, re-voicing, a final upscale, a queued
-render) with its progress or elapsed time and an open button, so anything going on can be
+Under the banner, **Also in flight** lists every other film with work on a worker — one
+line per film showing its current step (writing the song, re-voicing, a final upscale)
+with its progress or elapsed time and an open button, so anything going on can be
 followed from the top of the screen. When nothing is rendering but other work is live,
 the same card appears as **Happening now**.
+
+### In the queue
+
+A worker runs one job at a time, fleet-wide, so anything asked for past the number of
+free workers is accepted and waits. **In the queue** lists exactly what is waiting — the
+step, the film, and how long it has been queued — longest wait first, which is roughly
+the order the work will start. The counter beside the title splits the two: *N running*
+is work on a worker right now, *N queued* is work behind it. The card is only there when
+something is waiting; nothing is lost, and nothing is running twice on one GPU.
+
+Films whose render hasn't begun (script or song still being written) queue here too, as
+**Render queued**.
 
 ### Filters
 
@@ -126,7 +138,8 @@ immediately (it polls on its own anyway).
 ### Reading it
 
 Live entries carry a spinner, a detail line, an ETA, and a percentage; queued ones show an
-hourglass. Completed entries show how long they took and when — and whether they failed.
+hourglass, read *waiting for a free worker*, and have no ETA counting down until they are
+on a GPU. Completed entries show how long they took and when — and whether they failed.
 
 The song studio's slow steps appear here too, grouped under their film: **Singing the
 song** while the music engine renders the track, **Re-voicing the song as &lt;voice&gt;**
