@@ -167,7 +167,11 @@ film is joined the same way the original was — the same dip-to-black between s
 included — so the upscaled cut keeps the film's timing.
 
 The scene clips in the editor stay at the render size: the upscale is a *final version*,
-not a new set of scenes. Any later edit that rebuilds the film — a re-voiced or re-mixed
+not a new set of scenes. The editor says so rather than leaving you to guess: a film
+whose published final is bigger than its scene clips carries an **Upscaled to …** chip
+under its title, a size chip beside *Final cut* on the player (e.g. `3840×2160 ·
+upscaled`), and a note at the top of the Scenes tab confirming that re-rendering one
+scene never redoes the upscale. Any later edit that rebuilds the film — a re-voiced or re-mixed
 song, a trim, a re-shot scene — assembles from the render-size
 scenes again, so run **Upscale video** once more afterwards. The cached upscaled scenes
 make that quick: only scenes whose clip actually changed go back to the GPU (a new
@@ -294,6 +298,10 @@ first frame, current clip and prompt summaries; **Edit** opens the fields. Acted
 also show their resolved cast portraits, voices, location/wardrobe/reference slots and
 song slice on that same card, so editing, rewriting, re-shooting and choosing takes never
 requires switching to another tab.
+
+On a film whose final was [upscaled](#upscale-video), a note above the cards says the
+published final's size and that the clips here stay at the render resolution —
+re-rendering one scene only replaces that clip; it never redoes the upscale.
 
 ### Editable fields
 
