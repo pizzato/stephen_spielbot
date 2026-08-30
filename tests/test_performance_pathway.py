@@ -1667,6 +1667,20 @@ class FirstFrameRemoveTests(ActedSceneEditingTests):
         self.assertEqual(len(row["history"]["versions"]), 2)
         self.assertIsNone(row["history"]["selected"])
 
+    def test_remove_keeps_an_unrecorded_render_painted_frame(self):
+        # A frame the render painted lands on disk without a history version;
+        # removing (or regenerating over) it must keep it re-selectable even
+        # though history already holds other versions.
+        self._make_frame()
+        (self.wd / "scene_01_first_frame.png").write_bytes(b"render-painted")
+        (self.wd / "scene_01_preview.png").unlink()
+        self._save()
+        self.backend.remove_scene_preview(self.job_id, 1)
+        row = self.backend.film_scenes(work_dir=str(self.wd))["scenes"][0]
+        versions = row["history"]["versions"]
+        self.assertEqual(len(versions), 3)
+        self.assertEqual(Path(versions[-1]["path"]).read_bytes(), b"render-painted")
+
     def test_reselecting_a_kept_version_bringss_the_frame_back(self):
         self._make_frame()
         self._save()
