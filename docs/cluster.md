@@ -115,6 +115,32 @@ the host's current NVIDIA device nodes. This self-heals the "nvidia-smi works bu
 fails" state left behind when the driver or its modules were (re)loaded after the
 containers were created.
 
+### Workers stay in step with the repo
+
+Custom nodes are baked into the image, not mounted, so a worker keeps whatever it was
+installed with — a node added to `docker/comfyui/Dockerfile` later would never reach it,
+and every render needing that node would fail with "the node '…' is not installed on this
+worker".
+
+`make start` closes that gap. It fingerprints the build context (everything under
+`docker/` plus the files the Dockerfiles copy in) and compares it with the stamp each host
+recorded at its last successful deploy. A host that has fallen behind is re-deployed —
+build context re-synced, images rebuilt, containers recreated — before the app starts. The
+first start after a Dockerfile change therefore takes a few minutes; later ones are
+unchanged.
+
+Once a worker is up, its ComfyUI is asked which nodes it registers, and every entry in
+`docker/comfyui/required_nodes.txt` must be there. This catches what the fingerprint
+cannot: a node pack that clones and builds fine but fails to import at runtime after an
+upstream dependency change. `make install`, `make start`, and `make status` all run it, and
+you can run it alone:
+
+```bash
+bash scripts/check_worker_nodes.sh s2
+```
+
+A worker that fails this check is not stamped, so the next `make start` retries it.
+
 To prevent that state at boot, load the modules before Docker:
 
 ```bash

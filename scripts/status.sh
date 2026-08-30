@@ -107,6 +107,10 @@ for host in $(remote_hosts); do
     fi
     check_health "ComfyUI  ${host}" "http://${host}:8188/system_stats"
     check_health "F5-TTS   ${host}" "http://${host}:8189/health"
+    # ComfyUI answers /system_stats even on an image built before a custom node
+    # was added, so check the nodes themselves — otherwise a worker that will
+    # fail every upscale still reads as UP here.
+    bash "$REPO_ROOT/scripts/check_worker_nodes.sh" "$host" || ALL_OK=false
 done
 
 # ── Summary ────────────────────────────────────────────────────────────────────
@@ -115,6 +119,7 @@ echo ""
 if $ALL_OK; then
     echo "All services are UP."
 else
-    echo "Some services are DOWN. Run 'make start' to restart them."
+    echo "Some services are DOWN or incomplete. Run 'make start' to restart them"
+    echo "(a worker missing nodes is rebuilt automatically by 'make start')."
     exit 1
 fi
