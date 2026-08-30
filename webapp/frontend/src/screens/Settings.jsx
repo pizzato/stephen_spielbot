@@ -3011,36 +3011,44 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           }
           const charCard = ({ c, i }) => (
             <div key={c.id || `row-${i}`} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
-              <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
+              {/* Every multi-field row is TOP-aligned: Field renders its hint
+                  BELOW the control, so bottom-aligning a row whose hints differ
+                  in height shoves the labels and inputs out of line. */}
+              <div className="row gap-12" style={{ alignItems: 'flex-start' }}>
                 {/* Portrait rides beside the name — at the card's foot it read as
                     belonging to the NEXT character. Upload/re-roll/version ops
-                    stay below with the version strip. */}
+                    stay below with the version strip. Sized to the name row +
+                    appearance box beside it. */}
                 {c.id && c.ref_image && (
                   <div onClick={() => setCharLightbox(c.id)} title="Full size"
-                    style={{ position: 'relative', width: 96, height: 96, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
+                    style={{ position: 'relative', width: 132, height: 132, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
                     <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   </div>
                 )}
-                <div className="grow"><Field label="Name">
-                  <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
-                    onChange={(e) => updateChar(i, { name: e.target.value })} />
-                </Field></div>
-                <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
-                  <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
-                    key={`alias-${c.id || i}`}
-                    onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
-                </Field></div>
-                <div style={{ minWidth: 210 }}><Field label="Belongs to" hint="Global, or one style (plus the styles under it).">
-                  <select className="select" value={c.style || ''} onChange={(e) => updateChar(i, { style: e.target.value })}>
-                    {scopeOptionsFor(c.style || '')}
-                  </select>
-                </Field></div>
+                <div className="grow stack gap-12" style={{ minWidth: 0 }}>
+                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-start' }}>
+                    <div className="grow" style={{ minWidth: 180 }}><Field label="Name" hint="How scripts refer to this character.">
+                      <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
+                        onChange={(e) => updateChar(i, { name: e.target.value })} />
+                    </Field></div>
+                    <div className="grow" style={{ minWidth: 200 }}><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
+                      <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
+                        key={`alias-${c.id || i}`}
+                        onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+                    </Field></div>
+                    <div style={{ minWidth: 210 }}><Field label="Belongs to" hint="Global, or one style (plus the styles under it).">
+                      <select className="select" value={c.style || ''} onChange={(e) => updateChar(i, { style: e.target.value })}>
+                        {scopeOptionsFor(c.style || '')}
+                      </select>
+                    </Field></div>
+                  </div>
+                  <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
+                    <textarea className="textarea" rows={3} value={c.description || ''}
+                      onChange={(e) => updateChar(i, { description: e.target.value })} />
+                  </Field>
+                </div>
               </div>
-              <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
-                <textarea className="textarea" rows={3} value={c.description || ''}
-                  onChange={(e) => updateChar(i, { description: e.target.value })} />
-              </Field>
               {/* flex-start: only Background carries a hint, so bottom-aligning
                   the row pushed the hint-less selects out of line. */}
               <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-start' }}>
