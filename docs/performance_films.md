@@ -59,8 +59,9 @@ What the take is built from depends on what the scene has:
   image rides as a reference that defines the opening composition — *begin the take looking
   like this picture*. So the image prompt still composes the shot, exactly as it did on the
   I2V path. The Create screen's preview is used when one exists; otherwise the frame is
-  generated at render time, on the same worker, right before the take — **unless a location
-  reference applies to the scene**: the location is the place, chosen by hand, and a frame
+  generated at render time, on the same worker, right before the take (anyone the frame
+  names is anchored to their character reference portrait, so the painted opening shows the
+  same face the take does) — **unless a location reference applies to the scene**: the location is the place, chosen by hand, and a frame
   outranks it, so no frame is invented over it. Removing a scene's first frame therefore
   sticks — the take opens on the location instead.
 - **Portraits, when anyone is on screen.** The writer names a **cast** on each silent scene
