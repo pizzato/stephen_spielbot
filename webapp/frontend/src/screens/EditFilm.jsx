@@ -866,6 +866,12 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [titleCardImages, setTitleCardImages] = useState({})
   const [titleCardsDefaultFont, setTitleCardsDefaultFont] = useState('')
   const [titleCardsBusy, setTitleCardsBusy] = useState(false)
+  // Ending fade (dip to black): the standing length (0 = off), whether the
+  // published cut fades right now, and the length the form offers.
+  const [fadeOn, setFadeOn] = useState(false)
+  const [fadeApplied, setFadeApplied] = useState(false)
+  const [fadeSeconds, setFadeSeconds] = useState(2)
+  const [fadeBusy, setFadeBusy] = useState(false)
   const [fonts, setFonts] = useState([])
   const [captionTracks, setCaptionTracks] = useState(null)  // [{lang, name, url}] downloadable SRTs
   const [error, setError] = useState('')
@@ -921,6 +927,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         setTitleCardsApplied(!!d.title_cards_applied)
         setTitleCardImages(d.title_card_images || {})
         setTitleCardsDefaultFont(d.title_cards_default_font || '')
+        setFadeOn(!!d.fade_ending)
+        setFadeApplied(!!d.fade_ending_applied)
+        if (d.fade_ending) setFadeSeconds(d.fade_ending)
         // Re-voicing clones a reference clip, so only library voices qualify —
         // and only one still in the library (a film can name a deleted voice).
         if (d.song) {
@@ -1477,6 +1486,33 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setSubsBusy(false) }
   }
 
+  const applyFadeEnding = async () => {
+    setFadeBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.fadeEnding({ work_dir: data.work_dir, seconds: fadeSeconds })
+      setStatus(r.message)
+      if (r.video_history) setVideoHistory(r.video_history)
+      if (r.fade_ending) setFadeSeconds(r.fade_ending)
+      setFadeOn(true); setFadeApplied(true)
+      setData((d) => ({
+        ...d, final_url: r.final_url ? r.final_url + `&t=${Date.now()}` : d.final_url,
+      }))
+    } catch (e) { setError(e.message) } finally { setFadeBusy(false) }
+  }
+
+  const removeFadeEnding = async () => {
+    setFadeBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.removeFadeEnding(data.work_dir)
+      setStatus(r.message)
+      if (r.video_history) setVideoHistory(r.video_history)
+      setFadeOn(false); setFadeApplied(false)
+      setData((d) => ({
+        ...d, final_url: r.final_url ? r.final_url + `&t=${Date.now()}` : d.final_url,
+      }))
+    } catch (e) { setError(e.message) } finally { setFadeBusy(false) }
+  }
+
   const remix = async () => {
     setBusy(true); setError(''); setStatus('')
     try {
@@ -1515,7 +1551,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || titleCardsBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || titleCardsBusy || fadeBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -1717,6 +1753,41 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
                   </a>
                 ))}
               </div>
+            </div>
+          )}
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="moon" style={{ color: 'var(--ink-3)', width: 16 }} /> Ending fade</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            A film — a music video especially — can stop dead on its last beat.
+            Dip the final seconds to black and fade the sound with them. Nothing
+            is trimmed, so the timing never shifts; the previous cut is kept as
+            a version, and once on, every later rebuild keeps the fade.
+            Changing the length or removing it rebuilds from the clean scene
+            clips — a fade lives in the pixels.
+            {fadeApplied && <strong> This cut fades out.</strong>}
+          </p>
+          <div className="mt-16">
+            <Field label="Fade the last (seconds)"
+              hint="How long the dip to black lasts. Around 2 s reads as an ending; longer plays as a slow goodbye.">
+              <input className="input" type="number" min={0.5} max={8} step={0.5}
+                value={fadeSeconds} disabled={anyBusy}
+                onChange={(e) => setFadeSeconds(+e.target.value)} style={{ maxWidth: 120 }} />
+            </Field>
+          </div>
+          <div className="mt-16">
+            <Button variant="primary" block icon="moon" disabled={anyBusy}
+              onClick={applyFadeEnding}>
+              {fadeBusy ? 'Fading…' : fadeOn ? 'Re-apply the ending fade' : 'Fade the ending'}
+            </Button>
+          </div>
+          {fadeOn && (
+            <div className="mt-8">
+              <Button variant="ghost" block icon="eye-slash" disabled={anyBusy}
+                onClick={removeFadeEnding}>
+                {fadeBusy ? 'Working…' : 'Remove the ending fade'}
+              </Button>
             </div>
           )}
         </Card>

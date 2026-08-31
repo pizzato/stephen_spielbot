@@ -2422,6 +2422,22 @@ def main(work_dir: Path) -> None:
                 )
             except Exception as ff_err:
                 logger.warning("First-frame cover failed (non-fatal): %s", ff_err)
+        # Per-film: a standing ending fade (set from the film editor) survives
+        # a full re-render — the dip lives in the pixels, so a fresh final
+        # would otherwise come back ending abruptly again.
+        # Non-fatal: a finished film without the fade beats a failed render.
+        fade_secs = 0.0
+        try:
+            fade_secs = float(cfg.get("fade_ending") or 0)
+        except (TypeError, ValueError):
+            pass
+        if fade_secs > 0:
+            write_progress(status_file, 97, "Fading the ending to black…")
+            try:
+                from pipeline.assembler import fade_ending_in_place
+                fade_ending_in_place(work_dir, final_path, fade_secs)
+            except Exception as fade_err:
+                logger.warning("Ending fade failed (non-fatal): %s", fade_err)
         store.record_artifact(
             durable_job_id,
             final_task,

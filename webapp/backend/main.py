@@ -75,6 +75,7 @@ from pipeline.cover import (  # noqa: E402
     cover_phrase_for,
     default_cover_phrase,
 )
+from pipeline import assembler as _assembler  # noqa: E402
 from pipeline import title_cards as _title_cards  # noqa: E402
 from pipeline.cover_typography import (  # noqa: E402
     COVER_BASE_NAME,
@@ -7586,6 +7587,10 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "title_cards": _title_cards_form(wd, jc),
         "title_cards_default_font": _title_cards_default_font(wd),
         "title_cards_applied": bool(_title_cards.applied_title_cards(wd, final_vid)),
+        # Ending fade (dip to black): the standing length in seconds (0 = off)
+        # and whether the published cut carries it right now.
+        "fade_ending": float(jc.get("fade_ending") or 0),
+        "fade_ending_applied": _applied_ending_fade(wd, final_vid) is not None,
         "title_card_images": _title_card_images(wd, jc),
         # Same publish/approval status the Films tab shows, so the review screen
         # can surface the Approve gate (publish_require_approval) inline.
@@ -7619,6 +7624,7 @@ def remix_apply(body: RemixBody) -> dict:
         if final_path:
             _maybe_burn_subtitles(wd, final_path)
             _maybe_burn_first_frame_cover(wd, final_path)
+            _maybe_fade_ending(wd, final_path)
             _maybe_apply_title_cards(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
@@ -7804,6 +7810,7 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
         )
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
+        _maybe_fade_ending(wd, final_path)
         _maybe_apply_title_cards(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
@@ -8110,6 +8117,7 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
     # A localized cut gets its captions burned in the published language too.
     _maybe_burn_subtitles(wd, final_path, lang=lang)
     _maybe_burn_first_frame_cover(wd, final_path, cover_path=loc_cover)
+    _maybe_fade_ending(wd, final_path)
     _maybe_apply_title_cards(wd, final_path)
     history = final_video_history.record(wd, final_path, label=LANGUAGES[lang], lang=lang,
                                          kind="localize")
@@ -8537,6 +8545,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
             raise RuntimeError(message or "Re-mux failed after regenerating music.")
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
+        _maybe_fade_ending(wd, final_path)
         _maybe_apply_title_cards(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
@@ -8615,6 +8624,7 @@ def _remux_with_current_music(wd: Path) -> str:
         raise RuntimeError(message or "Re-mux failed.")
     _maybe_burn_subtitles(wd, final_path)
     _maybe_burn_first_frame_cover(wd, final_path)
+    _maybe_fade_ending(wd, final_path)
     _maybe_apply_title_cards(wd, final_path)
     return final_path
 
@@ -8728,6 +8738,7 @@ def select_music(body: MusicSelectBody) -> dict:
         if final_path:
             _maybe_burn_subtitles(wd, final_path)
             _maybe_burn_first_frame_cover(wd, final_path)
+            _maybe_fade_ending(wd, final_path)
             _maybe_apply_title_cards(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Re-mux failed.")
@@ -8813,6 +8824,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
             # a second subtitle pass would print the captions twice.)
             _maybe_burn_subtitles(wd, final_path)
             _maybe_burn_first_frame_cover(wd, final_path)
+            _maybe_fade_ending(wd, final_path)
             _maybe_apply_title_cards(wd, final_path)
         mode_label = {
             "fast": "Fast",
@@ -9361,6 +9373,162 @@ def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
         daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
+
+
+# ── ending fade (dip to black) ────────────────────────────────────────────────
+# The in-place fade and its applied record live in pipeline.assembler — the
+# renderer applies a standing fade at render time with the same helpers, so a
+# "Render again" keeps the fade too.
+
+_FADE_ENDING_MIN, _FADE_ENDING_MAX, _FADE_ENDING_DEFAULT = 0.5, 8.0, 2.0
+_FADE_ENDING_APPLIED_NAME = _assembler.ENDING_FADE_APPLIED_NAME
+
+
+def _norm_fade_ending_seconds(value) -> float:
+    try:
+        return round(min(_FADE_ENDING_MAX, max(_FADE_ENDING_MIN, float(value))), 2)
+    except (TypeError, ValueError):
+        return _FADE_ENDING_DEFAULT
+
+
+def _applied_ending_fade(wd: Path, final_path: Path | str) -> float | None:
+    return _assembler.applied_ending_fade(wd, Path(final_path))
+
+
+def _fade_final_in_place(wd: Path, final_path: Path, seconds: float) -> None:
+    _assembler.fade_ending_in_place(wd, final_path, seconds)
+
+
+def _maybe_fade_ending(wd: Path, final_path: Path | str) -> None:
+    """Re-apply the film's standing ending fade after a final rebuild.
+
+    The dip-to-black lives in the pixels of the published final — any flow
+    that regenerates it from combined.mp4 (remix, re-voice, reassemble,
+    localize) would ship an abrupt ending again for a film that switched the
+    fade on (job_config "fade_ending"). Call after the subtitle and cover
+    burns and BEFORE the title cards, so end credits follow the faded ending
+    instead of the fade landing on the credits themselves.
+    Best-effort: a rebuilt film without the fade beats a failed rebuild."""
+    try:
+        raw = float(_film_job_config(wd).get("fade_ending") or 0)
+        if raw <= 0:
+            return
+        final_path = Path(final_path)
+        if _applied_ending_fade(wd, final_path) is not None:
+            return
+        _fade_final_in_place(wd, final_path, _norm_fade_ending_seconds(raw))
+    except Exception as e:
+        gapp.logger.warning("Ending fade re-apply failed (non-fatal): %s", e)
+
+
+class FadeEndingBody(BaseModel):
+    work_dir: str
+    seconds: float = _FADE_ENDING_DEFAULT
+
+
+class FadeEndingRemoveBody(BaseModel):
+    work_dir: str
+
+
+@api.post("/api/remix/fade-ending")
+def remix_fade_ending(body: FadeEndingBody) -> dict:
+    """Fade the finished film's ending — picture to black, sound to silence.
+
+    The setting persists to the film's job_config first, so every later
+    rebuild (remix, re-voice, reassemble, localize) re-applies it. A clean cut
+    is faded in place (the previous cut is kept as a version); a cut that
+    already fades gets the new length by rebuilding from the scene parts —
+    a fade lives in the pixels, so two must never stack."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    final_path = gapp._final_path_for_work_dir(wd)
+    if not final_path.exists():
+        raise HTTPException(404, f"Final video not found for {wd.name}.")
+    secs = _norm_fade_ending_seconds(body.seconds)
+    jc = _film_job_config(wd)
+    jc["fade_ending"] = secs
+    _write_film_job_config(wd, jc)
+
+    applied = _applied_ending_fade(wd, final_path)
+    curated = None
+    with _track_op("Fading the film's ending", f"{secs:g}s → {wd.name}"):
+        if applied is not None and abs(applied - secs) < 0.05:
+            message = f"The ending already fades over {secs:g} s."
+        elif applied is None:
+            final_video_history.seed_if_empty(wd, final_path, "Original")
+            _hist = final_video_history.history(wd)
+            cur_lang = next(
+                (v.get("lang") for v in _hist["versions"] if v["id"] == _hist["selected"]),
+                None,
+            )
+            try:
+                _fade_final_in_place(wd, final_path, secs)
+            except Exception as e:
+                raise HTTPException(500, f"Fading the ending failed: "
+                                         f"{str(e).splitlines()[0][:300]}")
+            final_video_history.record(wd, final_path, label=f"Faded ending ({secs:g} s)",
+                                       lang=cur_lang, kind="fade")
+            message = (f"The last {secs:g} s now dip to black — "
+                       "the previous cut is kept as a version.")
+        else:
+            # Already faded (by a different length): a fade lives in the
+            # pixels, so re-cut from the clean scene parts — the rebuild's
+            # _maybe_fade_ending applies the new length.
+            curated = _curated_final_version(wd)
+            try:
+                _reassemble_film_core(wd, "Re-fading the film's ending")
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            message = f"Rebuilt the film with a {secs:g} s ending fade."
+            if curated:
+                message += (f" This replaced the picked cut “{curated['label']}” with a "
+                            "fresh build of the scene parts — pick it again under "
+                            "Versions to get it back (its old fade and all).")
+    return {
+        "message": message,
+        "final_url": _busted_file_url(final_path),
+        "fade_ending": secs,
+        "fade_ending_applied": True,
+        "video_history": final_video_history.history(wd),
+    }
+
+
+@api.post("/api/remix/fade-ending/remove")
+def remix_fade_ending_remove(body: FadeEndingRemoveBody) -> dict:
+    """Take the ending fade off again: clear the standing setting so rebuilds
+    stop re-applying it, and rebuild the published cut from the (clean) scene
+    parts when it currently fades — the dip lives in the pixels, and only a
+    fresh picture is free of it."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    final_path = gapp._final_path_for_work_dir(wd)
+    jc = _film_job_config(wd)
+    jc.pop("fade_ending", None)
+    _write_film_job_config(wd, jc)
+    rebuilt = False
+    curated = None
+    with _track_op("Removing the ending fade", wd.name):
+        if final_path.exists() and _applied_ending_fade(wd, final_path) is not None:
+            curated = _curated_final_version(wd)
+            try:
+                _reassemble_film_core(wd, "Removing the ending fade")
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            rebuilt = True
+        (wd / _FADE_ENDING_APPLIED_NAME).unlink(missing_ok=True)
+    message = "Ending fade removed." if rebuilt else "This cut has no ending fade to remove."
+    if curated:
+        message += (f" This replaced the picked cut “{curated['label']}” with a fresh "
+                    "build of the scene parts — pick it again under Versions to get it back.")
+    return {
+        "message": message,
+        "final_url": _busted_file_url(final_path),
+        "fade_ending": 0,
+        "fade_ending_applied": False,
+        "video_history": final_video_history.history(wd),
+    }
 
 
 def _title_cards_default_font(wd: Path) -> str:
@@ -14645,6 +14813,7 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
         # size instead of being resampled with the frame.
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
+        _maybe_fade_ending(wd, final_path)
         _maybe_apply_title_cards(wd, final_path)
         # Films with kept versions: the published file is now the plain concat,
         # so say so instead of leaving the manifest pointing at the upscale (or
