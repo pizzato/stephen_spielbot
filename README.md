@@ -43,7 +43,8 @@ queue with automation — global or per style, unattended in any format, music v
 included, their song written, sung and re-voiced before the pictures are made —
 AI-suggested video ideas, per-scene editing with image
 inpainting, clip trimming and version history, opening titles and end credits
-joined onto the finished film, one-click **restyling** (the same script
+joined onto the finished film, an ending fade that dips the last seconds to
+black, one-click **restyling** (the same script
 or finished film in another visual style), misspelling-proof cover thumbnails (text-free
 artwork in the style's own engine + real-font typography with per-style fonts,
 colours, and accent words), publishing to **YouTube** (multi-channel, with
