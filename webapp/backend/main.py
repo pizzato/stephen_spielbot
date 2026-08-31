@@ -11233,6 +11233,23 @@ def yt_channel_settings(body: ChannelSettingsBody) -> dict:
     return {"ok": True}
 
 
+def _overlay_negative_comments(data: dict) -> dict:
+    """Stamp per-video negative-comment counts (from the LLM-classified comment
+    cache) onto an analytics payload at serve time, so counts stay current
+    without refetching YouTube. Only fetched threads are counted — a floor, not
+    a total."""
+    videos = data.get("videos") or []
+    if not videos:
+        return data
+    neg: dict[str, int] = {}
+    for c in yt.load_comments_cache():
+        if c.get("sentiment") == "negative" and c.get("video_id"):
+            neg[c["video_id"]] = neg.get(c["video_id"], 0) + 1
+    for v in videos:
+        v["negative_comment_count"] = neg.get(v.get("video_id", ""), 0)
+    return data
+
+
 @api.get("/api/youtube/analytics")
 def yt_analytics(channel: str = Query(""), refresh: bool = Query(False)) -> dict:
     # Cache-first, like comments: serve the persisted per-channel snapshot
@@ -11241,17 +11258,17 @@ def yt_analytics(channel: str = Query(""), refresh: bool = Query(False)) -> dict
     key = channel or _channel_for_style("")
     cache = yt.load_analytics_cache()
     if not refresh and key in cache:
-        return cache[key]
+        return _overlay_negative_comments(cache[key])
     try:
         data = yt.fetch_channel_analytics(_client_secrets_path(), channel=key)
     except Exception as e:
         if key in cache:
-            return cache[key]   # keep the stale snapshot if a refresh fails
+            return _overlay_negative_comments(cache[key])   # keep the stale snapshot if a refresh fails
         return {"channel": {}, "videos": [], "error": str(e)[:200]}
     if data.get("channel"):     # only persist a real result, not a no-auth/error skeleton
         cache[key] = data
         yt.save_analytics_cache(cache)
-    return data
+    return _overlay_negative_comments(data)
 
 
 @api.get("/api/youtube/post/options")
@@ -13374,6 +13391,20 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
                 except Exception:
                     pass
             approved += 1
+
+    # Sentiment for the analytics "negative comments" column: stamp each thread's
+    # top-level comment once. Older cached comments (evaluated before the field
+    # existed) are backfilled here, capped per run so a large backlog converges
+    # over successive fetches instead of burning one big LLM burst.
+    budget = 50
+    for c in cache:
+        if budget <= 0:
+            break
+        if not c.get("sentiment"):
+            s = yt.comment_sentiment(c.get("text", ""), cfg)
+            budget -= 1
+            if s:
+                c["sentiment"] = s
 
     # Community engagement (issue #84): for non-request comments, draft a reply per
     # the comment's channel config and — if that channel auto-responds — post it now.

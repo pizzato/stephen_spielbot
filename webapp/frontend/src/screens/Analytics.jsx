@@ -45,7 +45,45 @@ function StatCard({ label, value, sub, span = 3, delay = 1 }) {
 
 const _cache = { youtube: {}, x: {} }   // per-platform, per-target snapshot cache
 
+// Recent-videos table columns. `key` makes a header clickable; `val` overrides
+// the sort value (derived metrics). Dislike % = dislikes / (likes + dislikes),
+// the "how hated" measure — raw dislikes just tracks reach.
+const dislikePct = (v) => {
+  if (v.dislike_count == null) return null
+  const total = (v.like_count || 0) + v.dislike_count
+  return total ? v.dislike_count / total : null
+}
+const VIDEO_COLS = [
+  { label: '' },
+  { label: 'Title', align: 'left' },
+  { label: 'Duration' },
+  { label: 'Views', key: 'view_count' },
+  { label: 'Watch time', key: 'watch_time_minutes' },
+  { label: 'Avg duration', key: 'avg_view_duration_secs' },
+  { label: 'Retention', key: 'avg_view_pct' },
+  { label: 'Impressions', key: 'impressions' },
+  { label: 'CTR', key: 'ctr' },
+  { label: 'Likes', key: 'like_count' },
+  { label: 'Dislikes', key: 'dislike_count' },
+  { label: 'Dislike %', key: 'dislike_pct', val: dislikePct },
+  { label: 'Comments', key: 'comment_count' },
+  { label: 'Negative', key: 'negative_comment_count' },
+  { label: 'Published', key: 'published_at' },
+]
+
+function sortVideos(videos, sort) {
+  const col = VIDEO_COLS.find((c) => c.key === sort.key)
+  if (!col) return videos
+  const val = (v) => {
+    const x = col.val ? col.val(v) : v[sort.key]
+    return x == null ? -1 : x   // missing metrics sink to the bottom on desc
+  }
+  const dir = sort.dir === 'asc' ? 1 : -1
+  return [...videos].sort((a, b) => { const av = val(a), bv = val(b); return (av < bv ? -1 : av > bv ? 1 : 0) * dir })
+}
+
 function YouTubeAnalytics({ analytics, loading, onRefresh }) {
+  const [sort, setSort] = useState({ key: null, dir: 'desc' })
   if (loading) return <Card span={12}><p className="muted" style={{ fontSize: 13 }}>Loading analytics…</p></Card>
   if (!analytics) return <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No data yet. Connect YouTube to see your channel analytics.</p></Card>
   if (analytics.error) return <Card span={12}><p style={{ fontSize: 13, color: 'var(--danger)' }}>{analytics.error}</p></Card>
@@ -108,16 +146,28 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
       )}
       {(analytics.videos || []).length > 0 && (
         <Card span={12} className="reveal reveal-d2">
-          <div style={{ fontWeight: 600, marginBottom: 14 }}>Recent videos</div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Recent videos</div>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
+            Click a column to sort — Dislikes or Dislike % surfaces the most disliked videos.
+            Negative counts LLM-classified fetched comments, so it's a floor, not a total.
+          </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', fontSize: 13 }}>
+            <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13 }}>
               <thead><tr style={{ borderBottom: '1px solid var(--line)' }}>
-                {['', 'Title', 'Duration', 'Views', 'Watch time', 'Avg duration', 'Retention', 'Impressions', 'CTR', 'Likes', 'Published'].map((h, i) => (
-                  <th key={i} style={{ textAlign: i <= 1 ? 'left' : 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{h}</th>
+                {VIDEO_COLS.map((c, i) => (
+                  <th key={i}
+                    onClick={c.key ? () => setSort((s) => ({ key: c.key, dir: s.key === c.key && s.dir === 'desc' ? 'asc' : 'desc' })) : undefined}
+                    style={{ textAlign: c.align || (i <= 1 ? 'left' : 'right'), padding: '6px 10px', fontWeight: 600,
+                             color: sort.key === c.key ? 'var(--ink)' : 'var(--ink-3)', whiteSpace: 'nowrap',
+                             cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                    {c.label}{sort.key === c.key ? (sort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
+                  </th>
                 ))}
               </tr></thead>
               <tbody>
-                {analytics.videos.map((v) => (
+                {sortVideos(analytics.videos, sort).map((v) => {
+                  const pct = dislikePct(v)
+                  return (
                   <tr key={v.video_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px 8px 0' }}>{v.thumbnail_url ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}</td>
                     <td style={{ padding: '8px 10px' }}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
@@ -129,9 +179,14 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.impressions)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{v.ctr != null ? fmtPct(v.ctr) : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.like_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: v.dislike_count ? 'var(--danger)' : 'var(--ink-3)' }}>{fmtNum(v.dislike_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: pct ? 'var(--danger)' : 'var(--ink-3)' }}>{pct != null ? fmtPct(pct) : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.comment_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: v.negative_comment_count ? 'var(--danger)' : 'var(--ink-3)' }}>{fmtNum(v.negative_comment_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
