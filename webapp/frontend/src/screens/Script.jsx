@@ -3,7 +3,7 @@ import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Ba
 import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
-import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, ActedTakes } from '../acted.jsx'
+import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines, ActedTakes } from '../acted.jsx'
 import { styleLineage, resolveStyle } from '../styleUtils.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -867,6 +867,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         beats: s.beats ?? null, seconds: s.seconds ?? null,
         no_wardrobe: !!s.no_wardrobe,
         continues_previous: !!s.continues_previous,
+        // Singing scenes: the sung lines and their in-clip times, edited in
+        // the staging panel below the soundtrack slice.
+        sings: s.sings ?? null, line_times: s.line_times ?? null,
       })
       // The server rebuilt the prompt (and narration) from the fields — adopt
       // its copy so the read-only prompt on screen is exactly what renders.
@@ -1231,6 +1234,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               hint="The take on screen was shot from the fields above — after an edit it is stale until the scene is shot again." />
 
             <SoundtrackSlice window={acted.song_window} songUrl={perf?.song_url || ''} />
+            <SungLines scene={s} disabled={!!busy}
+              onSave={async (sings, line_times) => {
+                const ns = { ...scenes[i], sings, line_times }
+                setScenes((arr) => arr.map((x, j) => (j === i ? ns : x)))
+                await persist(i, ns)
+              }} />
 
             <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
               {acted.cast.map((c) => (

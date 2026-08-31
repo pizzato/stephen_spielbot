@@ -6,7 +6,7 @@ import {
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
-import { CastMember, RefTile, SoundtrackSlice, StagingWarnings } from '../acted.jsx'
+import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines } from '../acted.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -757,6 +757,18 @@ function SceneCard({
                 </div>
 
                 <SoundtrackSlice window={acted.song_window} songUrl={performance?.song_url || ''} />
+                <SungLines scene={scene} disabled={isRendering}
+                  onSave={async (sings, line_times) => {
+                    try {
+                      await api.saveScene(jobId, scene.id, {
+                        title, narration,
+                        image_prompt: isActedMode(sceneType.mode) ? '' : imagePrompt,
+                        video_prompt: videoPrompt, mode: sceneType.mode,
+                        sings, line_times,
+                      })
+                      onSaved()
+                    } catch (e) { setError(e.message) }
+                  }} />
 
                 <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
                   {acted.cast.map((c) => (

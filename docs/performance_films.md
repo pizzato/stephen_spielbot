@@ -265,6 +265,17 @@ own** first — a wordless "ooh-ooh" intro comes back empty beside the verses an
 "oh"s when handed over alone, so it keeps its mouths moving, while a fingerpicked intro
 stays empty either way and loses them.
 
+**And they stay editable, per scene.** Each singing scene's card (Script screen and film
+editor alike) shows **Sung in this shot** beside its soundtrack slice: the lines its
+window carries, with when each is heard in the clip's own seconds, plus the measured
+voice-is-heard summary. They are fields, not prose — edit a line's words, retime it, drop
+it or add one, and the prompt is re-assembled around the change (editing the times also
+rewrites the scene's measured vocal window to match, and the caption cues are dated off
+them). Deleting every line marks the shot instrumental — the song plays on, nobody is
+asked to sing. This is the fix for a shot the measurement over-fed: when the prompt asks
+for more singing than the slice really carries, trim it here instead of hand-editing the
+prompt, which would pin it and stop every later field edit from reaching it.
+
 **Each line's time can be measured, not estimated** — the *Align lyrics to the sung
 track* option ([Settings → Music](manual/settings.md), `song_align_lyrics`, on by
 default). Level measurement knows *where* singing is but never *which* line is being

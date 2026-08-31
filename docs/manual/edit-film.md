@@ -423,7 +423,10 @@ The chevrons move a scene up or down; **Delete** removes it. Both re-cut the fin
 
 The same staging the [Script screen](script.md#acted-staging) shows sits directly below
 each acted scene: numbered cast slots with portraits and voices, artifact reference
-thumbnails, soundtrack slice and warnings. The card's editor contains the dialogue and
+thumbnails, soundtrack slice and warnings — and, on a music-video beat, the editable
+[**Sung in this shot** rows](script.md#acted-staging): the lyric lines the take mouths
+and when each is heard, saved straight onto the scene so the assembled prompt and the
+captions follow. The card's editor contains the dialogue and
 assembled prompt, while **Re-generate scene**, **Shoot again**, **Continue**, trim and the
 image/video version strips stay with it. Performed silent scenes use the same layout,
 marked *silent* and without dialogue controls.
