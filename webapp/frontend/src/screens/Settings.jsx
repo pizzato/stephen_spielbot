@@ -3542,7 +3542,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </div>
                   <div>
                     <Check checked={!!av.auto_song_approve} onChange={(v) => setAuto('auto_song_approve', v)}
-                      label="Auto-approve songs — carry straight on into the story. Off, automation stops once the song exists and parks it in the Song tab, so no film is built on a song you haven't heard" />
+                      label="Auto-approve songs — carry straight on into the story. Off, automation stops once the song exists and parks it in the Song tab, so no film is built on a song you haven't heard. Turning it back on releases the songs already parked, drafting each story from the track it already has" />
                     <AutoVal k="auto_song_approve" />
                   </div>
                 </>)}
