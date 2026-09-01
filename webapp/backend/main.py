@@ -11260,7 +11260,9 @@ def yt_analytics(channel: str = Query(""), refresh: bool = Query(False)) -> dict
     if not refresh and key in cache:
         return _overlay_negative_comments(cache[key])
     try:
-        data = yt.fetch_channel_analytics(_client_secrets_path(), channel=key)
+        # max_videos high enough to mean "every upload" — the table sorts across
+        # the whole catalogue, not just recent videos.
+        data = yt.fetch_channel_analytics(_client_secrets_path(), channel=key, max_videos=10_000)
     except Exception as e:
         if key in cache:
             return _overlay_negative_comments(cache[key])   # keep the stale snapshot if a refresh fails

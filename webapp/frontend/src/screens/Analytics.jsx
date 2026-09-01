@@ -158,8 +158,12 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
         </Card>
       )}
       {(analytics.videos || []).length > 0 && (
-        <Card span={12} className="reveal reveal-d2">
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Recent videos</div>
+        // minWidth: 0 lets the inner overflow-x scroller work — without it the
+        // grid item grows to fit the table and the right-hand columns clip.
+        <Card span={12} className="reveal reveal-d2" style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>All videos
+            <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{analytics.videos.length}</span>
+          </div>
           <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
             Click a column to sort — Hate score blends dislike share and negative comments into one most-disliked ranking.
             Negative counts LLM-classified fetched comments, so it's a floor, not a total.
@@ -184,7 +188,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                   return (
                   <tr key={v.video_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px 8px 0' }}>{v.thumbnail_url ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}</td>
-                    <td style={{ padding: '8px 10px' }}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
+                    <td style={{ padding: '8px 10px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v.title}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{v.duration || '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.view_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtWatchTime(v.watch_time_minutes)}</td>

@@ -12,12 +12,13 @@ Two tabs: **Analytics** (how your channels are actually doing) and **Predictive 
 Pick **YouTube** or **X**, then the channel or account — a picker appears when more than
 one is connected.
 
-You get the channel's headline stats and a per-video table pulled from the platform's API.
-**Refresh** re-fetches; results are cached between visits so switching tabs is instant.
+You get the channel's headline stats and a table of **every upload** pulled from the
+platform's API. **Refresh** re-fetches; results are cached between visits so switching
+tabs is instant. The table scrolls sideways when it's wider than the window.
 
 ### Finding the most disliked videos
 
-Every column header in the YouTube **Recent videos** table is clickable — click to sort
+Every column header in the YouTube **All videos** table is clickable — click to sort
 descending, click again for ascending. Each title links to the video on YouTube, so once
 sorted you can jump straight to a video to unlist or delete it.
 
