@@ -53,6 +53,18 @@ const dislikePct = (v) => {
   const total = (v.like_count || 0) + v.dislike_count
   return total ? v.dislike_count / total : null
 }
+// Composite hate score 0–100: smoothed dislike share (60%) + smoothed
+// negative-comment share (40%). The pseudo-counts (+10 reactions, +5 comments)
+// keep a single angry reaction on a tiny video from topping the chart — the
+// score rises with both the ratio and the volume of negative signal. Null until
+// dislikes have been fetched (needs a Refresh), like Dislike %.
+const hateScore = (v) => {
+  if (v.dislike_count == null) return null
+  const d = v.dislike_count, l = v.like_count || 0
+  const reactions = d / (l + d + 10)
+  const negComments = (v.negative_comment_count || 0) / ((v.comment_count || 0) + 5)
+  return Math.round(100 * (0.6 * reactions + 0.4 * negComments))
+}
 const VIDEO_COLS = [
   { label: '' },
   { label: 'Title', align: 'left' },
@@ -68,6 +80,7 @@ const VIDEO_COLS = [
   { label: 'Dislike %', key: 'dislike_pct', val: dislikePct },
   { label: 'Comments', key: 'comment_count' },
   { label: 'Negative', key: 'negative_comment_count' },
+  { label: 'Hate score', key: 'hate_score', val: hateScore },
   { label: 'Published', key: 'published_at' },
 ]
 
@@ -145,14 +158,18 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
         </Card>
       )}
       {(analytics.videos || []).length > 0 && (
-        <Card span={12} className="reveal reveal-d2">
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Recent videos</div>
+        // minWidth: 0 lets the inner overflow-x scroller work — without it the
+        // grid item grows to fit the table and the right-hand columns clip.
+        <Card span={12} className="reveal reveal-d2" style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>All videos
+            <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{analytics.videos.length}</span>
+          </div>
           <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
-            Click a column to sort — Dislikes or Dislike % surfaces the most disliked videos.
+            Click a column to sort — Hate score blends dislike share and negative comments into one most-disliked ranking.
             Negative counts LLM-classified fetched comments, so it's a floor, not a total.
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13 }}>
+            <table style={{ width: '100%', minWidth: 1080, borderCollapse: 'collapse', fontSize: 13 }}>
               <thead><tr style={{ borderBottom: '1px solid var(--line)' }}>
                 {VIDEO_COLS.map((c, i) => (
                   <th key={i}
@@ -167,10 +184,11 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
               <tbody>
                 {sortVideos(analytics.videos, sort).map((v) => {
                   const pct = dislikePct(v)
+                  const score = hateScore(v)
                   return (
                   <tr key={v.video_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px 8px 0' }}>{v.thumbnail_url ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}</td>
-                    <td style={{ padding: '8px 10px' }}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
+                    <td style={{ padding: '8px 10px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v.title}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{v.duration || '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.view_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtWatchTime(v.watch_time_minutes)}</td>
@@ -183,6 +201,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: pct ? 'var(--danger)' : 'var(--ink-3)' }}>{pct != null ? fmtPct(pct) : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.comment_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: v.negative_comment_count ? 'var(--danger)' : 'var(--ink-3)' }}>{fmtNum(v.negative_comment_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: score ? 'var(--danger)' : 'var(--ink-3)' }}>{score != null ? score : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
                   </tr>
                   )

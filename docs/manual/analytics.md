@@ -12,12 +12,13 @@ Two tabs: **Analytics** (how your channels are actually doing) and **Predictive 
 Pick **YouTube** or **X**, then the channel or account — a picker appears when more than
 one is connected.
 
-You get the channel's headline stats and a per-video table pulled from the platform's API.
-**Refresh** re-fetches; results are cached between visits so switching tabs is instant.
+You get the channel's headline stats and a table of **every upload** pulled from the
+platform's API. **Refresh** re-fetches; results are cached between visits so switching
+tabs is instant. The table scrolls sideways when it's wider than the window.
 
 ### Finding the most disliked videos
 
-Every column header in the YouTube **Recent videos** table is clickable — click to sort
+Every column header in the YouTube **All videos** table is clickable — click to sort
 descending, click again for ascending. Each title links to the video on YouTube, so once
 sorted you can jump straight to a video to unlist or delete it.
 
@@ -28,6 +29,7 @@ Three columns exist specifically for spotting hated content:
 | **Dislikes** | Real dislike counts — the public API dropped these in 2021, but the channel-owner Analytics API still reports them, so they appear after a **Refresh** while connected |
 | **Dislike %** | Dislikes as a share of all reactions (dislikes ÷ (likes + dislikes)) — the "how hated" measure, independent of how many views a video got |
 | **Negative** | How many of the fetched comments on that video the LLM classified as negative. Only comments the [community engagement](community.md) sweep has fetched are counted, so treat it as a floor, not a total |
+| **Hate score** | One 0–100 composite to sort by: 60% smoothed dislike share + 40% smoothed negative-comment share. The smoothing adds pseudo-counts (10 reactions, 5 comments) so a single angry reaction on a barely-watched video doesn't top the chart — a high score needs both a bad ratio and real volume. Appears once dislikes have been fetched (Refresh) |
 
 Reading X analytics requires a paid API tier — see [X setup](../x_setup.md).
 

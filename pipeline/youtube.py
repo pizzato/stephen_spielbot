@@ -1239,15 +1239,18 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
             except Exception as exc:
                 logger.info("Analytics countries query failed: %s", exc)
 
-            # 6. Per-video: watch time, avg duration, impressions, CTR, avg view %
-            if video_ids:
+            # 6. Per-video: watch time, avg duration, impressions, CTR, avg view %.
+            # The Analytics API caps a video== filter at 500 ids and report rows
+            # at 200, so query in chunks — the table now spans every upload.
+            for start in range(0, len(video_ids), 200):
+                chunk = video_ids[start:start + 200]
                 try:
                     vid_rep = yt_analytics.reports().query(
                         ids="channel==MINE", startDate="2000-01-01", endDate=today,
                         dimensions="video",
                         metrics="estimatedMinutesWatched,averageViewDuration,impressions,impressionClickThroughRate,averageViewPercentage",
-                        filters="video==" + ",".join(video_ids),
-                        maxResults=len(video_ids),
+                        filters="video==" + ",".join(chunk),
+                        maxResults=len(chunk),
                     ).execute()
                     headers = [h["name"] for h in vid_rep.get("columnHeaders", [])]
                     def _col(name): return headers.index(name) if name in headers else None
@@ -1276,8 +1279,8 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
                     dis_rep = yt_analytics.reports().query(
                         ids="channel==MINE", startDate="2000-01-01", endDate=today,
                         dimensions="video", metrics="dislikes",
-                        filters="video==" + ",".join(video_ids),
-                        maxResults=len(video_ids),
+                        filters="video==" + ",".join(chunk),
+                        maxResults=len(chunk),
                     ).execute()
                     dis_map = {row[0]: int(row[1] or 0) for row in dis_rep.get("rows", [])}
                     for v in videos:
