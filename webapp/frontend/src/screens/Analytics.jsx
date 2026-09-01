@@ -8,30 +8,30 @@ import { api } from '../api.js'
 // has its own render block — they just share this page, the toggle, and the
 // channel/account selector.
 
-function fmtNum(n) {
+export function fmtNum(n) {
   if (n == null) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
   return String(n)
 }
-function fmtDate(iso) {
+export function fmtDate(iso) {
   if (!iso) return ''
   try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
   catch { return iso.slice(0, 10) }
 }
-function fmtDuration(secs) {
+export function fmtDuration(secs) {
   if (secs == null) return '—'
   const s = Math.round(secs), m = Math.floor(s / 60), rem = s % 60, h = Math.floor(m / 60), mins = m % 60
   if (h) return `${h}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`
   return `${m}:${String(rem).padStart(2, '0')}`
 }
-function fmtWatchTime(mins) {
+export function fmtWatchTime(mins) {
   if (mins == null) return '—'
   if (mins >= 1_000_000) return (mins / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M min'
   if (mins >= 1_000) return (mins / 1_000).toFixed(1).replace(/\.0$/, '') + 'K min'
   return mins + ' min'
 }
-function fmtPct(ratio) { return ratio == null ? '—' : (ratio * 100).toFixed(1) + '%' }
+export function fmtPct(ratio) { return ratio == null ? '—' : (ratio * 100).toFixed(1) + '%' }
 
 function StatCard({ label, value, sub, span = 3, delay = 1 }) {
   return (
@@ -51,7 +51,7 @@ const _cache = analyticsCache
 // Recent-videos table columns. `key` makes a header clickable; `val` overrides
 // the sort value (derived metrics). Dislike % = dislikes / (likes + dislikes),
 // the "how hated" measure — raw dislikes just tracks reach.
-const dislikePct = (v) => {
+export const dislikePct = (v) => {
   if (v.dislike_count == null) return null
   const total = (v.like_count || 0) + v.dislike_count
   return total ? v.dislike_count / total : null
@@ -70,7 +70,7 @@ const dislikePct = (v) => {
 // merely because views haven't accumulated yet (dislikes and negative comments
 // still count from day one). Unfetched dislikes count as zero rather than
 // hiding the score.
-function annotateSlopScores(videos) {
+export function annotateSlopScores(videos) {
   // Drop duplicate video ids (older cached snapshots carry page-edge repeats
   // from the uploads pagination) — rows are keyed by video_id, and duplicate
   // React keys leave rows in stale positions when a sort reorders the table.
