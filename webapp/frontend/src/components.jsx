@@ -529,24 +529,40 @@ export function Card({ span, rowSpan, well, padLg, link, onClick, href, classNam
 // A "tell it how" popover: a small caret button beside a Re-generate control that
 // opens a text box for a one-off regeneration instruction — "shorten it", "make it
 // all robots". Calls onSubmit(instruction) then closes. `chips` are optional quick
-// presets; `align` places the popover to the 'left' or 'right' of the caret.
+// presets; `align` places the popover to the 'left' or 'right' of the caret —
+// whichever side, it is nudged back inside the window if it would hang off.
 export function RegenGuide({ busy, disabled, onSubmit, chips = [],
   placeholder = 'e.g. shorten it, make it all robots…', align = 'right' }) {
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
+  const [shift, setShift] = useState(0)
   const wrapRef = useRef(null)
+  const popRef = useRef(null)
   const inputRef = useRef(null)
 
   useEffect(() => {
-    if (!open) return
+    if (!open) { setShift(0); return }
     const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
     const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    // Keep the panel on screen: measure where it landed and slide it back by
+    // whatever it overhangs (carets near the window edge would go off-screen).
+    const clamp = () => {
+      const r = popRef.current?.getBoundingClientRect()
+      if (!r) return
+      const gap = 8
+      const over = r.right > window.innerWidth - gap ? (window.innerWidth - gap) - r.right
+        : r.left < gap ? gap - r.left : 0
+      if (over) setShift((s) => s + over)
+    }
+    clamp()
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', clamp)
     const t = setTimeout(() => inputRef.current?.focus(), 0)
     return () => {
       document.removeEventListener('mousedown', onDoc)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', clamp)
       clearTimeout(t)
     }
   }, [open])
@@ -562,7 +578,9 @@ export function RegenGuide({ busy, disabled, onSubmit, chips = [],
         <Icon name="chevron-down" />
       </button>
       {open && (
-        <div className={`regen-guide__pop regen-guide__pop--${align}`} onClick={(e) => e.stopPropagation()}>
+        <div ref={popRef} className={`regen-guide__pop regen-guide__pop--${align}`}
+          style={shift ? { transform: `translateX(${shift}px)` } : undefined}
+          onClick={(e) => e.stopPropagation()}>
           <div className="regen-guide__title">Tell it how…</div>
           <textarea ref={inputRef} className="textarea regen-guide__input" rows={2} value={text}
             placeholder={placeholder} onChange={(e) => setText(e.target.value)}

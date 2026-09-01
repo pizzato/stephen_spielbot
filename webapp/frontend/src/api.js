@@ -307,6 +307,9 @@ export const api = {
   remixSubtitles: (body) => req('POST', '/remix/subtitles', body),
   filmCaptionTracks: (workDir) => req('GET', `/film/captions?work_dir=${encodeURIComponent(workDir)}`),
   firstFrameCover: (body) => req('POST', '/remix/first-frame-cover', body),
+  // Dip the finished film's ending to black (picture + sound together).
+  fadeEnding: (body) => req('POST', '/remix/fade-ending', body),
+  removeFadeEnding: (workDir) => req('POST', '/remix/fade-ending/remove', { work_dir: workDir }),
   // Opening title / end credits stamped onto the finished film (post-production).
   titleCards: (body) => req('POST', '/remix/title-cards', body),
   removeTitleCards: (workDir) => req('POST', '/remix/title-cards/remove', { work_dir: workDir }),
@@ -407,6 +410,7 @@ export const api = {
   // multi-channel management (issue #22) — channels live in Settings → YouTube
   ytChannels: () => req('GET', '/youtube/channels'),
   ytPlaylists: (channel) => req('GET', '/youtube/playlists' + (channel ? `?channel=${encodeURIComponent(channel)}` : '')),
+  ytVideosBulk: (body) => req('POST', '/youtube/videos/bulk', body),
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
   ytAuthPoll: () => req('POST', '/youtube/auth/poll'),
   ytDisconnect: (channel) => req('POST', '/youtube/disconnect', { channel: channel || '' }),

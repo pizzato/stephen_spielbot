@@ -8,30 +8,30 @@ import { api } from '../api.js'
 // has its own render block — they just share this page, the toggle, and the
 // channel/account selector.
 
-function fmtNum(n) {
+export function fmtNum(n) {
   if (n == null) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
   return String(n)
 }
-function fmtDate(iso) {
+export function fmtDate(iso) {
   if (!iso) return ''
   try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
   catch { return iso.slice(0, 10) }
 }
-function fmtDuration(secs) {
+export function fmtDuration(secs) {
   if (secs == null) return '—'
   const s = Math.round(secs), m = Math.floor(s / 60), rem = s % 60, h = Math.floor(m / 60), mins = m % 60
   if (h) return `${h}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`
   return `${m}:${String(rem).padStart(2, '0')}`
 }
-function fmtWatchTime(mins) {
+export function fmtWatchTime(mins) {
   if (mins == null) return '—'
   if (mins >= 1_000_000) return (mins / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M min'
   if (mins >= 1_000) return (mins / 1_000).toFixed(1).replace(/\.0$/, '') + 'K min'
   return mins + ' min'
 }
-function fmtPct(ratio) { return ratio == null ? '—' : (ratio * 100).toFixed(1) + '%' }
+export function fmtPct(ratio) { return ratio == null ? '—' : (ratio * 100).toFixed(1) + '%' }
 
 function StatCard({ label, value, sub, span = 3, delay = 1 }) {
   return (
@@ -43,13 +43,97 @@ function StatCard({ label, value, sub, span = 3, delay = 1 }) {
   )
 }
 
-const _cache = { youtube: {}, x: {} }   // per-platform, per-target snapshot cache
+// Per-platform, per-target snapshot cache. Exported so the Manage Videos tab
+// can reuse a loaded snapshot and invalidate it after a bulk change.
+export const analyticsCache = { youtube: {}, x: {} }
+const _cache = analyticsCache
+
+// Recent-videos table columns. `key` makes a header clickable; `val` overrides
+// the sort value (derived metrics). Dislike % = dislikes / (likes + dislikes),
+// the "how hated" measure — raw dislikes just tracks reach.
+export const dislikePct = (v) => {
+  if (v.dislike_count == null) return null
+  const total = (v.like_count || 0) + v.dislike_count
+  return total ? v.dislike_count / total : null
+}
+// Composite Slop Score 0–100, computed for EVERY video:
+//   50% dislike share + 35% negative-comment share + 15% unpopularity.
+// The dislike/comment shares are normalised by audience size — the pseudo-counts
+// scale with views (roughly the reactions ~2% and comments ~1% of viewers leave),
+// so 2 dislikes on 20 views scores real points while the same 2 dislikes on 1M
+// views round to zero. Unpopularity is the smallest ingredient, and works on a
+// LOG scale: reach = log10(1 + views/√days-since-publish) compared against the
+// channel's own median, so doubling a video's views only nudges the term rather
+// than halving it — orders of magnitude matter, factors of two don't. Shorts
+// pull far more views than long-form, so each video is measured against the
+// median of its OWN format (≤3 min = Short, the predictive model's cutoff) —
+// otherwise every long-form video would look unpopular next to the Shorts. The
+// √days normalises for age (views burst early, then tail off) and a 3-day grace
+// period fades the term in from zero, so a just-posted video can't rank as slop
+// merely because views haven't accumulated yet (dislikes and negative comments
+// still count from day one). Unfetched dislikes count as zero rather than
+// hiding the score.
+export function annotateSlopScores(videos) {
+  // Drop duplicate video ids (older cached snapshots carry page-edge repeats
+  // from the uploads pagination) — rows are keyed by video_id, and duplicate
+  // React keys leave rows in stale positions when a sort reorders the table.
+  const seen = new Set()
+  videos = videos.filter((v) => !seen.has(v.video_id) && seen.add(v.video_id))
+  const days = (v) => Math.max(1, (Date.now() - new Date(v.published_at).getTime()) / 86400000)
+  const reach = (v) => Math.log10(1 + (v.view_count || 0) / Math.sqrt(days(v)))
+  const durationSecs = (v) => {
+    const p = String(v.duration || '').split(':').map(Number)
+    return !p.length || p.some(isNaN) ? 0 : p.reduce((s, x) => s * 60 + x, 0)
+  }
+  const isShort = (v) => { const s = durationSecs(v); return s > 0 && s <= 180 }
+  const medianOf = (arr) => { const r = arr.map(reach).sort((a, b) => a - b); return r.length ? r[Math.floor(r.length / 2)] : 0 }
+  const medians = { short: medianOf(videos.filter(isShort)), long: medianOf(videos.filter((v) => !isShort(v))) }
+  return videos.map((v) => {
+    const d = v.dislike_count || 0, l = v.like_count || 0, views = v.view_count || 0
+    const reactions = d / (l + d + Math.max(10, 0.02 * views))
+    const negComments = (v.negative_comment_count || 0) / ((v.comment_count || 0) + Math.max(5, 0.01 * views))
+    const median = medians[isShort(v) ? 'short' : 'long']
+    const unpopular = (median > 0 ? median / (reach(v) + median) : 0.5) * Math.min(1, days(v) / 3)
+    return { ...v, slop_score: Math.round(100 * (0.5 * reactions + 0.35 * negComments + 0.15 * unpopular)) }
+  })
+}
+const VIDEO_COLS = [
+  { label: '' },
+  { label: 'Title', align: 'left' },
+  { label: 'Duration' },
+  { label: 'Views', key: 'view_count' },
+  { label: 'Watch time', key: 'watch_time_minutes' },
+  { label: 'Avg duration', key: 'avg_view_duration_secs' },
+  { label: 'Retention', key: 'avg_view_pct' },
+  { label: 'Impressions', key: 'impressions' },
+  { label: 'CTR', key: 'ctr' },
+  { label: 'Slop Score', key: 'slop_score' },
+  { label: 'Likes', key: 'like_count' },
+  { label: 'Dislikes', key: 'dislike_count' },
+  { label: 'Dislike %', key: 'dislike_pct', val: dislikePct },
+  { label: 'Comments', key: 'comment_count' },
+  { label: 'Negative', key: 'negative_comment_count' },
+  { label: 'Published', key: 'published_at' },
+]
+
+function sortVideos(videos, sort) {
+  const col = VIDEO_COLS.find((c) => c.key === sort.key)
+  if (!col) return videos
+  const val = (v) => {
+    const x = col.val ? col.val(v) : v[sort.key]
+    return x == null ? -1 : x   // missing metrics sink to the bottom on desc
+  }
+  const dir = sort.dir === 'asc' ? 1 : -1
+  return [...videos].sort((a, b) => { const av = val(a), bv = val(b); return (av < bv ? -1 : av > bv ? 1 : 0) * dir })
+}
 
 function YouTubeAnalytics({ analytics, loading, onRefresh }) {
+  const [sort, setSort] = useState({ key: null, dir: 'desc' })
   if (loading) return <Card span={12}><p className="muted" style={{ fontSize: 13 }}>Loading analytics…</p></Card>
   if (!analytics) return <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No data yet. Connect YouTube to see your channel analytics.</p></Card>
   if (analytics.error) return <Card span={12}><p style={{ fontSize: 13, color: 'var(--danger)' }}>{analytics.error}</p></Card>
   const ch = analytics.channel || {}
+  const videos = annotateSlopScores(analytics.videos || [])
   const dailyViews = ch.daily_views || []
   const maxDaily = Math.max(1, ...dailyViews.map((d) => d.views))
   const traffic = ch.traffic_sources || []
@@ -106,21 +190,38 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
           </div>
         </Card>
       )}
-      {(analytics.videos || []).length > 0 && (
-        <Card span={12} className="reveal reveal-d2">
-          <div style={{ fontWeight: 600, marginBottom: 14 }}>Recent videos</div>
+      {videos.length > 0 && (
+        // minWidth: 0 lets the inner overflow-x scroller work — without it the
+        // grid item grows to fit the table and the right-hand columns clip.
+        <Card span={12} className="reveal reveal-d2" style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>All videos
+            <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{videos.length}</span>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
+            Click a column to sort — Slop Score blends dislike share, negative comments and (log-scale) unpopularity into one most-hated ranking.
+            Negative counts LLM-classified fetched comments, so it's a floor, not a total.
+          </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', fontSize: 13 }}>
+            <table style={{ width: '100%', minWidth: 1080, borderCollapse: 'collapse', fontSize: 13 }}>
               <thead><tr style={{ borderBottom: '1px solid var(--line)' }}>
-                {['', 'Title', 'Duration', 'Views', 'Watch time', 'Avg duration', 'Retention', 'Impressions', 'CTR', 'Likes', 'Published'].map((h, i) => (
-                  <th key={i} style={{ textAlign: i <= 1 ? 'left' : 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{h}</th>
+                {VIDEO_COLS.map((c, i) => (
+                  <th key={i}
+                    onClick={c.key ? () => setSort((s) => ({ key: c.key, dir: s.key === c.key && s.dir === 'desc' ? 'asc' : 'desc' })) : undefined}
+                    style={{ textAlign: c.align || (i <= 1 ? 'left' : 'right'), padding: '6px 10px', fontWeight: 600,
+                             color: sort.key === c.key ? 'var(--ink)' : 'var(--ink-3)', whiteSpace: 'nowrap',
+                             cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
+                    {c.label}{sort.key === c.key ? (sort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
+                  </th>
                 ))}
               </tr></thead>
               <tbody>
-                {analytics.videos.map((v) => (
+                {sortVideos(videos, sort).map((v) => {
+                  const pct = dislikePct(v)
+                  const score = v.slop_score
+                  return (
                   <tr key={v.video_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px 8px 0' }}>{v.thumbnail_url ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}</td>
-                    <td style={{ padding: '8px 10px' }}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
+                    <td style={{ padding: '8px 10px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v.title}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{v.duration || '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.view_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtWatchTime(v.watch_time_minutes)}</td>
@@ -128,10 +229,16 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{v.avg_view_pct != null ? `${v.avg_view_pct}%` : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.impressions)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{v.ctr != null ? fmtPct(v.ctr) : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: score ? 'var(--danger)' : 'var(--ink-3)' }}>{score != null ? score : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.like_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: v.dislike_count ? 'var(--danger)' : 'var(--ink-3)' }}>{fmtNum(v.dislike_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: pct ? 'var(--danger)' : 'var(--ink-3)' }}>{pct != null ? fmtPct(pct) : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.comment_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: v.negative_comment_count ? 'var(--danger)' : 'var(--ink-3)' }}>{fmtNum(v.negative_comment_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

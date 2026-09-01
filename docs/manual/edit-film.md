@@ -88,6 +88,27 @@ or any player that loads sidecar subtitles. The look of burned-in subtitles, and
 timing of every track (minimum time on screen, two-line merging of short lines, a delay
 nudge), is set per style under [Settings → Subtitle style](settings.md#cover-first-frame).
 
+### Ending fade
+
+A film — a music video especially — can stop dead on its last beat: by the time the
+film is rendered, the song is baked into the scenes, so a blunt ending can no longer be
+fixed from the [Song tab](script.md#song). **Fade the ending** softens it on the
+published cut itself: the last few seconds dip to black while the sound fades to
+silence with them. Nothing is trimmed or appended, so the film's length, caption
+timing and title cards all stay put. **Fade the last (seconds)** sets how long the dip
+lasts — around 2 s reads as an ending, longer plays as a slow goodbye (the fade is
+capped at a quarter of the film, so a short film never becomes one long decay).
+
+The clean cut is faded in place and kept as a selectable [version](#upscale-video),
+and the choice is saved on the film, so every later rebuild (re-mix, re-voice,
+reassemble, localize) fades again — end credits added under
+[Titles & Credits](#titles--credits) still play *after* the fade, untouched. A fade
+lives in the pixels, though, so changing its length or **Remove the ending fade**
+rebuilds the final from the clean scene clips — like removing burned subtitles, and
+with the same caveat: a picked cut a rebuild cannot reproduce (an upscale, a localized
+re-voicing) is replaced by a fresh build, and the message says which — pick it again
+under Versions to get it back.
+
 ### Titles & Credits
 
 Stack title cards before the film and credit cards after it. **Add card** under

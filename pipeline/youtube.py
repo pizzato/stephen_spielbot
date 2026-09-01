@@ -507,6 +507,40 @@ def _parse_eval(text: str) -> dict:
     return _SAFE_DEFAULT.copy()
 
 
+_SENTIMENT_PROMPT = """\
+Classify the sentiment of this YouTube viewer comment toward the video or channel.
+
+Comment:
+{comment_text}
+
+Answer with exactly one word: "positive", "neutral" or "negative".
+"negative" means the viewer dislikes, criticises, or mocks the video or channel \
+(including complaints about AI-generated content). Questions, requests, spam, and \
+off-topic chatter are "neutral"."""
+
+
+def comment_sentiment(comment_text: str, cfg: dict) -> str:
+    """Classify a viewer comment as "positive" / "neutral" / "negative" via LLM.
+
+    Returns "" on LLM failure so callers can leave the comment unstamped and
+    retry on a later pass.
+    """
+    text = (comment_text or "").strip()
+    if not text:
+        return "neutral"
+    try:
+        from pipeline.llm import _chat_complete
+        out = _chat_complete(cfg, "", _SENTIMENT_PROMPT.format(comment_text=text[:2000]),
+                             max_tokens=8, label="comment_sentiment")
+        word = (out or "").strip().lower()
+        for s in ("negative", "positive", "neutral"):
+            if s in word:
+                return s
+    except Exception as exc:
+        logger.warning("Comment sentiment failed: %s", exc)
+    return ""
+
+
 def evaluate_comment(comment_text: str, commenter: str, cfg: dict) -> dict:
     """Return {is_request, suggested_title, confidence, reason} via LLM."""
     prompt = _EVAL_PROMPT.format(
@@ -760,6 +794,85 @@ def set_thumbnail(client_secrets_path: str, video_id: str, thumbnail_path: str, 
         return {"success": False, "error": str(exc)[:400]}
 
 
+# ── Bulk video management (Channel Analytics → Manage Videos) ─────────────────
+# All three are single-video operations the /api/youtube/videos/bulk endpoint
+# loops over; each is covered by the youtube.force-ssl scope already granted at
+# connect time, so no re-auth is needed.
+
+def set_video_privacy(client_secrets_path: str, video_id: str, privacy: str, channel: str = "") -> dict:
+    """Change one video's privacy status in place. Returns {success, error}.
+
+    videos().update replaces the whole ``status`` part, so the current status is
+    fetched first and only privacyStatus is changed — otherwise fields like
+    selfDeclaredMadeForKids or embeddable would silently reset to defaults.
+    """
+    if privacy not in PRIVACY_OPTIONS:
+        return {"success": False, "error": f"Invalid privacy value: {privacy!r}"}
+    creds = _load_credentials(client_secrets_path, channel)
+    if not creds:
+        return {"success": False, "error": "Not authenticated. Connect YouTube first."}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+        resp = youtube.videos().list(part="status", id=video_id).execute()
+        items = resp.get("items", [])
+        if not items:
+            return {"success": False, "error": "Video not found."}
+        status = items[0].get("status", {})
+        status["privacyStatus"] = privacy
+        # publishAt only makes sense on a private video scheduled to go public;
+        # keeping a stale one alongside any other privacy value is rejected.
+        status.pop("publishAt", None)
+        youtube.videos().update(
+            part="status", body={"id": video_id, "status": status}
+        ).execute()
+        logger.info("Privacy set to %s for video %s", privacy, video_id)
+        return {"success": True, "error": ""}
+    except Exception as exc:
+        logger.warning("Set privacy failed for %s: %s", video_id, exc)
+        return {"success": False, "error": str(exc)[:300]}
+
+
+def delete_video(client_secrets_path: str, video_id: str, channel: str = "") -> dict:
+    """Permanently delete one video from YouTube. Returns {success, error}."""
+    creds = _load_credentials(client_secrets_path, channel)
+    if not creds:
+        return {"success": False, "error": "Not authenticated. Connect YouTube first."}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+        youtube.videos().delete(id=video_id).execute()
+        logger.info("Deleted video %s", video_id)
+        return {"success": True, "error": ""}
+    except Exception as exc:
+        logger.warning("Delete video failed for %s: %s", video_id, exc)
+        return {"success": False, "error": str(exc)[:300]}
+
+
+def add_video_to_playlist(client_secrets_path: str, video_id: str, playlist_id: str, channel: str = "") -> dict:
+    """Append one video to a playlist. Returns {success, error}."""
+    if not playlist_id:
+        return {"success": False, "error": "Missing playlist ID."}
+    creds = _load_credentials(client_secrets_path, channel)
+    if not creds:
+        return {"success": False, "error": "Not authenticated. Connect YouTube first."}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+        youtube.playlistItems().insert(
+            part="snippet",
+            body={"snippet": {
+                "playlistId": playlist_id,
+                "resourceId": {"kind": "youtube#video", "videoId": video_id},
+            }},
+        ).execute()
+        logger.info("Added video %s to playlist %s", video_id, playlist_id)
+        return {"success": True, "error": ""}
+    except Exception as exc:
+        logger.warning("Add to playlist failed for %s: %s", video_id, exc)
+        return {"success": False, "error": str(exc)[:300]}
+
+
 # ── Comment replies ───────────────────────────────────────────────────────────
 
 def reply_to_comment(client_secrets_path: str, parent_comment_id: str, text: str, channel: str = "") -> dict:
@@ -994,8 +1107,11 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
           channel: {name, subscriber_count, view_count, video_count,
                     watch_time_minutes, avg_view_duration_secs},
           videos: [{video_id, title, published_at, thumbnail_url, view_count,
-                    like_count, comment_count, duration, privacy,
+                    like_count, dislike_count, comment_count, duration, privacy,
                     watch_time_minutes, avg_view_duration_secs}]
+
+    ``dislike_count`` comes from the owner-scoped Analytics API (the public Data
+    API stopped returning dislikes in 2021, but channel-owner reports still do).
         }
     """
     import datetime
@@ -1034,6 +1150,7 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
 
         # Collect video IDs from the uploads playlist
         video_ids: list[str] = []
+        seen_ids: set[str] = set()
         next_page: str | None = None
         while len(video_ids) < max_videos:
             resp = youtube.playlistItems().list(
@@ -1044,7 +1161,10 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
             ).execute()
             for item in resp.get("items", []):
                 vid = item["contentDetails"].get("videoId", "")
-                if vid:
+                # Pagination can repeat a page-edge item; duplicate ids become
+                # duplicate rows (and duplicate React keys) in the table.
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
                     video_ids.append(vid)
             next_page = resp.get("nextPageToken")
             if not next_page:
@@ -1073,6 +1193,7 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
                     "thumbnail_url": thumb,
                     "view_count": int(vstats.get("viewCount") or 0),
                     "like_count": int(vstats.get("likeCount") or 0),
+                    "dislike_count": None,
                     "comment_count": int(vstats.get("commentCount") or 0),
                     "duration": _parse_duration(v.get("contentDetails", {}).get("duration", "")),
                     "privacy": v.get("status", {}).get("privacyStatus", ""),
@@ -1201,15 +1322,18 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
             except Exception as exc:
                 logger.info("Analytics countries query failed: %s", exc)
 
-            # 6. Per-video: watch time, avg duration, impressions, CTR, avg view %
-            if video_ids:
+            # 6. Per-video: watch time, avg duration, impressions, CTR, avg view %.
+            # The Analytics API caps a video== filter at 500 ids and report rows
+            # at 200, so query in chunks — the table now spans every upload.
+            for start in range(0, len(video_ids), 200):
+                chunk = video_ids[start:start + 200]
                 try:
                     vid_rep = yt_analytics.reports().query(
                         ids="channel==MINE", startDate="2000-01-01", endDate=today,
                         dimensions="video",
                         metrics="estimatedMinutesWatched,averageViewDuration,impressions,impressionClickThroughRate,averageViewPercentage",
-                        filters="video==" + ",".join(video_ids),
-                        maxResults=len(video_ids),
+                        filters="video==" + ",".join(chunk),
+                        maxResults=len(chunk),
                     ).execute()
                     headers = [h["name"] for h in vid_rep.get("columnHeaders", [])]
                     def _col(name): return headers.index(name) if name in headers else None
@@ -1230,6 +1354,23 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
                             v.update(vid_map[v["video_id"]])
                 except Exception as exc:
                     logger.info("Analytics per-video query failed: %s", exc)
+
+                # 7. Per-video dislikes — only channel-owner Analytics reports
+                # still expose these (the public Data API dropped them in 2021).
+                # Queried separately so a failure can't wipe the metrics above.
+                try:
+                    dis_rep = yt_analytics.reports().query(
+                        ids="channel==MINE", startDate="2000-01-01", endDate=today,
+                        dimensions="video", metrics="dislikes",
+                        filters="video==" + ",".join(chunk),
+                        maxResults=len(chunk),
+                    ).execute()
+                    dis_map = {row[0]: int(row[1] or 0) for row in dis_rep.get("rows", [])}
+                    for v in videos:
+                        if v["video_id"] in dis_map:
+                            v["dislike_count"] = dis_map[v["video_id"]]
+                except Exception as exc:
+                    logger.info("Analytics dislikes query failed: %s", exc)
 
         except Exception as exc:
             logger.info("YouTube Analytics API unavailable (may need re-auth): %s", exc)
@@ -1291,6 +1432,7 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel
 
         # Full uploads playlist (newest first) — no 25-video cap.
         video_ids: list[str] = []
+        seen_ids: set[str] = set()
         next_page: str | None = None
         while len(video_ids) < max_videos:
             resp = youtube.playlistItems().list(
@@ -1301,7 +1443,10 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel
             ).execute()
             for item in resp.get("items", []):
                 vid = item["contentDetails"].get("videoId", "")
-                if vid:
+                # Pagination can repeat a page-edge item; duplicate ids become
+                # duplicate training samples for the predictive model.
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
                     video_ids.append(vid)
             next_page = resp.get("nextPageToken")
             if not next_page:

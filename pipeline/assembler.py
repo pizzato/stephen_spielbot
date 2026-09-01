@@ -249,6 +249,77 @@ def extend_audio_tail(input_path: Path, output_path: Path, extra_seconds: float,
     return output_path
 
 
+def fade_video_ending(input_path: Path, output_path: Path, seconds: float = 2.0) -> Path:
+    """Dip a video's ending to black: fade the last *seconds* of the picture to
+    black and the audio to silence together, in one re-encode.
+
+    The finished-film counterpart of ``extend_audio_tail`` — once the song is
+    rendered into the scenes, an abrupt ending can only be softened on the
+    published file itself. Nothing is trimmed or appended, so duration, caption
+    timing and the title-card record all stay valid. The fade is capped at a
+    quarter of the film so a short one doesn't become one long decay.
+    """
+    duration = _get_duration(input_path)
+    fade = max(0.0, min(float(seconds), duration / 4))
+    start = max(0.0, duration - fade)
+    logger.info("[ffmpeg] fade_video_ending: %s (last %.2fs of %.1fs)",
+                input_path.name, fade, duration)
+    cmd = [
+        _FFMPEG, "-y",
+        "-i", str(input_path),
+        "-vf", f"fade=t=out:st={start:.3f}:d={fade:.3f}",
+    ]
+    if _has_audio_stream(input_path):
+        cmd += ["-af", f"afade=t=out:st={start:.3f}:d={fade:.3f}",
+                "-c:a", "aac", "-b:a", "192k"]
+    cmd += [
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+    _run(cmd, timeout=3600)
+    return output_path
+
+
+ENDING_FADE_APPLIED_NAME = "ending_fade_applied.json"
+
+
+def applied_ending_fade(work_dir: Path, final_path: Path) -> float | None:
+    """Seconds of dip-to-black already on *final_path* — None for a clean cut.
+
+    The record is matched by exact file size: fading never changes duration
+    (the title cards' fingerprint), but every other finishing step — rebuild,
+    burn, upscale, version pick — re-encodes or swaps the file, so a stale
+    record simply stops matching and the cut reads as clean."""
+    import json
+
+    try:
+        rec = json.loads((Path(work_dir) / ENDING_FADE_APPLIED_NAME)
+                         .read_text(encoding="utf-8"))
+        if int(rec["size"]) == Path(final_path).stat().st_size:
+            return float(rec["seconds"])
+    except Exception:
+        pass
+    return None
+
+
+def fade_ending_in_place(work_dir: Path, final_path: Path, seconds: float) -> None:
+    """Fade the published cut's last *seconds* to black/silence in place and
+    stamp the applied record so the fade is never applied twice to one file."""
+    import json
+
+    final_path = Path(final_path)
+    staged = final_path.with_name(f"{final_path.stem}.fade.tmp{final_path.suffix}")
+    try:
+        fade_video_ending(final_path, staged, seconds)
+        staged.replace(final_path)
+    finally:
+        staged.unlink(missing_ok=True)
+    (Path(work_dir) / ENDING_FADE_APPLIED_NAME).write_text(json.dumps(
+        {"seconds": round(float(seconds), 2), "size": final_path.stat().st_size}),
+        encoding="utf-8")
+
+
 def _get_video_dimensions(path: Path) -> tuple[int, int]:
     result = subprocess.run(
         [
