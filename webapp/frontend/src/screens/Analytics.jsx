@@ -43,7 +43,10 @@ function StatCard({ label, value, sub, span = 3, delay = 1 }) {
   )
 }
 
-const _cache = { youtube: {}, x: {} }   // per-platform, per-target snapshot cache
+// Per-platform, per-target snapshot cache. Exported so the Manage Videos tab
+// can reuse a loaded snapshot and invalidate it after a bulk change.
+export const analyticsCache = { youtube: {}, x: {} }
+const _cache = analyticsCache
 
 // Recent-videos table columns. `key` makes a header clickable; `val` overrides
 // the sort value (derived metrics). Dislike % = dislikes / (likes + dislikes),

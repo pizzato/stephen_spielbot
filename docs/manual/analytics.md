@@ -2,8 +2,9 @@
 
 `#/analytics`
 
-Two tabs: **Analytics** (how your channels are actually doing) and **Predictive Model**
-(what the app thinks a new idea will do).
+Three tabs: **Analytics** (how your channels are actually doing), **Manage Videos**
+(bulk actions on published videos) and **Predictive Model** (what the app thinks a new
+idea will do).
 
 ---
 
@@ -32,6 +33,30 @@ Four columns exist specifically for spotting hated content:
 | **Slop Score** | One 0–100 composite every video gets: 50% dislike share + 35% negative-comment share + 15% unpopularity. The dislike and comment shares are normalised by audience size, so 2 dislikes on a 20-view video score real points while the same 2 dislikes on a million-view video round to zero. Unpopularity is the smallest ingredient and works on a **log scale**: reach = log₁₀(1 + views ÷ √days-since-publish) compared against the channel's own median, so a video with double the views isn't half as "slop" — only order-of-magnitude view gaps move the term. A 3-day grace period fades it in so a just-posted video isn't called slop before it has had a chance to be seen. Unfetched dislikes count as zero (hit **Refresh** for real dislike data) |
 
 Reading X analytics requires a paid API tier — see [X setup](../x_setup.md).
+
+---
+
+## Manage Videos
+
+The same published-video catalogue as the Analytics tab, with checkboxes for bulk
+actions. YouTube only — the X API has no equivalent endpoints. Pick the channel (a
+picker appears when more than one is connected), tick videos — the header checkbox
+selects everything, and column headers sort just like the Analytics table — then apply
+one action to the whole selection:
+
+| Action | What it does |
+|---|---|
+| **Set visibility** | Changes each video to **private**, **unlisted** or **public** in place. Other status flags (made-for-kids, embeddable, licence) are preserved |
+| **Add to playlist** | Appends each video to one of the channel's playlists, picked from a dropdown |
+| **Delete…** | Permanently deletes the videos from YouTube — views, likes and comments included. A confirmation dialog lists what's about to go; there is no undo |
+
+A **Visibility** column shows each video's current state. Actions run per video, so one
+failure doesn't abort the rest — the result banner reports how many succeeded and the
+first error. The cached analytics snapshot is patched in place, so the Analytics tab
+reflects visibility changes and deletions without a full refresh.
+
+All three actions use the YouTube permissions granted when the channel was connected —
+no re-authentication is needed.
 
 ---
 
