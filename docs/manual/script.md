@@ -299,6 +299,15 @@ soundtrack slice, and — once the scene has been shot — the rendered take wit
 again**. The filmstrip card at the top offers **Reassemble film** once takes have
 changed.
 
+**Sung in this shot** (music-video beats): the lyric lines this take mouths sit under
+the soundtrack slice as an editable field — one row per line, with when each is heard
+in seconds into the clip — alongside a summary of when any voice is heard at all. The
+prompt's song section and its "a voice sings only from…" window are assembled from
+these rows, and the burned captions follow the times, so trimming a line a scene was
+never meant to sing (or nudging when one lands) is a field edit here, not a hand edit
+that pins the whole prompt. Deleting every row marks the shot instrumental: the song
+still plays over it, but the prompt asks nobody to sing.
+
 **Every take the film shoots on the reference engine** stages this way, so a
 [performed silent scene](../performance_films.md#silent-scenes-performed) carries the
 same staging — marked *silent*, with no dialogue editor: it is shot the same way and its

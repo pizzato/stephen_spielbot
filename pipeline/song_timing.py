@@ -337,3 +337,27 @@ def lines_in_window(lines: list[str], spans: list[tuple[float, float]],
     handed to both scenes and each is told to mouth a line the other sings."""
     return [line for line, (start, end) in zip(lines, spans)
             if min(end, t1) - max(start, t0) > 1.0 / FPS]
+
+
+def merge_ranges(spans: list, min_gap: float = 1.5) -> list[list[float]]:
+    """The union of the given [start, end] spans, gaps shorter than *min_gap*
+    closed — the same breath rule ``vocal_regions`` applies to the measured
+    track. This is how a scene's hand-edited ``line_times`` become its
+    ``vocal_ranges``: each line span says a voice is heard there, and two
+    lines a breath apart are one continuous stretch of singing."""
+    clean = []
+    for pair in spans or []:
+        try:
+            start, end = float(pair[0]), float(pair[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if end > start >= 0:
+            clean.append([round(start, 2), round(end, 2)])
+    clean.sort()
+    out: list[list[float]] = []
+    for start, end in clean:
+        if out and start - out[-1][1] < min_gap:
+            out[-1][1] = max(out[-1][1], end)
+        else:
+            out.append([start, end])
+    return out

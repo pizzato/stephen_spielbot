@@ -1838,3 +1838,123 @@ class SongFitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MergeRangesTests(unittest.TestCase):
+    """Hand-edited line times become vocal_ranges via their merged union."""
+
+    def test_breath_gaps_close_and_breaks_stay(self):
+        from pipeline import song_timing
+        self.assertEqual(song_timing.merge_ranges([[3.4, 6.0], [0.5, 3.0], [8.0, 9.0]]),
+                         [[0.5, 6.0], [8.0, 9.0]])
+
+    def test_junk_pairs_are_skipped(self):
+        from pipeline import song_timing
+        self.assertEqual(song_timing.merge_ranges([[1, "x"], [2, 1], None, [1.0, 2.0]]),
+                         [[1.0, 2.0]])
+        self.assertEqual(song_timing.merge_ranges([]), [])
+
+
+class SungLinesEditingTests(unittest.TestCase):
+    """The sung lines are edited as a FIELD (like dialogue), not inside the
+    prompt: the editors write ``sings``/``line_times`` through update_scene and
+    the prompt keeps assembling around them, instead of one lyric fix pinning
+    the whole prompt as an override."""
+
+    def setUp(self):
+        import os
+
+        import app as gapp
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-sung-edit-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.output_dir = root / "videos"
+        self.output_dir.mkdir()
+        cfg_file = root / "config" / "config.yaml"
+        cfg_file.parent.mkdir(parents=True)
+        for target, attr, value in [(gapp, "CONFIG_FILE", cfg_file),
+                                    (gapp, "OUTPUT_DIR", self.output_dir)]:
+            p = unittest.mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        db = unittest.mock.patch.dict(
+            os.environ, {"SPIELBOT_ORCHESTRATOR_DB": str(root / "orchestrator.sqlite3")})
+        db.start()
+        self.addCleanup(db.stop)
+        from pipeline.orchestrator import job_id_from_work_dir
+        self.wd = self.output_dir / "film"
+        self.wd.mkdir()
+        self.job_id = job_id_from_work_dir(self.wd)
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(self.job_id, self.wd, "Film",
+                                       config={"video_title": "Film"}, metadata={})
+            store.upsert_scene(self.job_id, 1, title="Chorus", image_prompt="i",
+                               video_prompt="v", narration="",
+                               metadata={"mode": "silent", "singing": True,
+                                         "cast": ["Ada"], "setting": "a rooftop",
+                                         "sings": "first line\nsecond line",
+                                         "line_times": [[0.5, 3.0], [3.4, 6.0]],
+                                         "vocal_ranges": [[0.5, 6.0]],
+                                         "song_window": [0.0, 8.0], "duration": 8.0})
+        finally:
+            store.close()
+
+    def _save(self, **body):
+        backend.update_scene(self.job_id, 1, backend.SceneUpdate(
+            title="Chorus", image_prompt="i", video_prompt="v", narration="",
+            mode="silent", **body))
+
+    def _meta(self, sid=1):
+        store = DurableStore.default()
+        try:
+            return dict((store.get_scene(self.job_id, sid) or {}).get("metadata") or {})
+        finally:
+            store.close()
+
+    def test_scene_json_surfaces_the_sung_lines(self):
+        out = backend._scene_to_json({"id": 1, "metadata": self._meta()})
+        self.assertEqual(out["sings"], "first line\nsecond line")
+        self.assertEqual(out["line_times"], [[0.5, 3.0], [3.4, 6.0]])
+        self.assertEqual(out["vocal_ranges"], [[0.5, 6.0]])
+
+    def test_edited_times_rewrite_the_vocal_ranges(self):
+        self._save(sings="first line\nsecond line",
+                   line_times=[[2.0, 4.0], [4.5, 7.0]])
+        meta = self._meta()
+        self.assertEqual(meta["line_times"], [[2.0, 4.0], [4.5, 7.0]])
+        # 0.5 s between the lines is a breath, not a break: one sung stretch.
+        self.assertEqual(meta["vocal_ranges"], [[2.0, 7.0]])
+
+    def test_unchanged_times_keep_the_measured_ranges(self):
+        self._save(sings="first line\nreworded line",
+                   line_times=[[0.5, 3.0], [3.4, 6.0]])
+        meta = self._meta()
+        self.assertEqual(meta["sings"], "first line\nreworded line")
+        # The words changed but the times did not: the measured ranges stand.
+        self.assertEqual(meta["vocal_ranges"], [[0.5, 6.0]])
+
+    def test_clearing_every_line_marks_the_shot_instrumental(self):
+        self._save(sings="", line_times=[])
+        meta = self._meta()
+        self.assertNotIn("sings", meta)
+        self.assertNotIn("line_times", meta)
+        self.assertEqual(meta["vocal_ranges"], [])
+        prompt = perf.build_h3_prompt(meta, picture_names=["Ada"])
+        self.assertIn("No voice sings anywhere in this shot", prompt)
+
+    def test_a_non_singing_scene_ignores_the_fields(self):
+        store = DurableStore.default()
+        try:
+            store.upsert_scene(self.job_id, 2, title="Beat", image_prompt="i",
+                               video_prompt="v", narration="n",
+                               metadata={"mode": "silent"})
+        finally:
+            store.close()
+        backend.update_scene(self.job_id, 2, backend.SceneUpdate(
+            title="Beat", image_prompt="i", video_prompt="v", narration="n",
+            mode="silent", sings="la la", line_times=[[0, 2]]))
+        meta = self._meta(2)
+        self.assertNotIn("sings", meta)
+        self.assertNotIn("line_times", meta)
+        self.assertNotIn("vocal_ranges", meta)

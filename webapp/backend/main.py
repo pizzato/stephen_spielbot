@@ -265,6 +265,14 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         # muted, so a screen showing the clip needs the window to play the
         # music that belongs under it.
         "song_window": meta.get("song_window") or None,
+        # What this beat is asked to sing, editable in place: the lyric lines
+        # (``sings``), when each is heard relative to the clip's own start
+        # (``line_times``, one [start, end] per line), and when ANY voice is
+        # heard (``vocal_ranges`` — null means never measured, [] means
+        # measured and instrumental).
+        "sings": meta.get("sings", ""),
+        "line_times": meta.get("line_times") or [],
+        "vocal_ranges": meta.get("vocal_ranges"),
         "prompt_edited": bool(meta.get("prompt_override")),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
@@ -5369,6 +5377,12 @@ class SceneUpdate(BaseModel):
     # This scene picks up the PREVIOUS scene's shot without a cut. True is
     # stored; False clears the key — an ordinary cut is the default.
     continues_previous: bool | None = None
+    # Singing scenes only: the lyric lines this beat mouths, one per line, and
+    # when each is heard in the clip's own seconds ([start, end] per line, in
+    # order). Editing the times also rewrites ``vocal_ranges`` (their merged
+    # union), so the prompt's "a voice sings only from…" window follows.
+    sings: str | None = None
+    line_times: list | None = None
 
 
 def _scene_style_note(job_id: str) -> str:
@@ -5503,6 +5517,36 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta.pop("performs", None)
             else:
                 meta["performs"] = False
+        # The sung lines and their times, edited as a field (like dialogue)
+        # instead of inside the prompt. Singing scenes only — every other
+        # scene has nothing to mouth, and the editors never send these there.
+        if meta.get("singing") and body.sings is not None:
+            text = "\n".join(l.strip() for l in body.sings.splitlines()
+                             if l.strip())
+            if text:
+                meta["sings"] = text
+            else:
+                meta.pop("sings", None)
+        if meta.get("singing") and body.line_times is not None:
+            times = []
+            for pair in body.line_times:
+                try:
+                    lo, hi = float(pair[0]), float(pair[1])
+                except (TypeError, ValueError, IndexError, KeyError):
+                    continue
+                if hi > lo >= 0:
+                    times.append([round(lo, 2), round(hi, 2)])
+            if times != (meta.get("line_times") or []):
+                # The times were EDITED: the measured vocal_ranges no longer
+                # describe this clip, so they become the edit's own union —
+                # cleared lines ([]) read as measured-and-instrumental, and
+                # the prompt stops asking anyone to sing here.
+                from pipeline import song_timing as _song_timing
+                meta["vocal_ranges"] = _song_timing.merge_ranges(times)
+            if times:
+                meta["line_times"] = times
+            else:
+                meta.pop("line_times", None)
         # An acted scene is written through its FIELDS: what is said becomes the
         # narration text (nothing speaks it — TTS is skipped), and the video
         # prompt is assembled from cast/setting/beats/lines rather than typed,

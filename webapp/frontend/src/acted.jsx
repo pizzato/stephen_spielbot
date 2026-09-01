@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from './api.js'
 import { Banner, Button, GuidedRegenButton, Icon, VideoVersionStrip, voiceLabel } from './components.jsx'
 
@@ -119,6 +119,108 @@ export function SoundtrackSlice({ window: win, songUrl }) {
         slice. The take above carries it too, so it can be watched against its
         own music, and it plays under the scene in the final film.
       </span>
+    </div>
+  )
+}
+
+// What this beat is asked to SING, as a field beside the dialogue instead of
+// prose inside the prompt: the lyric lines, and when each is heard in the
+// clip's OWN seconds. The prompt's [SONG] words and its "a voice sings only
+// from…" window are assembled from these (and the caption cues are dated off
+// the times), so trimming a line here is how a shot that was asked to sing
+// more than its slice carries gets fixed — without hand-editing, and thereby
+// freezing, the whole prompt.
+export function SungLines({ scene, onSave, disabled = false }) {
+  const [rows, setRows] = useState(null) // null ⟹ mirror the scene
+  const [saving, setSaving] = useState(false)
+  // Our own save refreshes the scene — fall back to mirroring it then (and on
+  // a scene switch); an unrelated refresh carries the same values and is a
+  // no-op here.
+  useEffect(() => { setRows(null) },
+    [scene?.id, scene?.sings, JSON.stringify(scene?.line_times || [])])
+  if (!scene?.singing) return null
+
+  const times = Array.isArray(scene.line_times) ? scene.line_times : []
+  const mirror = String(scene.sings || '').split('\n')
+    .map((l) => l.trim()).filter(Boolean)
+    .map((text, i) => ({
+      text,
+      t0: times[i]?.[0] != null ? String(times[i][0]) : '',
+      t1: times[i]?.[1] != null ? String(times[i][1]) : '',
+    }))
+  const shown = rows || mirror
+
+  const commit = async (next) => {
+    const kept = next.filter((r) => r.text.trim())
+    const sings = kept.map((r) => r.text.trim()).join('\n')
+    // Times only count as a set: captions pair them with the lines one-to-one,
+    // so one blank or backwards pair drops them all rather than mis-pairing.
+    const complete = kept.length > 0 && kept.every((r) =>
+      r.t0 !== '' && r.t1 !== '' && Number(r.t1) > Number(r.t0) && Number(r.t0) >= 0)
+    const lineTimes = complete
+      ? kept.map((r) => [Number(r.t0), Number(r.t1)]) : []
+    if (sings === mirror.map((r) => r.text).join('\n') &&
+        JSON.stringify(lineTimes) === JSON.stringify(
+          mirror.every((r) => r.t0 !== '' && r.t1 !== '')
+            ? mirror.map((r) => [Number(r.t0), Number(r.t1)]) : [])) {
+      setRows(next.length ? next : null)
+      return
+    }
+    setSaving(true)
+    try { await onSave(sings, lineTimes) } finally { setSaving(false) }
+  }
+
+  const edit = (i, k, v) => setRows(shown.map((r, j) => (j === i ? { ...r, [k]: v } : r)))
+  const addRow = () => {
+    const last = shown[shown.length - 1]
+    const t0 = last && last.t1 !== '' ? Number(last.t1) : 0
+    setRows([...shown, { text: '', t0: String(t0), t1: String(t0 + 2) }])
+  }
+
+  const vr = scene.vocal_ranges
+  const fmt = (x) => Number(x).toFixed(1)
+  const vocal = vr == null
+    ? 'Singing not measured — the prompt treats the whole clip as sung.'
+    : !vr.length
+      ? 'Measured instrumental — no voice is heard in this shot, and the prompt asks nobody to sing.'
+      : `A voice is heard ${vr.map((r) => `${fmt(r[0])}–${fmt(r[1])}s`).join(', ')} into this clip — outside that, the prompt keeps every mouth closed.`
+
+  const off = disabled || saving
+  return (
+    <div className="stack gap-6">
+      <span className="label-sm">Sung in this shot</span>
+      <span className="muted" style={{ fontSize: 12 }}>{vocal}</span>
+      {shown.map((r, i) => (
+        <div key={i} className="row gap-6 center">
+          <input type="number" className="input" style={{ width: 78 }} step="0.1" min="0"
+            value={r.t0} placeholder="start" disabled={off}
+            onChange={(e) => edit(i, 't0', e.target.value)} onBlur={() => commit(shown)} />
+          <span className="muted">–</span>
+          <input type="number" className="input" style={{ width: 78 }} step="0.1" min="0"
+            value={r.t1} placeholder="end" disabled={off}
+            onChange={(e) => edit(i, 't1', e.target.value)} onBlur={() => commit(shown)} />
+          <span className="muted" style={{ fontSize: 12 }}>s</span>
+          <input className="input" style={{ flex: 1, minWidth: 160 }} value={r.text}
+            placeholder="lyric line" disabled={off}
+            onChange={(e) => edit(i, 'text', e.target.value)} onBlur={() => commit(shown)} />
+          <Button variant="ghost" icon="trash-can" size="sm" disabled={off}
+            onClick={() => commit(shown.filter((_, j) => j !== i))} />
+        </div>
+      ))}
+      <div className="row gap-8 center">
+        <Button variant="ghost" icon="plus" size="sm" disabled={off} onClick={addRow}>Add line</Button>
+        <span className="muted" style={{ fontSize: 12 }}>
+          The words the cast mouths and when each line is heard, in seconds into
+          this clip. The prompt and the burned captions follow; clearing every
+          line marks the shot instrumental.
+        </span>
+      </div>
+      {scene.prompt_edited && (
+        <span className="muted" style={{ fontSize: 12 }}>
+          This scene's prompt is hand-edited (pinned) — rebuild it for these
+          changes to reach the render.
+        </span>
+      )}
     </div>
   )
 }
