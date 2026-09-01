@@ -15,6 +15,20 @@ one is connected.
 You get the channel's headline stats and a per-video table pulled from the platform's API.
 **Refresh** re-fetches; results are cached between visits so switching tabs is instant.
 
+### Finding the most disliked videos
+
+Every column header in the YouTube **Recent videos** table is clickable — click to sort
+descending, click again for ascending. Each title links to the video on YouTube, so once
+sorted you can jump straight to a video to unlist or delete it.
+
+Three columns exist specifically for spotting hated content:
+
+| Column | What it is |
+|---|---|
+| **Dislikes** | Real dislike counts — the public API dropped these in 2021, but the channel-owner Analytics API still reports them, so they appear after a **Refresh** while connected |
+| **Dislike %** | Dislikes as a share of all reactions (dislikes ÷ (likes + dislikes)) — the "how hated" measure, independent of how many views a video got |
+| **Negative** | How many of the fetched comments on that video the LLM classified as negative. Only comments the [community engagement](community.md) sweep has fetched are counted, so treat it as a floor, not a total |
+
 Reading X analytics requires a paid API tier — see [X setup](../x_setup.md).
 
 ---

@@ -507,6 +507,40 @@ def _parse_eval(text: str) -> dict:
     return _SAFE_DEFAULT.copy()
 
 
+_SENTIMENT_PROMPT = """\
+Classify the sentiment of this YouTube viewer comment toward the video or channel.
+
+Comment:
+{comment_text}
+
+Answer with exactly one word: "positive", "neutral" or "negative".
+"negative" means the viewer dislikes, criticises, or mocks the video or channel \
+(including complaints about AI-generated content). Questions, requests, spam, and \
+off-topic chatter are "neutral"."""
+
+
+def comment_sentiment(comment_text: str, cfg: dict) -> str:
+    """Classify a viewer comment as "positive" / "neutral" / "negative" via LLM.
+
+    Returns "" on LLM failure so callers can leave the comment unstamped and
+    retry on a later pass.
+    """
+    text = (comment_text or "").strip()
+    if not text:
+        return "neutral"
+    try:
+        from pipeline.llm import _chat_complete
+        out = _chat_complete(cfg, "", _SENTIMENT_PROMPT.format(comment_text=text[:2000]),
+                             max_tokens=8, label="comment_sentiment")
+        word = (out or "").strip().lower()
+        for s in ("negative", "positive", "neutral"):
+            if s in word:
+                return s
+    except Exception as exc:
+        logger.warning("Comment sentiment failed: %s", exc)
+    return ""
+
+
 def evaluate_comment(comment_text: str, commenter: str, cfg: dict) -> dict:
     """Return {is_request, suggested_title, confidence, reason} via LLM."""
     prompt = _EVAL_PROMPT.format(
@@ -994,8 +1028,11 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
           channel: {name, subscriber_count, view_count, video_count,
                     watch_time_minutes, avg_view_duration_secs},
           videos: [{video_id, title, published_at, thumbnail_url, view_count,
-                    like_count, comment_count, duration, privacy,
+                    like_count, dislike_count, comment_count, duration, privacy,
                     watch_time_minutes, avg_view_duration_secs}]
+
+    ``dislike_count`` comes from the owner-scoped Analytics API (the public Data
+    API stopped returning dislikes in 2021, but channel-owner reports still do).
         }
     """
     import datetime
@@ -1073,6 +1110,7 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
                     "thumbnail_url": thumb,
                     "view_count": int(vstats.get("viewCount") or 0),
                     "like_count": int(vstats.get("likeCount") or 0),
+                    "dislike_count": None,
                     "comment_count": int(vstats.get("commentCount") or 0),
                     "duration": _parse_duration(v.get("contentDetails", {}).get("duration", "")),
                     "privacy": v.get("status", {}).get("privacyStatus", ""),
@@ -1230,6 +1268,23 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
                             v.update(vid_map[v["video_id"]])
                 except Exception as exc:
                     logger.info("Analytics per-video query failed: %s", exc)
+
+                # 7. Per-video dislikes — only channel-owner Analytics reports
+                # still expose these (the public Data API dropped them in 2021).
+                # Queried separately so a failure can't wipe the metrics above.
+                try:
+                    dis_rep = yt_analytics.reports().query(
+                        ids="channel==MINE", startDate="2000-01-01", endDate=today,
+                        dimensions="video", metrics="dislikes",
+                        filters="video==" + ",".join(video_ids),
+                        maxResults=len(video_ids),
+                    ).execute()
+                    dis_map = {row[0]: int(row[1] or 0) for row in dis_rep.get("rows", [])}
+                    for v in videos:
+                        if v["video_id"] in dis_map:
+                            v["dislike_count"] = dis_map[v["video_id"]]
+                except Exception as exc:
+                    logger.info("Analytics dislikes query failed: %s", exc)
 
         except Exception as exc:
             logger.info("YouTube Analytics API unavailable (may need re-auth): %s", exc)
