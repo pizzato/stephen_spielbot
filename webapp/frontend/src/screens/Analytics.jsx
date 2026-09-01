@@ -64,7 +64,10 @@ export const dislikePct = (v) => {
 // views round to zero. Unpopularity is the smallest ingredient, and works on a
 // LOG scale: reach = log10(1 + views/√days-since-publish) compared against the
 // channel's own median, so doubling a video's views only nudges the term rather
-// than halving it — orders of magnitude matter, factors of two don't. The
+// than halving it — orders of magnitude matter, factors of two don't. Shorts
+// pull far more views than long-form, so each video is measured against the
+// median of its OWN format (≤3 min = Short, the predictive model's cutoff) —
+// otherwise every long-form video would look unpopular next to the Shorts. The
 // √days normalises for age (views burst early, then tail off) and a 3-day grace
 // period fades the term in from zero, so a just-posted video can't rank as slop
 // merely because views haven't accumulated yet (dislikes and negative comments
@@ -78,12 +81,18 @@ export function annotateSlopScores(videos) {
   videos = videos.filter((v) => !seen.has(v.video_id) && seen.add(v.video_id))
   const days = (v) => Math.max(1, (Date.now() - new Date(v.published_at).getTime()) / 86400000)
   const reach = (v) => Math.log10(1 + (v.view_count || 0) / Math.sqrt(days(v)))
-  const reaches = videos.map(reach).sort((a, b) => a - b)
-  const median = reaches.length ? reaches[Math.floor(reaches.length / 2)] : 0
+  const durationSecs = (v) => {
+    const p = String(v.duration || '').split(':').map(Number)
+    return !p.length || p.some(isNaN) ? 0 : p.reduce((s, x) => s * 60 + x, 0)
+  }
+  const isShort = (v) => { const s = durationSecs(v); return s > 0 && s <= 180 }
+  const medianOf = (arr) => { const r = arr.map(reach).sort((a, b) => a - b); return r.length ? r[Math.floor(r.length / 2)] : 0 }
+  const medians = { short: medianOf(videos.filter(isShort)), long: medianOf(videos.filter((v) => !isShort(v))) }
   return videos.map((v) => {
     const d = v.dislike_count || 0, l = v.like_count || 0, views = v.view_count || 0
     const reactions = d / (l + d + Math.max(10, 0.02 * views))
     const negComments = (v.negative_comment_count || 0) / ((v.comment_count || 0) + Math.max(5, 0.01 * views))
+    const median = medians[isShort(v) ? 'short' : 'long']
     const unpopular = (median > 0 ? median / (reach(v) + median) : 0.5) * Math.min(1, days(v) / 3)
     return { ...v, slop_score: Math.round(100 * (0.5 * reactions + 0.35 * negComments + 0.15 * unpopular)) }
   })
