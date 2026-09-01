@@ -22,14 +22,14 @@ Every column header in the YouTube **All videos** table is clickable — click t
 descending, click again for ascending. Each title links to the video on YouTube, so once
 sorted you can jump straight to a video to unlist or delete it.
 
-Three columns exist specifically for spotting hated content:
+Four columns exist specifically for spotting hated content:
 
 | Column | What it is |
 |---|---|
 | **Dislikes** | Real dislike counts — the public API dropped these in 2021, but the channel-owner Analytics API still reports them, so they appear after a **Refresh** while connected |
 | **Dislike %** | Dislikes as a share of all reactions (dislikes ÷ (likes + dislikes)) — the "how hated" measure, independent of how many views a video got |
 | **Negative** | How many of the fetched comments on that video the LLM classified as negative. Only comments the [community engagement](community.md) sweep has fetched are counted, so treat it as a floor, not a total |
-| **Hate score** | One 0–100 composite every video gets: 45% dislike share + 30% negative-comment share + 25% unpopularity. The dislike and comment shares are normalised by audience size, so 2 dislikes on a 20-view video score real points while the same 2 dislikes on a million-view video round to zero. Unpopularity compares each video's reach — views ÷ √days-since-publish, since views accumulate in an early burst rather than linearly — against the channel's own median: a median video adds ~12 points, a hit near 0, an old video nobody watches up to 25. A 3-day grace period fades that term in so a just-posted video isn't called "hated" before it has had a chance to be seen. Unfetched dislikes count as zero (hit **Refresh** for real dislike data) |
+| **Slop Score** | One 0–100 composite every video gets: 50% dislike share + 35% negative-comment share + 15% unpopularity. The dislike and comment shares are normalised by audience size, so 2 dislikes on a 20-view video score real points while the same 2 dislikes on a million-view video round to zero. Unpopularity is the smallest ingredient and works on a **log scale**: reach = log₁₀(1 + views ÷ √days-since-publish) compared against the channel's own median, so a video with double the views isn't half as "slop" — only order-of-magnitude view gaps move the term. A 3-day grace period fades it in so a just-posted video isn't called slop before it has had a chance to be seen. Unfetched dislikes count as zero (hit **Refresh** for real dislike data) |
 
 Reading X analytics requires a paid API tier — see [X setup](../x_setup.md).
 

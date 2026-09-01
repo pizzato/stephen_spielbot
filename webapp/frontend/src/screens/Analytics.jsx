@@ -53,22 +53,28 @@ const dislikePct = (v) => {
   const total = (v.like_count || 0) + v.dislike_count
   return total ? v.dislike_count / total : null
 }
-// Composite hate score 0–100, computed for EVERY video:
-//   45% dislike share + 30% negative-comment share + 25% unpopularity.
+// Composite Slop Score 0–100, computed for EVERY video:
+//   50% dislike share + 35% negative-comment share + 15% unpopularity.
 // The dislike/comment shares are normalised by audience size — the pseudo-counts
 // scale with views (roughly the reactions ~2% and comments ~1% of viewers leave),
 // so 2 dislikes on 20 views scores real points while the same 2 dislikes on 1M
-// views round to zero. Unpopularity is reach measured against the channel's
-// own catalogue, age-adjusted: views grow sub-linearly with age (a burst early,
-// then a long tail), so each video's views are normalised by √days-since-publish
-// before comparing to the channel median — an old 50-view video ranks worse
-// than a day-old one at the same count. A 3-day grace period fades the term in
-// from zero, so a just-posted video can't top the hate list merely because
-// views haven't accumulated yet (dislikes and negative comments still count
-// from day one). Unfetched dislikes count as zero rather than hiding the score.
-function annotateHateScores(videos) {
+// views round to zero. Unpopularity is the smallest ingredient, and works on a
+// LOG scale: reach = log10(1 + views/√days-since-publish) compared against the
+// channel's own median, so doubling a video's views only nudges the term rather
+// than halving it — orders of magnitude matter, factors of two don't. The
+// √days normalises for age (views burst early, then tail off) and a 3-day grace
+// period fades the term in from zero, so a just-posted video can't rank as slop
+// merely because views haven't accumulated yet (dislikes and negative comments
+// still count from day one). Unfetched dislikes count as zero rather than
+// hiding the score.
+function annotateSlopScores(videos) {
+  // Drop duplicate video ids (older cached snapshots carry page-edge repeats
+  // from the uploads pagination) — rows are keyed by video_id, and duplicate
+  // React keys leave rows in stale positions when a sort reorders the table.
+  const seen = new Set()
+  videos = videos.filter((v) => !seen.has(v.video_id) && seen.add(v.video_id))
   const days = (v) => Math.max(1, (Date.now() - new Date(v.published_at).getTime()) / 86400000)
-  const reach = (v) => (v.view_count || 0) / Math.sqrt(days(v))
+  const reach = (v) => Math.log10(1 + (v.view_count || 0) / Math.sqrt(days(v)))
   const reaches = videos.map(reach).sort((a, b) => a - b)
   const median = reaches.length ? reaches[Math.floor(reaches.length / 2)] : 0
   return videos.map((v) => {
@@ -76,7 +82,7 @@ function annotateHateScores(videos) {
     const reactions = d / (l + d + Math.max(10, 0.02 * views))
     const negComments = (v.negative_comment_count || 0) / ((v.comment_count || 0) + Math.max(5, 0.01 * views))
     const unpopular = (median > 0 ? median / (reach(v) + median) : 0.5) * Math.min(1, days(v) / 3)
-    return { ...v, hate_score: Math.round(100 * (0.45 * reactions + 0.3 * negComments + 0.25 * unpopular)) }
+    return { ...v, slop_score: Math.round(100 * (0.5 * reactions + 0.35 * negComments + 0.15 * unpopular)) }
   })
 }
 const VIDEO_COLS = [
@@ -89,12 +95,12 @@ const VIDEO_COLS = [
   { label: 'Retention', key: 'avg_view_pct' },
   { label: 'Impressions', key: 'impressions' },
   { label: 'CTR', key: 'ctr' },
+  { label: 'Slop Score', key: 'slop_score' },
   { label: 'Likes', key: 'like_count' },
   { label: 'Dislikes', key: 'dislike_count' },
   { label: 'Dislike %', key: 'dislike_pct', val: dislikePct },
   { label: 'Comments', key: 'comment_count' },
   { label: 'Negative', key: 'negative_comment_count' },
-  { label: 'Hate score', key: 'hate_score' },
   { label: 'Published', key: 'published_at' },
 ]
 
@@ -115,6 +121,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
   if (!analytics) return <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No data yet. Connect YouTube to see your channel analytics.</p></Card>
   if (analytics.error) return <Card span={12}><p style={{ fontSize: 13, color: 'var(--danger)' }}>{analytics.error}</p></Card>
   const ch = analytics.channel || {}
+  const videos = annotateSlopScores(analytics.videos || [])
   const dailyViews = ch.daily_views || []
   const maxDaily = Math.max(1, ...dailyViews.map((d) => d.views))
   const traffic = ch.traffic_sources || []
@@ -171,15 +178,15 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
           </div>
         </Card>
       )}
-      {(analytics.videos || []).length > 0 && (
+      {videos.length > 0 && (
         // minWidth: 0 lets the inner overflow-x scroller work — without it the
         // grid item grows to fit the table and the right-hand columns clip.
         <Card span={12} className="reveal reveal-d2" style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>All videos
-            <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{analytics.videos.length}</span>
+            <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{videos.length}</span>
           </div>
           <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
-            Click a column to sort — Hate score blends dislike share, negative comments and unpopularity (views/day vs the channel median) into one most-hated ranking.
+            Click a column to sort — Slop Score blends dislike share, negative comments and (log-scale) unpopularity into one most-hated ranking.
             Negative counts LLM-classified fetched comments, so it's a floor, not a total.
           </div>
           <div style={{ overflowX: 'auto' }}>
@@ -196,9 +203,9 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                 ))}
               </tr></thead>
               <tbody>
-                {sortVideos(annotateHateScores(analytics.videos), sort).map((v) => {
+                {sortVideos(videos, sort).map((v) => {
                   const pct = dislikePct(v)
-                  const score = v.hate_score
+                  const score = v.slop_score
                   return (
                   <tr key={v.video_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px 8px 0' }}>{v.thumbnail_url ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}</td>
@@ -210,12 +217,12 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{v.avg_view_pct != null ? `${v.avg_view_pct}%` : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.impressions)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{v.ctr != null ? fmtPct(v.ctr) : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: score ? 'var(--danger)' : 'var(--ink-3)' }}>{score != null ? score : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.like_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: v.dislike_count ? 'var(--danger)' : 'var(--ink-3)' }}>{fmtNum(v.dislike_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: pct ? 'var(--danger)' : 'var(--ink-3)' }}>{pct != null ? fmtPct(pct) : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.comment_count)}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', color: v.negative_comment_count ? 'var(--danger)' : 'var(--ink-3)' }}>{fmtNum(v.negative_comment_count)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: score ? 'var(--danger)' : 'var(--ink-3)' }}>{score != null ? score : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
                   </tr>
                   )
