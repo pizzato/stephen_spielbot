@@ -53,17 +53,31 @@ const dislikePct = (v) => {
   const total = (v.like_count || 0) + v.dislike_count
   return total ? v.dislike_count / total : null
 }
-// Composite hate score 0–100: smoothed dislike share (60%) + smoothed
-// negative-comment share (40%). The pseudo-counts (+10 reactions, +5 comments)
-// keep a single angry reaction on a tiny video from topping the chart — the
-// score rises with both the ratio and the volume of negative signal. Null until
-// dislikes have been fetched (needs a Refresh), like Dislike %.
-const hateScore = (v) => {
-  if (v.dislike_count == null) return null
-  const d = v.dislike_count, l = v.like_count || 0
-  const reactions = d / (l + d + 10)
-  const negComments = (v.negative_comment_count || 0) / ((v.comment_count || 0) + 5)
-  return Math.round(100 * (0.6 * reactions + 0.4 * negComments))
+// Composite hate score 0–100, computed for EVERY video:
+//   45% dislike share + 30% negative-comment share + 25% unpopularity.
+// The dislike/comment shares are normalised by audience size — the pseudo-counts
+// scale with views (roughly the reactions ~2% and comments ~1% of viewers leave),
+// so 2 dislikes on 20 views scores real points while the same 2 dislikes on 1M
+// views round to zero. Unpopularity is reach measured against the channel's
+// own catalogue, age-adjusted: views grow sub-linearly with age (a burst early,
+// then a long tail), so each video's views are normalised by √days-since-publish
+// before comparing to the channel median — an old 50-view video ranks worse
+// than a day-old one at the same count. A 3-day grace period fades the term in
+// from zero, so a just-posted video can't top the hate list merely because
+// views haven't accumulated yet (dislikes and negative comments still count
+// from day one). Unfetched dislikes count as zero rather than hiding the score.
+function annotateHateScores(videos) {
+  const days = (v) => Math.max(1, (Date.now() - new Date(v.published_at).getTime()) / 86400000)
+  const reach = (v) => (v.view_count || 0) / Math.sqrt(days(v))
+  const reaches = videos.map(reach).sort((a, b) => a - b)
+  const median = reaches.length ? reaches[Math.floor(reaches.length / 2)] : 0
+  return videos.map((v) => {
+    const d = v.dislike_count || 0, l = v.like_count || 0, views = v.view_count || 0
+    const reactions = d / (l + d + Math.max(10, 0.02 * views))
+    const negComments = (v.negative_comment_count || 0) / ((v.comment_count || 0) + Math.max(5, 0.01 * views))
+    const unpopular = (median > 0 ? median / (reach(v) + median) : 0.5) * Math.min(1, days(v) / 3)
+    return { ...v, hate_score: Math.round(100 * (0.45 * reactions + 0.3 * negComments + 0.25 * unpopular)) }
+  })
 }
 const VIDEO_COLS = [
   { label: '' },
@@ -80,7 +94,7 @@ const VIDEO_COLS = [
   { label: 'Dislike %', key: 'dislike_pct', val: dislikePct },
   { label: 'Comments', key: 'comment_count' },
   { label: 'Negative', key: 'negative_comment_count' },
-  { label: 'Hate score', key: 'hate_score', val: hateScore },
+  { label: 'Hate score', key: 'hate_score' },
   { label: 'Published', key: 'published_at' },
 ]
 
@@ -165,7 +179,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
             <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{analytics.videos.length}</span>
           </div>
           <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
-            Click a column to sort — Hate score blends dislike share and negative comments into one most-disliked ranking.
+            Click a column to sort — Hate score blends dislike share, negative comments and unpopularity (views/day vs the channel median) into one most-hated ranking.
             Negative counts LLM-classified fetched comments, so it's a floor, not a total.
           </div>
           <div style={{ overflowX: 'auto' }}>
@@ -182,9 +196,9 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                 ))}
               </tr></thead>
               <tbody>
-                {sortVideos(analytics.videos, sort).map((v) => {
+                {sortVideos(annotateHateScores(analytics.videos), sort).map((v) => {
                   const pct = dislikePct(v)
-                  const score = hateScore(v)
+                  const score = v.hate_score
                   return (
                   <tr key={v.video_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px 8px 0' }}>{v.thumbnail_url ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}</td>
