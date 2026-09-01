@@ -42,7 +42,15 @@ The same published-video catalogue as the Analytics tab, with checkboxes for bul
 actions. YouTube only — the X API has no equivalent endpoints. Pick the channel (a
 picker appears when more than one is connected), tick videos — the header checkbox
 selects everything, and column headers sort just like the Analytics table — then apply
-one action to the whole selection:
+one action to the whole selection.
+
+The **Columns** button chooses which metric columns show — every column from the
+Analytics table is available (views, watch time, retention, impressions, CTR,
+**Slop Score**, likes, dislikes, dislike %, comments, negative comments, published),
+and the choice is remembered per browser. Sort by Slop Score, select the worst
+offenders, and unlist or delete them in one go.
+
+The bulk actions:
 
 | Action | What it does |
 |---|---|

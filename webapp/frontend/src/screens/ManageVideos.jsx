@@ -1,42 +1,91 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Card, Chip, Button, Banner } from '../components.jsx'
 import { api } from '../api.js'
-import { analyticsCache } from './Analytics.jsx'
+import {
+  analyticsCache, annotateSlopScores, dislikePct,
+  fmtNum, fmtDate, fmtDuration, fmtWatchTime, fmtPct,
+} from './Analytics.jsx'
 
 // "Manage Videos" tab on Channel Analytics: the same published-video catalogue
-// as the Analytics tab, but with checkboxes and bulk actions — change
-// visibility, add to a playlist, or delete (with confirmation). YouTube only:
-// the X API offers no equivalent bulk endpoints.
-
-function fmtNum(n) {
-  if (n == null) return '—'
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
-  return String(n)
-}
-function fmtDate(iso) {
-  if (!iso) return ''
-  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
-  catch { return iso.slice(0, 10) }
-}
+// as the Analytics tab (same metrics, same Slop Score), but with checkboxes and
+// bulk actions — change visibility, add to a playlist, or delete (with
+// confirmation). A Columns picker toggles every metric column the Analytics
+// table has; the choice persists in localStorage. YouTube only: the X API
+// offers no equivalent bulk endpoints.
 
 const PRIVACY_TONES = { public: 'ok', unlisted: 'warn', private: 'neutral' }
-const COLS = [
-  { label: '' },
-  { label: '' },
-  { label: 'Title', key: 'title', align: 'left' },
-  { label: 'Visibility', key: 'privacy', align: 'left' },
-  { label: 'Duration' },
-  { label: 'Views', key: 'view_count' },
-  { label: 'Likes', key: 'like_count' },
-  { label: 'Comments', key: 'comment_count' },
-  { label: 'Published', key: 'published_at' },
-]
 
-function sortVideos(videos, sort) {
+// Every metric column from the Analytics table, renderable individually so the
+// picker can toggle them. `val` overrides the sort value (derived metrics).
+const dim = { color: 'var(--ink-3)' }
+const METRIC_COLS = [
+  { id: 'duration', label: 'Duration', render: (v) => v.duration || '—', style: () => ({ ...dim, whiteSpace: 'nowrap' }) },
+  { id: 'view_count', label: 'Views', key: 'view_count', render: (v) => fmtNum(v.view_count), style: () => ({ fontWeight: 600 }) },
+  { id: 'watch_time_minutes', label: 'Watch time', key: 'watch_time_minutes', render: (v) => fmtWatchTime(v.watch_time_minutes), style: () => ({ ...dim, whiteSpace: 'nowrap' }) },
+  { id: 'avg_view_duration_secs', label: 'Avg duration', key: 'avg_view_duration_secs', render: (v) => fmtDuration(v.avg_view_duration_secs), style: () => ({ ...dim, whiteSpace: 'nowrap' }) },
+  { id: 'avg_view_pct', label: 'Retention', key: 'avg_view_pct', render: (v) => v.avg_view_pct != null ? `${v.avg_view_pct}%` : '—', style: () => dim },
+  { id: 'impressions', label: 'Impressions', key: 'impressions', render: (v) => fmtNum(v.impressions), style: () => dim },
+  { id: 'ctr', label: 'CTR', key: 'ctr', render: (v) => v.ctr != null ? fmtPct(v.ctr) : '—', style: () => dim },
+  { id: 'slop_score', label: 'Slop Score', key: 'slop_score', render: (v) => v.slop_score != null ? v.slop_score : '—',
+    style: (v) => ({ fontWeight: 600, color: v.slop_score ? 'var(--danger)' : 'var(--ink-3)' }) },
+  { id: 'like_count', label: 'Likes', key: 'like_count', render: (v) => fmtNum(v.like_count), style: () => dim },
+  { id: 'dislike_count', label: 'Dislikes', key: 'dislike_count', render: (v) => fmtNum(v.dislike_count),
+    style: (v) => ({ color: v.dislike_count ? 'var(--danger)' : 'var(--ink-3)' }) },
+  { id: 'dislike_pct', label: 'Dislike %', key: 'dislike_pct', val: dislikePct,
+    render: (v) => { const p = dislikePct(v); return p != null ? fmtPct(p) : '—' },
+    style: (v) => ({ color: dislikePct(v) ? 'var(--danger)' : 'var(--ink-3)' }) },
+  { id: 'comment_count', label: 'Comments', key: 'comment_count', render: (v) => fmtNum(v.comment_count), style: () => dim },
+  { id: 'negative_comment_count', label: 'Negative', key: 'negative_comment_count', render: (v) => fmtNum(v.negative_comment_count),
+    style: (v) => ({ color: v.negative_comment_count ? 'var(--danger)' : 'var(--ink-3)' }) },
+  { id: 'published_at', label: 'Published', key: 'published_at', render: (v) => fmtDate(v.published_at), style: () => ({ ...dim, whiteSpace: 'nowrap' }) },
+]
+const DEFAULT_COLS = ['duration', 'view_count', 'slop_score', 'like_count', 'comment_count', 'published_at']
+const COLS_STORE_KEY = 'manage_videos_cols'
+
+function loadCols() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COLS_STORE_KEY))
+    if (Array.isArray(saved)) return saved.filter((id) => METRIC_COLS.some((c) => c.id === id))
+  } catch { /* fall through */ }
+  return DEFAULT_COLS
+}
+
+function ColumnPicker({ visible, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+  return (
+    <div ref={ref} style={{ position: 'relative', marginLeft: 'auto' }}>
+      <Button size="sm" icon="table-columns" onClick={() => setOpen((o) => !o)}>Columns</Button>
+      {open && (
+        <div className="card" style={{ position: 'absolute', right: 0, top: '100%', marginTop: 6, zIndex: 100,
+                                       padding: 12, minWidth: 180, boxShadow: '0 8px 30px rgba(0,0,0,.16)' }}>
+          {METRIC_COLS.map((c) => (
+            <label key={c.id} className="row center" style={{ gap: 8, fontSize: 13, padding: '3px 0', cursor: 'pointer' }}>
+              <input type="checkbox" checked={visible.includes(c.id)}
+                onChange={(e) => onChange(e.target.checked ? [...visible, c.id] : visible.filter((id) => id !== c.id))} />
+              {c.label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function sortVideos(videos, sort, cols) {
   if (!sort.key) return videos
+  const col = cols.find((c) => c.key === sort.key)
+  const val = (v) => {
+    const x = col?.val ? col.val(v) : v[sort.key]
+    return x == null ? -1 : x
+  }
   const dir = sort.dir === 'asc' ? 1 : -1
-  const val = (v) => v[sort.key] == null ? -1 : v[sort.key]
   return [...videos].sort((a, b) => { const av = val(a), bv = val(b); return (av < bv ? -1 : av > bv ? 1 : 0) * dir })
 }
 
@@ -71,12 +120,17 @@ export default function ManageVideos() {
   const [videos, setVideos] = useState(null)      // null = loading
   const [selected, setSelected] = useState(new Set())
   const [sort, setSort] = useState({ key: 'published_at', dir: 'desc' })
+  const [visibleCols, setVisibleCols] = useState(loadCols)
   const [playlists, setPlaylists] = useState([])
   const [privacy, setPrivacy] = useState('private')
   const [playlistId, setPlaylistId] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [notice, setNotice] = useState(null)      // { tone, text }
+
+  useEffect(() => {
+    try { localStorage.setItem(COLS_STORE_KEY, JSON.stringify(visibleCols)) } catch { /* private mode */ }
+  }, [visibleCols])
 
   useEffect(() => {
     api.ytChannels().then((r) => {
@@ -92,7 +146,7 @@ export default function ManageVideos() {
     const load = cached ? Promise.resolve(cached) : api.ytAnalytics(channel, false)
     load.then((d) => {
       if (!cached) analyticsCache.youtube[channel] = d
-      setVideos(d.videos || [])
+      setVideos(annotateSlopScores(d.videos || []))
     }).catch((e) => { setVideos([]); setNotice({ tone: 'danger', text: e.message }) })
     api.ytPlaylists(channel).then((r) => {
       const pls = r.playlists || []
@@ -105,7 +159,8 @@ export default function ManageVideos() {
     next.has(id) ? next.delete(id) : next.add(id)
     return next
   })
-  const shown = sortVideos(videos || [], sort)
+  const metricCols = METRIC_COLS.filter((c) => visibleCols.includes(c.id))
+  const shown = sortVideos(videos || [], sort, metricCols)
   const allSelected = shown.length > 0 && shown.every((v) => selected.has(v.video_id))
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(shown.map((v) => v.video_id)))
 
@@ -173,23 +228,26 @@ export default function ManageVideos() {
               <Button size="sm" icon="list" disabled={none || busy || !playlistId} onClick={() => runBulk('playlist')}>Add to playlist</Button>
             </div>
             <Button size="sm" variant="danger" icon="trash" disabled={none || busy} onClick={() => setConfirming(true)}>Delete…</Button>
+            <ColumnPicker visible={visibleCols} onChange={setVisibleCols} />
           </div>
 
           {videos === null && <p className="muted" style={{ fontSize: 13 }}>Loading videos…</p>}
           {videos !== null && videos.length === 0 && <p className="muted" style={{ fontSize: 13 }}>No videos found. Connect YouTube to manage your uploads.</p>}
           {videos !== null && videos.length > 0 && (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', minWidth: 560 + metricCols.length * 90, borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead><tr style={{ borderBottom: '1px solid var(--line)' }}>
-                  {COLS.map((c, i) => (
-                    <th key={i}
+                  <th style={{ textAlign: 'left', padding: '6px 10px' }}>
+                    <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={busy} />
+                  </th>
+                  <th />
+                  {[{ label: 'Title', key: 'title' }, { label: 'Visibility', key: 'privacy' }, ...metricCols].map((c) => (
+                    <th key={c.label}
                       onClick={c.key ? () => setSort((s) => ({ key: c.key, dir: s.key === c.key && s.dir === 'desc' ? 'asc' : 'desc' })) : undefined}
-                      style={{ textAlign: c.align || (i <= 2 ? 'left' : 'right'), padding: '6px 10px', fontWeight: 600,
+                      style={{ textAlign: c.label === 'Title' || c.label === 'Visibility' ? 'left' : 'right', padding: '6px 10px', fontWeight: 600,
                                color: sort.key === c.key ? 'var(--ink)' : 'var(--ink-3)', whiteSpace: 'nowrap',
                                cursor: c.key ? 'pointer' : 'default', userSelect: 'none' }}>
-                      {i === 0
-                        ? <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={busy} />
-                        : <>{c.label}{sort.key === c.key ? (sort.dir === 'desc' ? ' ↓' : ' ↑') : ''}</>}
+                      {c.label}{sort.key === c.key ? (sort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
                     </th>
                   ))}
                 </tr></thead>
@@ -206,11 +264,9 @@ export default function ManageVideos() {
                         <a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a>
                       </td>
                       <td style={{ padding: '8px 10px' }}><Chip tone={PRIVACY_TONES[v.privacy] || 'neutral'}>{v.privacy || '—'}</Chip></td>
-                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{v.duration || '—'}</td>
-                      <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.view_count)}</td>
-                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.like_count)}</td>
-                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.comment_count)}</td>
-                      <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
+                      {metricCols.map((c) => (
+                        <td key={c.id} style={{ textAlign: 'right', padding: '8px 10px', ...c.style(v) }}>{c.render(v)}</td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
