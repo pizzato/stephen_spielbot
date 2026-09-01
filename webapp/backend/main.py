@@ -11273,6 +11273,61 @@ def yt_analytics(channel: str = Query(""), refresh: bool = Query(False)) -> dict
     return _overlay_negative_comments(data)
 
 
+class BulkVideosBody(BaseModel):
+    channel: str = ""
+    action: str                 # "privacy" | "playlist" | "delete"
+    video_ids: list[str] = []
+    privacy: str = ""           # for action == "privacy"
+    playlist_id: str = ""       # for action == "playlist"
+
+
+@api.post("/api/youtube/videos/bulk")
+def yt_videos_bulk(body: BulkVideosBody) -> dict:
+    """Apply one action to many published videos (Channel Analytics → Manage
+    Videos): change visibility, add to a playlist, or delete. Runs per video and
+    reports per-video results so one failure doesn't abort the rest, then
+    patches the persisted analytics snapshot in place (privacy updated, deleted
+    rows dropped) so the tables reflect the change without a full refetch."""
+    ids = [v for v in body.video_ids if v]
+    if not ids:
+        raise HTTPException(400, "No videos selected.")
+    if body.action == "privacy" and body.privacy not in yt.PRIVACY_OPTIONS:
+        raise HTTPException(400, "Invalid privacy value.")
+    if body.action == "playlist" and not body.playlist_id:
+        raise HTTPException(400, "No playlist selected.")
+    if body.action not in ("privacy", "playlist", "delete"):
+        raise HTTPException(400, f"Unknown action: {body.action}")
+    key = body.channel or _channel_for_style("")
+    secrets = _client_secrets_path()
+    results = []
+    for vid in ids:
+        if body.action == "privacy":
+            r = yt.set_video_privacy(secrets, vid, body.privacy, channel=key)
+        elif body.action == "playlist":
+            r = yt.add_video_to_playlist(secrets, vid, body.playlist_id, channel=key)
+        else:
+            r = yt.delete_video(secrets, vid, channel=key)
+        results.append({"video_id": vid, "success": bool(r.get("success")), "error": r.get("error", "")})
+    ok_ids = {r["video_id"] for r in results if r["success"]}
+    if ok_ids and body.action in ("privacy", "delete"):
+        cache = yt.load_analytics_cache()
+        snap = cache.get(key)
+        if snap:
+            vids = snap.get("videos") or []
+            if body.action == "delete":
+                snap["videos"] = [v for v in vids if v.get("video_id") not in ok_ids]
+            else:
+                for v in vids:
+                    if v.get("video_id") in ok_ids:
+                        v["privacy"] = body.privacy
+            yt.save_analytics_cache(cache)
+    return {
+        "results": results,
+        "succeeded": len(ok_ids),
+        "failed": len(results) - len(ok_ids),
+    }
+
+
 @api.get("/api/youtube/post/options")
 def yt_post_options() -> dict:
     cfg = gapp.load_config()

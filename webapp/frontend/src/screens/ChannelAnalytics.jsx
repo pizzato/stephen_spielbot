@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Segmented } from '../components.jsx'
 import Analytics from './Analytics.jsx'
+import ManageVideos from './ManageVideos.jsx'
 import Engagement from './Engagement.jsx'
 
 // Top-level "Channel Analytics" page: the performance dashboard (YouTube/X) and
@@ -9,6 +10,7 @@ import Engagement from './Engagement.jsx'
 // tab (each route remounts this screen, so initialTab sets the starting tab).
 const TABS = [
   { value: 'analytics', label: 'Analytics' },
+  { value: 'manage', label: 'Manage Videos' },
   { value: 'predictive', label: 'Predictive Model' },
 ]
 
@@ -27,7 +29,7 @@ export default function ChannelAnalytics({ meta, go, initialTab = 'analytics' })
         <Segmented options={TABS} value={tab} onChange={setTab} />
       </div>
 
-      {tab === 'analytics' ? <Analytics /> : <Engagement meta={meta} go={go} />}
+      {tab === 'analytics' ? <Analytics /> : tab === 'manage' ? <ManageVideos /> : <Engagement meta={meta} go={go} />}
     </div>
   )
 }

@@ -70,8 +70,9 @@ the script, and nothing publishes until you say so.
 
 -   :material-chart-line: **Know what lands**
 
-    [Channel Analytics](manual/analytics.md) tracks performance and trains a predictive
-    model that estimates a title's first-days views before you render it.
+    [Channel Analytics](manual/analytics.md) tracks performance, offers bulk video
+    management (visibility, playlists, delete), and trains a predictive model that
+    estimates a title's first-days views before you render it.
 
 </div>
 
