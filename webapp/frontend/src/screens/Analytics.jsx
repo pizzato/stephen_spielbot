@@ -67,6 +67,11 @@ const dislikePct = (v) => {
 // views haven't accumulated yet (dislikes and negative comments still count
 // from day one). Unfetched dislikes count as zero rather than hiding the score.
 function annotateHateScores(videos) {
+  // Drop duplicate video ids (older cached snapshots carry page-edge repeats
+  // from the uploads pagination) — rows are keyed by video_id, and duplicate
+  // React keys leave rows in stale positions when a sort reorders the table.
+  const seen = new Set()
+  videos = videos.filter((v) => !seen.has(v.video_id) && seen.add(v.video_id))
   const days = (v) => Math.max(1, (Date.now() - new Date(v.published_at).getTime()) / 86400000)
   const reach = (v) => (v.view_count || 0) / Math.sqrt(days(v))
   const reaches = videos.map(reach).sort((a, b) => a - b)
@@ -115,6 +120,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
   if (!analytics) return <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No data yet. Connect YouTube to see your channel analytics.</p></Card>
   if (analytics.error) return <Card span={12}><p style={{ fontSize: 13, color: 'var(--danger)' }}>{analytics.error}</p></Card>
   const ch = analytics.channel || {}
+  const videos = annotateHateScores(analytics.videos || [])
   const dailyViews = ch.daily_views || []
   const maxDaily = Math.max(1, ...dailyViews.map((d) => d.views))
   const traffic = ch.traffic_sources || []
@@ -171,12 +177,12 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
           </div>
         </Card>
       )}
-      {(analytics.videos || []).length > 0 && (
+      {videos.length > 0 && (
         // minWidth: 0 lets the inner overflow-x scroller work — without it the
         // grid item grows to fit the table and the right-hand columns clip.
         <Card span={12} className="reveal reveal-d2" style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>All videos
-            <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{analytics.videos.length}</span>
+            <span className="muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 10 }}>{videos.length}</span>
           </div>
           <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
             Click a column to sort — Hate score blends dislike share, negative comments and unpopularity (views/day vs the channel median) into one most-hated ranking.
@@ -196,7 +202,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
                 ))}
               </tr></thead>
               <tbody>
-                {sortVideos(annotateHateScores(analytics.videos), sort).map((v) => {
+                {sortVideos(videos, sort).map((v) => {
                   const pct = dislikePct(v)
                   const score = v.hate_score
                   return (

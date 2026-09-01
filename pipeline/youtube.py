@@ -1071,6 +1071,7 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
 
         # Collect video IDs from the uploads playlist
         video_ids: list[str] = []
+        seen_ids: set[str] = set()
         next_page: str | None = None
         while len(video_ids) < max_videos:
             resp = youtube.playlistItems().list(
@@ -1081,7 +1082,10 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, chan
             ).execute()
             for item in resp.get("items", []):
                 vid = item["contentDetails"].get("videoId", "")
-                if vid:
+                # Pagination can repeat a page-edge item; duplicate ids become
+                # duplicate rows (and duplicate React keys) in the table.
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
                     video_ids.append(vid)
             next_page = resp.get("nextPageToken")
             if not next_page:
