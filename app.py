@@ -1874,6 +1874,19 @@ def _job_meta_path(work_dir: Path) -> Path:
     return work_dir / "job.json"
 
 
+def _is_another_films_final(candidate: Path, work_dir: Path) -> bool:
+    """True when *candidate* is the canonical final of a different work dir.
+
+    The size and recency guesses below exist for old films whose final was not
+    named after the folder. They must never claim a sibling that belongs to
+    another film: every writer that rebuilds a final targets whatever this
+    resolver returns, so a wrong guess overwrites that other film (a song film
+    mid-render, whose copied progress.json quoted a size within 2 MB of an
+    unrelated film's final, got its scenes mixed onto that film's file — which
+    was then published under the wrong title)."""
+    return candidate.stem != work_dir.name and (OUTPUT_DIR / candidate.stem).is_dir()
+
+
 def _final_path_for_work_dir(work_dir: Path) -> Path:
     meta_path = _job_meta_path(work_dir)
     if meta_path.exists():
@@ -1898,6 +1911,8 @@ def _final_path_for_work_dir(work_dir: Path) -> Path:
             if match:
                 size_mb = float(match.group(2))
                 for candidate in OUTPUT_DIR.glob("*.mp4"):
+                    if _is_another_films_final(candidate, work_dir):
+                        continue
                     try:
                         actual_mb = candidate.stat().st_size / 1024 / 1024
                         if abs(actual_mb - size_mb) < max(2.0, size_mb * 0.02):
@@ -1920,6 +1935,7 @@ def _final_path_for_work_dir(work_dir: Path) -> Path:
             recent = [
                 p for p in OUTPUT_DIR.glob("*.mp4")
                 if p.stat().st_size > 10_000 and p.stat().st_mtime >= marker_mtime - 600
+                and not _is_another_films_final(p, work_dir)
             ]
             if recent:
                 return max(recent, key=lambda p: p.stat().st_mtime)
