@@ -5400,6 +5400,24 @@ def _scene_style_note(job_id: str) -> str:
         return ""
 
 
+def _drop_stale_scene_files(wd: Path, sid: int) -> None:
+    """A scene whose take must not be reused loses its rendered files — the
+    resume path skips scenes whose final already exists, which would silently
+    serve the OLD take. A FINISHED film keeps its clips: they are the
+    deliverable, and the film editor re-renders the scene on request rather
+    than leaving a hole in the cut."""
+    if (wd / "combined.mp4").exists():
+        return
+    stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
+             wd / f"scene_{sid:02d}_establish.mp4"]
+    stale += list(wd.glob(f"scene_{sid:02d}_line_*"))
+    for p in stale:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
 def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     sid = int(scene_id)
@@ -5590,23 +5608,100 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
         # which would silently serve the OLD (e.g. narrated) take. A FINISHED film
         # keeps its clips: they are the deliverable, and the film editor re-renders
         # the scene on request rather than leaving a hole in the cut.
-        if ({k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")} != old_dialogue
-                and not (Path(work_dir) / "combined.mp4").exists()):
-            wd = Path(work_dir)
-            stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
-                     wd / f"scene_{sid:02d}_establish.mp4"]
-            stale += list(wd.glob(f"scene_{sid:02d}_line_*"))
-            for p in stale:
-                try:
-                    p.unlink(missing_ok=True)
-                except OSError:
-                    pass
+        if {k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")} != old_dialogue:
+            _drop_stale_scene_files(Path(work_dir), sid)
     # The saved row, so the editor can adopt the server-assembled prompt and
     # narration without a second fetch.
     fresh = next((r for r in rows if int(r.get("id") or 0) == sid), None)
     return {"ok": True,
             "scene": _scene_to_json(fresh, Path(work_dir) if work_dir else None)
                      if fresh else None}
+
+
+class SongBoundaryBody(BaseModel):
+    # Which seam of THIS scene's song window moves: its "start" (shared with
+    # the scene singing before it) or its "end" (shared with the one after).
+    edge: str
+    # Where the seam goes, in seconds into the track.
+    seconds: float
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/song-boundary")
+def move_song_boundary(job_id: str, scene_id: int, body: SongBoundaryBody) -> dict:
+    """Move the seam between a singing scene's window and its neighbour's.
+
+    A song film's windows tile the track, so a seam is the only thing that
+    can move — and it moves for both takes at once: the neighbour is found by
+    its window MEETING this one's edge (not by scene order, which the film
+    editor may have shuffled), and story.move_song_boundary re-stamps both
+    scenes. The first and last seams are the track's own ends and stay put.
+    Both takes are stale after this — pre-render, their files go the way an
+    edited take's do."""
+    sid = int(scene_id)
+    edge = (body.edge or "").strip().lower()
+    if edge not in ("start", "end"):
+        raise HTTPException(400, "edge must be 'start' or 'end'.")
+
+    def _window(meta: dict):
+        w = meta.get("song_window") if meta.get("singing") else None
+        try:
+            return (float(w[0]), float(w[1])) if w and len(w) >= 2 else None
+        except (TypeError, ValueError):
+            return None
+
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+        this = next((r for r in rows if int(r.get("id") or 0) == sid), None)
+        if not this:
+            raise HTTPException(404, "Scene not found.")
+        window = _window(this.get("metadata") or {})
+        if not window:
+            raise HTTPException(400, "This scene has no stretch of the song to move.")
+        other = None
+        for r in rows:
+            if int(r.get("id") or 0) == sid:
+                continue
+            w = _window(r.get("metadata") or {})
+            if not w:
+                continue
+            if edge == "start" and abs(w[1] - window[0]) < 0.05:
+                other = r
+                break
+            if edge == "end" and abs(w[0] - window[1]) < 0.05:
+                other = r
+                break
+        if other is None:
+            raise HTTPException(400, "No singing scene shares this seam — the "
+                                     "song's own start and end are pinned.")
+        prev_row, next_row = (other, this) if edge == "start" else (this, other)
+        work_dir = gapp._job_work_dir(job_id)
+        chained = _acted_scene_ctx(work_dir)["chained"] if work_dir else False
+        try:
+            prev_meta, next_meta = story_mode.move_song_boundary(
+                dict(prev_row.get("metadata") or {}),
+                dict(next_row.get("metadata") or {}), body.seconds,
+                max_seconds=performance_mode.acted_limits(chained)[0])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        for row, meta in ((prev_row, prev_meta), (next_row, next_meta)):
+            store.upsert_scene(
+                job_id, int(row["id"]), title=row.get("title") or "",
+                image_prompt=row.get("image_prompt") or "",
+                video_prompt=row.get("video_prompt") or "",
+                narration=row.get("narration") or "",
+                preview_path=row.get("preview_path") or "", metadata=meta)
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    moved = {int(prev_row["id"]), int(next_row["id"])}
+    if work_dir:
+        gapp._persist_script_snapshot(work_dir, rows)
+        for moved_id in moved:
+            _drop_stale_scene_files(Path(work_dir), moved_id)
+    return {"ok": True,
+            "scenes": [_scene_to_json(r, Path(work_dir) if work_dir else None)
+                       for r in rows if int(r.get("id") or 0) in moved]}
 
 
 # ── scene structure: add / remove / reorder (issue #193) ─────────────────────

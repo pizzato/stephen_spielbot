@@ -276,6 +276,19 @@ asked to sing. This is the fix for a shot the measurement over-fed: when the pro
 for more singing than the slice really carries, trim it here instead of hand-editing the
 prompt, which would pin it and stop every later field edit from reaching it.
 
+**The seams move too.** The soundtrack slice on the same card shows the scene's window
+as two inputs. Because the windows tile the track, a seam belongs to two takes at once:
+moving it resizes both and re-stamps both with what they now sing. Nothing extra is
+stored for this — the film-level lyric timeline is rebuilt from the two scenes' own
+stamped shares (each scene's line times shifted back by its window start; a line the old
+seam had cut in two is joined back into one), so it works on films divided long before
+the seam became editable. A film divided before its song was measured has no line
+times to move, so only the windows and take lengths change there and the words stay
+put — retime them in the sung-lines rows. The seam snaps to the frame grid, each take
+must keep between the acted minimum and the style's single-take ceiling of song, and
+the track's own start and end are pinned. Both takes are stale afterwards (pre-render
+their files are dropped; a finished film keeps its clips until they are re-shot).
+
 **Each line's time can be measured, not estimated** — the *Align lyrics to the sung
 track* option ([Settings → Music](manual/settings.md), `song_align_lyrics`, on by
 default). Level measurement knows *where* singing is but never *which* line is being

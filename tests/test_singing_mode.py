@@ -1958,3 +1958,181 @@ class SungLinesEditingTests(unittest.TestCase):
         self.assertNotIn("sings", meta)
         self.assertNotIn("line_times", meta)
         self.assertNotIn("vocal_ranges", meta)
+
+
+class MoveSongBoundaryTests(unittest.TestCase):
+    """A seam between two singing scenes' windows moves for both takes, and
+    what each sings is re-derived from the timeline the pair carries."""
+
+    def _pair(self):
+        prev = {"mode": "silent", "singing": True, "song_window": [0.0, 8.0],
+                "duration": 8.0, "seconds": 8.0,
+                "sings": "one\ntwo", "line_times": [[0.5, 3.0], [3.5, 7.5]],
+                "vocal_ranges": [[0.5, 7.5]]}
+        nxt = {"mode": "silent", "singing": True, "song_window": [8.0, 16.0],
+               "duration": 8.0, "seconds": 8.0,
+               "sings": "three", "line_times": [[1.0, 4.0]],
+               "vocal_ranges": [[1.0, 4.0]]}
+        return prev, nxt
+
+    def test_the_seam_moves_for_both_takes(self):
+        prev, nxt = story.move_song_boundary(*self._pair(), 6.0)
+        self.assertEqual(prev["song_window"], [0.0, 6.0])
+        self.assertEqual(nxt["song_window"], [6.0, 16.0])
+        self.assertEqual((prev["duration"], prev["seconds"]), (6.0, 6.0))
+        self.assertEqual((nxt["duration"], nxt["seconds"]), (10.0, 10.0))
+
+    def test_lines_change_hands_with_the_seam(self):
+        prev, nxt = story.move_song_boundary(*self._pair(), 6.0)
+        # "two" (3.5–7.5 on the track) now straddles the seam: clipped into
+        # both takes, each told only the stretch it carries.
+        self.assertEqual(prev["sings"], "one\ntwo")
+        self.assertEqual(prev["line_times"], [[0.5, 3.0], [3.5, 6.0]])
+        self.assertEqual(prev["vocal_ranges"], [[0.5, 6.0]])
+        self.assertEqual(nxt["sings"], "two\nthree")
+        self.assertEqual(nxt["line_times"], [[0.0, 1.5], [3.0, 6.0]])
+        self.assertEqual(nxt["vocal_ranges"], [[0.0, 1.5], [3.0, 6.0]])
+
+    def test_a_line_the_old_seam_cut_is_whole_again(self):
+        prev, nxt = story.move_song_boundary(*self._pair(), 6.0)
+        # Moving back re-joins the clipped halves of "two" into one line.
+        back_prev, back_nxt = story.move_song_boundary(prev, nxt, 8.0)
+        self.assertEqual(back_prev["sings"], "one\ntwo")
+        self.assertEqual(back_prev["line_times"], [[0.5, 3.0], [3.5, 7.5]])
+        self.assertEqual(back_prev["vocal_ranges"], [[0.5, 7.5]])
+        self.assertEqual(back_nxt["sings"], "three")
+        self.assertEqual(back_nxt["line_times"], [[1.0, 4.0]])
+        self.assertEqual(back_nxt["vocal_ranges"], [[1.0, 4.0]])
+
+    def test_the_seam_snaps_to_the_frame_grid(self):
+        from pipeline import song_timing
+        prev, _ = story.move_song_boundary(*self._pair(), 6.01)
+        self.assertEqual(prev["song_window"][1], song_timing.frame_snap(6.01))
+        self.assertGreater(prev["song_window"][1], 6.01)
+
+    def test_each_take_keeps_the_acted_minimum_and_ceiling(self):
+        with self.assertRaisesRegex(ValueError, "between 5.0 s and 11.0 s"):
+            story.move_song_boundary(*self._pair(), 3.0)
+        with self.assertRaisesRegex(ValueError, "at most 12"):
+            story.move_song_boundary(*self._pair(), 13.0, max_seconds=12.0)
+        # 12 s ceiling on a 16 s pair: the seam may sit only in [4, 12] ∩ [5, 11].
+        with self.assertRaisesRegex(ValueError, "between 5.0 s and 11.0 s"):
+            story.move_song_boundary(*self._pair(), 11.5, max_seconds=12.0)
+
+    def test_an_unmeasured_film_moves_the_windows_and_keeps_the_words(self):
+        prev, nxt = self._pair()
+        prev.pop("line_times")
+        prev.pop("vocal_ranges")
+        moved_prev, moved_nxt = story.move_song_boundary(prev, nxt, 6.0)
+        self.assertEqual(moved_prev["song_window"], [0.0, 6.0])
+        self.assertEqual(moved_nxt["song_window"], [6.0, 16.0])
+        self.assertEqual(moved_prev["sings"], "one\ntwo")
+        self.assertEqual(moved_nxt["sings"], "three")
+        self.assertNotIn("vocal_ranges", moved_prev)
+        self.assertEqual(moved_nxt["vocal_ranges"], [[1.0, 4.0]])
+
+
+class SongBoundaryEndpointTests(unittest.TestCase):
+    """The seam endpoint finds the neighbour by its window and re-stamps both."""
+
+    def setUp(self):
+        import os
+
+        import app as gapp
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-seam-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.output_dir = root / "videos"
+        self.output_dir.mkdir()
+        cfg_file = root / "config" / "config.yaml"
+        cfg_file.parent.mkdir(parents=True)
+        for target, attr, value in [(gapp, "CONFIG_FILE", cfg_file),
+                                    (gapp, "OUTPUT_DIR", self.output_dir)]:
+            p = unittest.mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        db = unittest.mock.patch.dict(
+            os.environ, {"SPIELBOT_ORCHESTRATOR_DB": str(root / "orchestrator.sqlite3")})
+        db.start()
+        self.addCleanup(db.stop)
+        from pipeline.orchestrator import job_id_from_work_dir
+        self.wd = self.output_dir / "film"
+        self.wd.mkdir()
+        (self.wd / "scene_01_final.mp4").write_bytes(b"x")
+        (self.wd / "scene_02_final.mp4").write_bytes(b"x")
+        (self.wd / "scene_03_final.mp4").write_bytes(b"x")
+        self.job_id = job_id_from_work_dir(self.wd)
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(self.job_id, self.wd, "Film",
+                                       config={"video_title": "Film"}, metadata={})
+            for sid, meta in (
+                (1, {"mode": "silent", "singing": True, "cast": ["Ada"],
+                     "song_window": [0.0, 8.0], "duration": 8.0,
+                     "sings": "one\ntwo", "line_times": [[0.5, 3.0], [3.5, 7.5]],
+                     "vocal_ranges": [[0.5, 7.5]]}),
+                (2, {"mode": "silent", "singing": True, "cast": ["Ada"],
+                     "song_window": [8.0, 16.0], "duration": 8.0,
+                     "sings": "three", "line_times": [[1.0, 4.0]],
+                     "vocal_ranges": [[1.0, 4.0]]}),
+                (3, {"mode": "silent"}),
+            ):
+                store.upsert_scene(self.job_id, sid, title=f"s{sid}", image_prompt="",
+                                   video_prompt="", narration="", metadata=meta)
+        finally:
+            store.close()
+
+    def _meta(self, sid):
+        store = DurableStore.default()
+        try:
+            return dict((store.get_scene(self.job_id, sid) or {}).get("metadata") or {})
+        finally:
+            store.close()
+
+    def test_moving_the_end_of_a_scene_moves_the_next_ones_start(self):
+        out = backend.move_song_boundary(
+            self.job_id, 1, backend.SongBoundaryBody(edge="end", seconds=6.0))
+        self.assertEqual(sorted(s["id"] for s in out["scenes"]), [1, 2])
+        self.assertEqual(self._meta(1)["song_window"], [0.0, 6.0])
+        self.assertEqual(self._meta(2)["song_window"], [6.0, 16.0])
+        self.assertEqual(self._meta(2)["sings"], "two\nthree")
+        # Both takes are stale — pre-render, their files go; the third stays.
+        self.assertFalse((self.wd / "scene_01_final.mp4").exists())
+        self.assertFalse((self.wd / "scene_02_final.mp4").exists())
+        self.assertTrue((self.wd / "scene_03_final.mp4").exists())
+        # …and the script snapshot carries the move.
+        saved = json.loads((self.wd / "script.json").read_text())
+        self.assertEqual(saved[1]["metadata"]["song_window"], [6.0, 16.0])
+
+    def test_moving_the_start_finds_the_scene_before(self):
+        backend.move_song_boundary(
+            self.job_id, 2, backend.SongBoundaryBody(edge="start", seconds=10.0))
+        self.assertEqual(self._meta(1)["song_window"], [0.0, 10.0])
+        self.assertEqual(self._meta(1)["sings"], "one\ntwo\nthree")
+        self.assertEqual(self._meta(2)["song_window"], [10.0, 16.0])
+        self.assertEqual(self._meta(2)["sings"], "three")
+
+    def test_the_songs_own_ends_are_pinned(self):
+        with self.assertRaises(HTTPException) as ctx:
+            backend.move_song_boundary(
+                self.job_id, 1, backend.SongBoundaryBody(edge="start", seconds=1.0))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("pinned", ctx.exception.detail)
+        with self.assertRaises(HTTPException) as ctx:
+            backend.move_song_boundary(
+                self.job_id, 2, backend.SongBoundaryBody(edge="end", seconds=14.0))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_a_bad_seam_is_a_clear_400(self):
+        with self.assertRaises(HTTPException) as ctx:
+            backend.move_song_boundary(
+                self.job_id, 1, backend.SongBoundaryBody(edge="end", seconds=2.0))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("at least 5 s", ctx.exception.detail)
+        self.assertEqual(self._meta(1)["song_window"], [0.0, 8.0])
+
+    def test_a_non_singing_scene_has_nothing_to_move(self):
+        with self.assertRaises(HTTPException) as ctx:
+            backend.move_song_boundary(
+                self.job_id, 3, backend.SongBoundaryBody(edge="end", seconds=6.0))
+        self.assertEqual(ctx.exception.status_code, 400)

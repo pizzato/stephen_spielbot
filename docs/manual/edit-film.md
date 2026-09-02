@@ -426,7 +426,9 @@ each acted scene: numbered cast slots with portraits and voices, artifact refere
 thumbnails, soundtrack slice and warnings — and, on a music-video beat, the editable
 [**Sung in this shot** rows](script.md#acted-staging): the lyric lines the take mouths
 and when each is heard, saved straight onto the scene so the assembled prompt and the
-captions follow. The card's editor contains the dialogue and
+captions follow — and the slice's own seams, movable between two singing takes so a
+stretch of the song changes hands (both takes are re-stamped and need re-shooting; the
+neighbour is found by its window, not by card order). The card's editor contains the dialogue and
 assembled prompt, while **Re-generate scene**, **Shoot again**, **Continue**, trim and the
 image/video version strips stay with it. Performed silent scenes use the same layout,
 marked *silent* and without dialogue controls.

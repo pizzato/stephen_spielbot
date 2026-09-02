@@ -3,7 +3,7 @@ import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Ba
 import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
-import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines, ActedTakes } from '../acted.jsx'
+import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines, ActedTakes, songEdges } from '../acted.jsx'
 import { styleLineage, resolveStyle } from '../styleUtils.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -1233,7 +1233,18 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <ActedTakes scene={acted} workDir={job.work_dir} onChanged={refreshPerf}
               hint="The take on screen was shot from the fields above — after an edit it is stale until the scene is shot again." />
 
-            <SoundtrackSlice window={acted.song_window} songUrl={perf?.song_url || ''} />
+            <SoundtrackSlice window={s.song_window || acted.song_window} songUrl={perf?.song_url || ''}
+              edges={songEdges(s, scenes)}
+              onMove={async (edge, seconds) => {
+                setError('')
+                try {
+                  const r = await api.moveSongBoundary(job.job_id, s.id, edge, seconds)
+                  // Both takes changed — adopt the server's copy of each.
+                  const fresh = new Map((r?.scenes || []).map((x) => [x.id, x]))
+                  setScenes((arr) => arr.map((x) => (fresh.has(x.id) ? { ...x, ...fresh.get(x.id) } : x)))
+                  refreshPerf()
+                } catch (e) { setError(e.message) }
+              }} />
             <SungLines scene={s} disabled={!!busy}
               onSave={async (sings, line_times) => {
                 const ns = { ...scenes[i], sings, line_times }

@@ -254,6 +254,10 @@ export const api = {
     req('POST', '/scripts/duplicate-restyle', { work_dir: workDir, ...body }),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
+  // Move the seam between a singing scene's song window and its neighbour's
+  // (edge: 'start' | 'end'); returns both re-stamped scenes as { scenes }.
+  moveSongBoundary: (jobId, sceneId, edge, seconds) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/song-boundary`, { edge, seconds }),
   // Scene structure (issue #193). Scene ids are renumbered to 1..N on every
   // structural change, so each call returns the fresh { scenes } list to
   // replace local state wholesale.

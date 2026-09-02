@@ -6,7 +6,7 @@ import {
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
-import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines } from '../acted.jsx'
+import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines, songEdges } from '../acted.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -72,7 +72,7 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 function SceneCard({
   scene, prevScene = null, index, total, jobId, workDir, resolution, style,
   voices, filmVoice, voiceMeta = {}, castOpts = [], actedSilent = false,
-  acted = null, performance = null,
+  acted = null, performance = null, seams = null,
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
@@ -756,7 +756,15 @@ function SceneCard({
                   </span>
                 </div>
 
-                <SoundtrackSlice window={acted.song_window} songUrl={performance?.song_url || ''} />
+                <SoundtrackSlice window={scene.song_window || acted.song_window} songUrl={performance?.song_url || ''}
+                  edges={seams}
+                  onMove={async (edge, seconds) => {
+                    setError('')
+                    try {
+                      await api.moveSongBoundary(jobId, scene.id, edge, seconds)
+                      onSaved()
+                    } catch (e) { setError(e.message) }
+                  }} />
                 <SungLines scene={scene} disabled={isRendering}
                   onSave={async (sings, line_times) => {
                     try {
@@ -2777,6 +2785,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
               actedSilent={actedSilent}
               acted={perfById.get(scene.id) || null}
               performance={performance}
+              seams={songEdges(scene, scenes)}
               onDelete={handleDelete}
               onMove={handleMove}
               onSaved={load}

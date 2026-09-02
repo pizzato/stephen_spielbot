@@ -879,6 +879,109 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     return scenes
 
 
+def _song_timeline(prev_meta: dict, next_meta: dict):
+    """The lyric timeline across two adjacent singing scenes, in TRACK seconds:
+    ``(lines, spans, sung)`` — one sung span per line, and where a voice is
+    heard at all — rebuilt from what the scenes themselves carry.
+
+    The divide measured these against the track and then kept only each
+    scene's clipped share (``line_times`` / ``vocal_ranges``, relative to its
+    window), so the film-level timeline is not stored anywhere — but for a
+    seam move it does not need to be: every line that can change hands lies
+    inside the two windows, and each scene's share, shifted back by its
+    window start, is that stretch of the timeline. A line the old seam cut
+    in two sits in both scenes as clipped halves that meet at the seam; they
+    are joined back into one span. Hand edits made through the sung-lines
+    panel ride along, since they live in the very fields read here.
+
+    ``spans`` is None when either scene has no usable times (a film divided
+    before the song was measured): the words cannot be placed, so the caller
+    leaves them where they are. ``sung`` is None when either scene was never
+    measured for voice."""
+    from pipeline import song_timing as _song_timing
+    touch = 2.0 / _song_timing.FPS
+    lines: list[str] = []
+    spans: list[tuple[float, float]] = []
+    for meta in (prev_meta, next_meta):
+        w0 = float(meta["song_window"][0])
+        texts = [l.strip() for l in str(meta.get("sings") or "").splitlines()
+                 if l.strip()]
+        times = meta.get("line_times") or []
+        if len(times) != len(texts):
+            return texts, None, None
+        for text, pair in zip(texts, times):
+            span = (round(w0 + float(pair[0]), 2), round(w0 + float(pair[1]), 2))
+            if lines and lines[-1] == text and abs(spans[-1][1] - span[0]) <= touch:
+                spans[-1] = (spans[-1][0], span[1])
+            else:
+                lines.append(text)
+                spans.append(span)
+    sung: list | None = []
+    for meta in (prev_meta, next_meta):
+        ranges = meta.get("vocal_ranges")
+        if ranges is None:
+            sung = None
+            break
+        w0 = float(meta["song_window"][0])
+        sung += [[w0 + float(r[0]), w0 + float(r[1])] for r in ranges]
+    if sung is not None:
+        # Only re-join what the old seam cut: a real break between two sung
+        # stretches is wider than a couple of frames.
+        sung = _song_timing.merge_ranges(sung, min_gap=touch)
+    return lines, spans, sung
+
+
+def move_song_boundary(prev_meta: dict, next_meta: dict, seam: float, *,
+                       max_seconds: float | None = None) -> tuple[dict, dict]:
+    """Move the seam between two adjacent singing scenes' windows to *seam*
+    (track seconds), returning both scenes' metadata re-stamped for it.
+
+    The windows tile the track (assign_song_slices), so a seam is the only
+    thing that can move: the earlier scene's window ends there and the later
+    one's begins there, both takes are resized to their windows, and what
+    each sings — its lines, their times and its voice-heard ranges — is
+    re-derived from the timeline the two scenes carry (_song_timeline),
+    exactly as the divide stamped it. The seam snaps to the frame grid and
+    must leave each take between the acted minimum and *max_seconds* (the
+    style's single-take ceiling); ValueError says where it may sit."""
+    from pipeline import song_timing as _song_timing
+    from pipeline.performance import MIN_SCENE_SECONDS
+    t0 = float(prev_meta["song_window"][0])
+    t1 = float(next_meta["song_window"][1])
+    lo = t0 + MIN_SCENE_SECONDS
+    hi = t1 - MIN_SCENE_SECONDS
+    if max_seconds:
+        lo = max(lo, t1 - float(max_seconds))
+        hi = min(hi, t0 + float(max_seconds))
+    seam = _song_timing.frame_snap(float(seam))
+    if lo > hi + 1e-6:
+        raise ValueError("These two takes cannot share this stretch of the song "
+                         "at any seam — each needs between "
+                         f"{MIN_SCENE_SECONDS:g} and {max_seconds:g} s of it.")
+    if seam < lo - 1e-6 or seam > hi + 1e-6:
+        raise ValueError(f"The seam can sit between {lo:.1f} s and {hi:.1f} s: "
+                         f"each take needs at least {MIN_SCENE_SECONDS:g} s of song"
+                         + (f" and can carry at most {max_seconds:g} s" if max_seconds else "")
+                         + ".")
+    lines, spans, sung = _song_timeline(prev_meta, next_meta)
+    out = []
+    for meta, (a, b) in ((prev_meta, (t0, seam)), (next_meta, (seam, t1))):
+        new = dict(meta)
+        new["song_window"] = [a, b]
+        length = round(b - a, 2)
+        new["duration"] = length
+        # The acted take's rendered length reads ``seconds`` first.
+        new["seconds"] = length
+        if spans is not None:
+            new["sings"] = "\n".join(
+                _song_timing.lines_in_window(lines, spans, a, b)).strip()
+            new["line_times"] = _song_timing.window_lines(spans, a, b)
+            if sung is not None:
+                new["vocal_ranges"] = _song_timing.window_vocals(sung, a, b)
+        out.append(new)
+    return out[0], out[1]
+
+
 def mark_singing(scenes: list[Scene]) -> list[Scene]:
     """Stamp a song film's performance flag onto its silent scenes, in place.
 

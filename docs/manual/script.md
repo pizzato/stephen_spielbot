@@ -308,6 +308,15 @@ never meant to sing (or nudging when one lands) is a field edit here, not a hand
 that pins the whole prompt. Deleting every row marks the shot instrumental: the song
 still plays over it, but the prompt asks nobody to sing.
 
+**Moving a seam.** The soundtrack slice's start and end are inputs (seconds into the
+track). The windows tile the song, so moving one seam hands that stretch to the
+neighbouring take: both takes are resized to their new windows and re-stamped with the
+lines, times and voice-heard ranges they now carry — a line that lands across the seam
+is clipped into both, each told only its own stretch. Each take must keep between the
+acted minimum and the style's single-take ceiling of song; the seam snaps to the frame
+grid, and the song's own start and end are pinned (those inputs stay disabled). Both
+takes need shooting again afterwards — before the render their old takes are dropped.
+
 **Every take the film shoots on the reference engine** stages this way, so a
 [performed silent scene](../performance_films.md#silent-scenes-performed) carries the
 same staging — marked *silent*, with no dialogue editor: it is shot the same way and its

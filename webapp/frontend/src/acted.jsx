@@ -105,12 +105,60 @@ export function RefTile({ p, busy = false, onRemoveFrame }) {
 // The take's SOUNDTRACK input: the stretch of the film's song this scene is
 // generated against (audio-driven H3). Playable directly — the #t media
 // fragment plays exactly the pinned window.
-export function SoundtrackSlice({ window: win, songUrl }) {
+// Which seams of a singing scene's song window can move: the ones another
+// singing scene's window MEETS (the windows tile the track, so a seam moves
+// for both takes at once). Adjacency by window, not by card order — the film
+// editor can shuffle cards; the song's own start and end have no neighbour.
+export function songEdges(scene, scenes) {
+  const w = scene?.song_window
+  if (!scene?.singing || !w) return { start: false, end: false }
+  const meets = (a, b) => Math.abs(Number(a) - Number(b)) < 0.05
+  const others = (scenes || []).filter((s) => s.id !== scene.id && s.singing && s.song_window)
+  return {
+    start: others.some((s) => meets(s.song_window[1], w[0])),
+    end: others.some((s) => meets(s.song_window[0], w[1])),
+  }
+}
+
+// The stretch of the film's song a singing take carries. With `onMove`, the
+// window's two seams are inputs (track seconds): moving one resizes this take
+// AND its neighbour, and both are re-stamped with what they now sing.
+export function SoundtrackSlice({ window: win, songUrl, onMove = null, edges = null }) {
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [busy, setBusy] = useState(false)
+  const w0 = win ? Number(win[0]).toFixed(2) : ''
+  const w1 = win ? Number(win[1]).toFixed(2) : ''
+  useEffect(() => { setStart(w0); setEnd(w1) }, [w0, w1])
   if (!win || !songUrl) return null
+
+  const move = async (edge, value) => {
+    const secs = Number(value)
+    const current = Number(edge === 'start' ? w0 : w1)
+    if (!Number.isFinite(secs) || Math.abs(secs - current) < 0.005) {
+      if (edge === 'start') setStart(w0); else setEnd(w1)
+      return
+    }
+    setBusy(true)
+    try { await onMove(edge, secs) } finally { setBusy(false) }
+  }
+  const seam = (edge, value, setValue) => {
+    const can = !!(edges && edges[edge]) && !busy
+    return (
+      <input type="number" className="input" step="0.1" min="0" value={value}
+        disabled={!can} style={{ width: 84, padding: '2px 6px', height: 26 }}
+        title={can ? `Move the ${edge} of this take's stretch of the song`
+          : `The song's own ${edge} — pinned`}
+        onChange={(e) => setValue(e.target.value)} onBlur={() => move(edge, value)} />
+    )
+  }
   return (
     <div className="stack gap-6">
-      <span className="label-sm">
-        Soundtrack · {Number(win[0]).toFixed(1)}s–{Number(win[1]).toFixed(1)}s of the film's song
+      <span className="label-sm row gap-6 center" style={{ flexWrap: 'wrap' }}>
+        Soundtrack ·{' '}
+        {onMove
+          ? <>{seam('start', start, setStart)}–{seam('end', end, setEnd)} s of the film's song</>
+          : <>{Number(win[0]).toFixed(1)}s–{Number(win[1]).toFixed(1)}s of the film's song</>}
       </span>
       <audio controls preload="none" style={{ width: '100%', height: 32 }}
         src={`${songUrl}#t=${win[0]},${win[1]}`} />
@@ -118,6 +166,9 @@ export function SoundtrackSlice({ window: win, songUrl }) {
         Pinned into this take — the performance is generated to match this exact
         slice. The take above carries it too, so it can be watched against its
         own music, and it plays under the scene in the final film.
+        {onMove && <> Moving a seam hands that stretch to the neighbouring take:
+        both are resized and re-stamped with the lines they now carry, and both
+        need shooting again.</>}
       </span>
     </div>
   )
