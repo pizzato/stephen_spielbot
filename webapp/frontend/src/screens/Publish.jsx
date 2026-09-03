@@ -77,6 +77,7 @@ export default function Publish({ initialWorkDir, go }) {
   const [finalUrl, setFinalUrl] = useState('')
   const [aspect, setAspect] = useState('16/9')
   const [includeThumbnail, setIncludeThumbnail] = useState(true)
+  const [isShort, setIsShort] = useState(false)
   const [bestTimes, setBestTimes] = useState(null)   // posting-time guidance (issue #50)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -161,6 +162,7 @@ export default function Publish({ initialWorkDir, go }) {
       setDest({ youtube: true, x: !!p.x_account })
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
+      setIsShort(!!p.is_short)
       setBestTimes(null)
       // A portrait film is a Short — the timing model weighs that differently.
       const isShort = !!(p.vid_width && p.vid_height && Number(p.vid_height) > Number(p.vid_width))
@@ -567,6 +569,12 @@ export default function Publish({ initialWorkDir, go }) {
           <div className="mt-16">
             <Check checked={includeThumbnail} onChange={setIncludeThumbnail}
               label="Upload thumbnail to YouTube" />
+            {isShort && (
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
+                YouTube will treat this as a Short (square or portrait, under 3 minutes). Shorts pick
+                their own frame and ignore uploaded thumbnails, so the cover is not sent by default.
+              </div>
+            )}
           </div>
           <GuidedRegenButton block variant="ghost" icon="rotate-right"
             label="Regenerate cover"
