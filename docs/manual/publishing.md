@@ -31,7 +31,11 @@ The manual upload form.
 - **Description** — **Generate** writes one from the script
 - **Category** and **Privacy** — privacy defaults to `private`; raise it deliberately
 - **Thumbnail** and **cover phrase** — the phrase is the short text painted on the cover
-  and burned into the opening frames
+  and burned into the opening frames. **Upload thumbnail to YouTube** is on for long-form
+  films and off for Shorts — square or portrait films no longer than 3 minutes (the same
+  limit the [Analytics](analytics.md) Shorts split uses). Shorts ignore custom thumbnails,
+  and a thumbnail pushed at a square Short has been seen to break its playback, so the
+  automatic publisher skips it too; tick the box to send one anyway
 - **Opening cover** — the burn hold for this film, same control as
   [Edit film](edit-film.md#opening-cover)
 

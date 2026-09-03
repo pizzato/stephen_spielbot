@@ -11419,6 +11419,7 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         pass
     vid_w, vid_h = _film_dimensions(wd)
     orientation = "portrait" if vid_h > vid_w else ("square" if vid_h == vid_w else "landscape")
+    is_short = _is_shorts_film(wd)
     # Channel/account this film publishes to, resolved from its style (issue #22/#107).
     channel = _channel_for_work_dir(wd)
     x_account = _x_account_for_work_dir(wd)
@@ -11460,8 +11461,10 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "orientation": orientation,
         "vid_width": vid_w,
         "vid_height": vid_h,
-        # Shorts (portrait) don't take custom thumbnails — default the upload off.
-        "include_thumbnail_default": orientation != "portrait",
+        # Shorts (square/portrait, ≤3 min) don't take custom thumbnails — and a
+        # thumbnail on a square Short has broken playback — default the upload off.
+        "is_short": is_short,
+        "include_thumbnail_default": not is_short,
         # Version picker: which final cuts exist and what language each speaks.
         "video_history": video_history,
         "original_lang": original_lang,
@@ -14587,6 +14590,31 @@ def _is_portrait_film(work_dir: Path) -> bool:
     return h > w
 
 
+def _is_shorts_film(work_dir: Path) -> bool:
+    """True when YouTube will file the final as a Short: square or portrait
+    picture AND no longer than the Shorts limit (``engagement_short_max_seconds``,
+    3 minutes by default).
+
+    Shorts ignore custom thumbnails, and pushing one at a square Short has been
+    seen to break its playback, so the thumbnail-upload default keys off this
+    rather than portrait alone. When the final can't be probed the length is
+    unknown, so orientation alone decides (portrait = Short, the old rule).
+    """
+    w, h = _film_dimensions(work_dir)
+    if h < w:
+        return False
+    final = gapp._final_path_for_work_dir(work_dir)
+    try:
+        from pipeline.assembler import _get_duration
+        seconds = _get_duration(final)
+    except Exception:
+        seconds = 0.0
+    if seconds <= 0:
+        return h > w
+    limit = int(gapp.load_config().get("engagement_short_max_seconds", 180))
+    return seconds <= limit
+
+
 def _final_upscale_info(wd: Path) -> dict:
     """Whether the published final is larger than the render tier, and what to
     call that size.
@@ -16580,8 +16608,8 @@ def _claim_and_post_youtube(p: Path, jc: dict, cfg: dict) -> str | None:
             description=description, category=_category_for_channel(cfg, channel),
             privacy=cfg.get("youtube_post_privacy", "private"),
             channel=channel, auto=True,
-            # Shorts (portrait) don't take custom thumbnails — skip by default.
-            include_thumbnail=not _is_portrait_film(p)))
+            # Shorts (square/portrait, ≤3 min) don't take custom thumbnails — skip.
+            include_thumbnail=not _is_shorts_film(p)))
         return res.get("task_id")
     except Exception:
         # Upload failed to start — release the claim so a later tick can retry.
