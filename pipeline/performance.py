@@ -934,6 +934,19 @@ def renders_acted(scene, cfg: dict | None = None) -> bool:
     return is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
 
 
+def mixed_film(scenes, cfg: dict | None = None) -> bool:
+    """A film holding BOTH acted takes and narrated scenes.
+
+    Such a film shoots its narrated scenes as silent takes on the acted engine
+    too (resume_generation.render_narrated_take), so every scene comes off one
+    model; the video engine only animates narration-only films. The renderer
+    and the film editor's re-shoot both ask this, off the same cfg flags as
+    renders_acted, so a scene is never planned one way and re-shot the other.
+    """
+    acted = [renders_acted(s, cfg) for s in scenes]
+    return any(acted) and not all(acted)
+
+
 def opening_frame_prompt(meta: dict) -> str:
     """Fallback FIRST-FRAME prompt for an acted scene without an image prompt.
 
