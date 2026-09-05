@@ -47,7 +47,8 @@ from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
     _verify_upscale_not_blank,
     concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
-    extract_frame_at, extract_last_frame, ensure_video_resolution, mix_background_music,
+    extract_audio, extract_frame_at, extract_last_frame, ensure_video_resolution,
+    mix_background_music,
     parse_upscale_mode, temporal_ai_upscale_video, trim_video, upscale_video,
     upscale_target_dims,
     write_silence_wav as _write_silence_wav,
@@ -642,22 +643,62 @@ def continue_performance_scene(scene, work_dir: Path, cfg: dict, *, comfy_url: s
     return out
 
 
-def unify_mixed_engine(video_engine: dict, cfg: dict, *, has_acted: bool,
-                       has_classic: bool) -> dict:
-    """The video engine a MIXED film's narrated scenes render on.
+def render_narrated_take(scene: Scene, work_dir: Path, cfg: dict, narration_dur: float, *,
+                         comfy_url: str, vid_width: int, vid_height: int,
+                         style_name: str = "", scene_first_frame: Path | None = None,
+                         image_engine: dict | None = None, on_first_frame=None,
+                         handoff_frame: Path | None = None) -> tuple[Path, Path | None]:
+    """A MIXED film's narrated scene, shot as a silent take on the ACTED engine.
 
-    H3 acted takes cut against LTX narrated clips read as two different
-    productions — colour, grain and motion all shift shot to shot. When a film
-    mixes the two kinds, the narrated scenes render on H3 I2V so the whole
-    film is one look. A style already on a MiniMax engine keeps its own pick
-    (e.g. turbo); an unmixed film is untouched.
+    One production, one model: a film that holds acted takes shoots its narrated
+    scenes on the same Ref2VA engine rather than cutting them in from a
+    different video model. The take is sized to the narration (plus the clip
+    buffer), opens on the scene's own first frame — painted first when none
+    exists — and anyone the prompts name from the cast rides along as a
+    portrait, so faces match the acted scenes. Its native audio becomes the
+    scene's ambience and the narration is laid over it by the mux, exactly as
+    over an I2V clip; a take held to the acted-scene cap under a longer narration
+    freezes its closing frame for the remainder, as any short clip does.
+
+    Shared by the renderer and the film editor's re-shoot: returns (clip,
+    ambient) like generate_scene_video, so the caller's mux is unchanged.
     """
-    if has_acted and has_classic and video_engine.get("family") != "minimax":
-        unified = _engines.resolve_video(cfg, "minimax-h3")
-        logger.info("Mixed film: narrated scenes render on %s to match the acted takes",
-                    unified.get("label"))
-        return unified
-    return video_engine
+    from app import _characters_for_scene
+    from pipeline.scene_video import CLIP_BUFFER_SECS, ensure_first_frame
+
+    if handoff_frame is None:
+        ensure_first_frame(scene, work_dir, vid_width, vid_height, comfy_url=comfy_url,
+                           scene_first_frame=scene_first_frame, image_engine=image_engine,
+                           on_first_frame=on_first_frame)
+    text = " ".join(x for x in (scene.image_prompt, scene.video_prompt, scene.narration) if x)
+    cast = [c["name"] for c in _characters_for_scene(text, cfg, style_name, work_dir)
+            if c.get("name")]
+    meta = _performance.acted_meta(
+        {"metadata": {"mode": "silent", "cast": cast,
+                      "setting": scene.video_prompt or scene.image_prompt,
+                      "seconds": max(narration_dur, 0.5) + CLIP_BUFFER_SECS}},
+        chained=chain_scenes_flag(cfg, style_name))
+    # A continued shot opens on the previous scene's closing frame instead of
+    # its own still — the same reference render_performance_scene hands a
+    # continuing acted take.
+    extra = ([{"name": "the closing frame of the previous scene — this take "
+                       "picks up from exactly this moment",
+               "kind": "frame", "path": str(handoff_frame)}]
+             if handoff_frame is not None else None)
+    clip = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
+    logger.info("Scene %d: narrated take on the acted engine — %.1fs, cast %s → %s",
+                scene.id, float(meta["seconds"]), cast or "none", clip.name)
+    _render_performance_clip(
+        scene, meta, work_dir, cfg, clip, comfy_url=comfy_url,
+        vid_width=vid_width, vid_height=vid_height, style_name=style_name,
+        extra_pictures=extra, drop_kinds=(("frame",) if handoff_frame is not None else ()))
+    ambient = work_dir / f"scene_{scene.id:02d}_ambient.wav"
+    try:
+        extract_audio(clip, ambient, duration=_get_duration(clip))
+    except Exception:
+        logger.warning("Could not extract ambient audio from %s", clip.name)
+        return clip, None
+    return clip, ambient
 
 
 def render_acted_scene(scene, work_dir: Path, cfg: dict, *, store, durable_job_id: str,
@@ -1659,11 +1700,13 @@ def main(work_dir: Path) -> None:
     # handoff frame could be made): assembly keeps their fades. set.add is
     # atomic, so the scene threads write it without a lock.
     dropped_continuations: set[int] = set()
-    # One production, one look: a mixed film's narrated scenes join the acted
-    # takes on H3 rather than cutting between two different video models.
-    video_engine = unify_mixed_engine(video_engine, cfg,
-                                      has_acted=bool(dialogue_scenes),
-                                      has_classic=bool(classic_scenes))
+    # One production, one model: a mixed film shoots its narrated scenes as
+    # silent takes on the acted engine (render_narrated_take) rather than
+    # cutting them in from the video engine, which only animates unmixed films.
+    acted_narration = _performance.mixed_film(scenes, plan_cfg)
+    if acted_narration:
+        logger.info("Mixed film: narrated scenes render as takes on %s to match the acted scenes",
+                    _engines.resolve_reference(plan_cfg, plan_cfg.get("reference_engine")).get("label"))
 
     # Progress bands. Acted scenes dominate a dialogue film's wall-clock, so the
     # dialogue phase gets a share of the bar proportional to its weight;
@@ -2073,28 +2116,40 @@ def main(work_dir: Path) -> None:
                         lease_seconds=900,
                         message=f"first frame on {url}",
                     )
+                clip_engine = (_engines.resolve_reference(plan_cfg, plan_cfg.get("reference_engine"))
+                               if acted_narration else video_engine)
                 with TaskRun(
                     store,
                     video_task,
                     worker_id_value=comfy_worker,
                     # Slow engines (MiniMax H3) declare a longer lease so the
                     # controller doesn't re-lease the scene mid-render.
-                    lease_seconds=int(video_engine.get("lease_seconds") or 3600),
+                    lease_seconds=int(clip_engine.get("lease_seconds") or 3600),
                     start_message=f"video on {url}",
                 ) as run:
-                    sf, sa = _generate_scene_video(
-                        scene, work_dir,
-                        narration_durs[scene.id],
-                        vid_width, vid_height, max_clip_secs,
-                        lora_strength, first_pass_cfg, first_pass_steps,
-                        second_pass_cfg, second_pass_steps,
-                        comfy_url=url,
-                        scene_first_frame=scene_first_frame,
-                        image_engine=image_engine,
-                        on_first_frame=_finish_image,
-                        video_engine=video_engine,
-                        chained=chain_scenes,
-                    )
+                    if acted_narration:
+                        sf, sa = render_narrated_take(
+                            scene, work_dir, plan_cfg, narration_durs[scene.id],
+                            comfy_url=url, vid_width=vid_width, vid_height=vid_height,
+                            style_name=plan_cfg.get("style_name") or "",
+                            scene_first_frame=scene_first_frame,
+                            image_engine=image_engine, on_first_frame=_finish_image,
+                            handoff_frame=(handoff_frame
+                                           if scene_first_frame is handoff_frame else None))
+                    else:
+                        sf, sa = _generate_scene_video(
+                            scene, work_dir,
+                            narration_durs[scene.id],
+                            vid_width, vid_height, max_clip_secs,
+                            lora_strength, first_pass_cfg, first_pass_steps,
+                            second_pass_cfg, second_pass_steps,
+                            comfy_url=url,
+                            scene_first_frame=scene_first_frame,
+                            image_engine=image_engine,
+                            on_first_frame=_finish_image,
+                            video_engine=video_engine,
+                            chained=chain_scenes,
+                        )
                     store.record_artifact(
                         durable_job_id,
                         video_task,

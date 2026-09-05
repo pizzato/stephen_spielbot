@@ -16,6 +16,40 @@ logger = logging.getLogger("video_gen")
 CLIP_BUFFER_SECS = 1.0
 
 
+def ensure_first_frame(
+    scene: Scene,
+    work_dir: Path,
+    vid_width: int,
+    vid_height: int,
+    *,
+    comfy_url: str,
+    scene_first_frame: Path | None = None,
+    image_engine: dict | None = None,
+    on_first_frame: Callable[[Path], None] | None = None,
+) -> Path:
+    """The still a narrated scene opens on: *scene_first_frame* when it exists,
+    else one painted inline from the image prompt (``on_first_frame`` fires the
+    moment it lands, so a caller can close its image task before the much
+    longer video step)."""
+    if scene_first_frame is not None and scene_first_frame.exists():
+        return scene_first_frame
+    engine = image_engine or engines.resolve({}, None)
+    first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
+    logger.info("  [%s] scene %d: generating first frame inline (%s)",
+                comfy_url, scene.id, engine.get("key"))
+    generate_with_engine(
+        engine,
+        scene.image_prompt,
+        first_frame_path,
+        width=vid_width,
+        height=vid_height,
+        comfy_url=comfy_url,
+    )
+    if on_first_frame is not None:
+        on_first_frame(first_frame_path)
+    return first_frame_path
+
+
 def generate_scene_video(
     scene: Scene,
     work_dir: Path,
@@ -48,22 +82,10 @@ def generate_scene_video(
     video.
     """
 
-    if scene_first_frame is None or not scene_first_frame.exists():
-        engine = image_engine or engines.resolve({}, None)
-        first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
-        logger.info("  [%s] scene %d: generating first frame inline (%s)",
-                    comfy_url, scene.id, engine.get("key"))
-        generate_with_engine(
-            engine,
-            scene.image_prompt,
-            first_frame_path,
-            width=vid_width,
-            height=vid_height,
-            comfy_url=comfy_url,
-        )
-        scene_first_frame = first_frame_path
-        if on_first_frame is not None:
-            on_first_frame(scene_first_frame)
+    scene_first_frame = ensure_first_frame(
+        scene, work_dir, vid_width, vid_height, comfy_url=comfy_url,
+        scene_first_frame=scene_first_frame, image_engine=image_engine,
+        on_first_frame=on_first_frame)
 
     request_dur = max(narration_dur, 0.5) + CLIP_BUFFER_SECS
     raw = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
