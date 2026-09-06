@@ -296,13 +296,13 @@ story_redraft_outline:
       - "scenes": integer — how many video scenes this chapter will become; the scene counts MUST sum to exactly ${n_scenes}
 
     Rules:
-    - Retell, never reinvent: every chapter summary must be grounded in the existing story. When the new length is LONGER, plan where to deepen — more detail, texture, and build-up around the story's existing beats. When SHORTER, keep only the strongest beats and cut the rest.
+    - Retell, never reinvent: every chapter summary must be grounded in the existing story. When the new length is LONGER, plan where to deepen — more detail, texture, and build-up around the story's existing beats. When SHORTER, keep only the strongest beats and cut the rest. The one exception: when the user asks for changes, make exactly those changes and keep everything else.
     - Keep the retention arc: chapter 1 opens with the hook, middle chapters build without repeating, the final chapter lands the payoff and ends the story with a clear, simple conclusion — its summary must state in plain words how the story wraps up.
     - The narrator is NOT part of the story: never reference "the narrator" in any summary.
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
-    ${title_line}Re-plan this story as exactly ${n_chapters} chapters that together will become ${n_scenes} video scenes (it was previously planned for ${old_n_scenes} scenes).${avoid_note}${character_note}
+    ${title_line}Re-plan this story as exactly ${n_chapters} chapters that together will become ${n_scenes} video scenes (it was previously planned for ${old_n_scenes} scenes).${avoid_note}${character_note}${dialogue_note}${instruction_note}
 
     EXISTING STORY:
     ${story_str}
@@ -319,7 +319,7 @@ story_redraft_chapter:
 
     Rules:
     - Approximately ${target_words} words — this is a HARD budget: never run more than a few words over (slightly under is fine). The chapter is divided into fixed-length scenes afterwards, so extra words stretch the video past its commissioned length.
-    - Retell the SOURCE STORY faithfully: same facts, same arc, same voice. When the target is longer than the source material, elaborate with vivid detail and texture the source implies — never invent new events or facts. When shorter, condense to the strongest beats.
+    - Retell the SOURCE STORY faithfully: same facts, same arc, same voice. When the target is longer than the source material, elaborate with vivid detail and texture the source implies — never invent new events or facts. When shorter, condense to the strongest beats. The one exception: when the user asks for changes, make exactly those changes and keep everything else.
     - Every sentence must be speakable aloud at a calm documentary pace — clear, engaging, educational.
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
     - Stay strictly within this chapter's summary; later chapters cover the rest of the outline.
@@ -332,7 +332,7 @@ story_redraft_chapter:
     ${outline_str}
 
     Chapter to write NOW — "${chapter_title}": ${chapter_summary}
-    ${prev_tail}${avoid_note}${character_note}
+    ${prev_tail}${avoid_note}${character_note}${dialogue_note}${instruction_note}
     SOURCE STORY (retell this — same story, new pacing):
     ${story_str}
 

@@ -266,6 +266,43 @@ class SingerCastingTests(unittest.TestCase):
         self.assertIsNone(app.pick_song_singer(
             {"styles": [{"name": "pop"}], "characters": []}, "pop", "hi"))
 
+    def test_descriptor_borrows_the_picked_singing_voices_quality(self):
+        import app
+        cfg = {"voices": [{"name": "June", "path": "/x", "gender": "female",
+                           "tone": "warm", "accent": "Irish"}]}
+        char = {"name": "Ada", "gender": "female", "age": "young",
+                "voice": "June", "description": "a tall singer"}
+        picked = {"name": "Rob", "gender": "male", "tone": "gravelly", "accent": "Scottish"}
+        note = app.singer_descriptor(char, cfg, voice=picked)
+        self.assertIn("gravelly voice", note)
+        self.assertIn("Scottish accent", note)
+        self.assertNotIn("Irish", note)
+
+    def test_vocalist_gender_reads_whole_words_only(self):
+        import app
+        self.assertEqual(app.vocalist_gender("adult male vocalist, Australian"), "male")
+        self.assertEqual(app.vocalist_gender("young female vocalist, she sings softly"), "female")
+        # "female" must not count as "male"; a line naming neither says nothing
+        self.assertEqual(app.vocalist_gender("female vocalist"), "female")
+        self.assertEqual(app.vocalist_gender("warm smoky voice, Irish accent"), "")
+        self.assertEqual(app.vocalist_gender(""), "")
+        # naming both sexes is no answer
+        self.assertEqual(app.vocalist_gender("a man and a woman duet"), "")
+
+    def test_pick_narrows_to_the_singing_voices_sex(self):
+        import app
+        cfg = {"styles": [{"name": "pop"}], "default_style": "pop",
+               "characters": [
+                   {"name": "Ada", "description": "a singer", "gender": "female", "enabled": True},
+                   {"name": "Ben", "description": "a drummer", "gender": "male", "enabled": True},
+               ]}
+        for _ in range(5):
+            self.assertEqual(app.pick_song_singer(cfg, "pop", "hello", gender="male")["name"], "Ben")
+            self.assertEqual(app.pick_song_singer(cfg, "pop", "hello", gender="female")["name"], "Ada")
+        # nobody of that sex in the catalogue → no character (the voice alone sings)
+        only_ada = {**cfg, "characters": cfg["characters"][:1]}
+        self.assertIsNone(app.pick_song_singer(only_ada, "pop", "hello", gender="male"))
+
     def test_write_song_pins_the_cast_singer(self):
         seen = {}
 

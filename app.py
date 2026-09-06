@@ -4136,16 +4136,34 @@ def voice_descriptor(voice: dict | None) -> str:
     return "" if note == "vocalist" else note
 
 
-def singer_descriptor(char: dict | None, cfg: dict | None = None) -> str:
+_VOCALIST_FEMALE_WORDS = ("female", "woman", "girl", "lady", "she", "her", "soprano",
+                          "alto", "mezzo", "feminine")
+_VOCALIST_MALE_WORDS = ("male", "man", "boy", "gentleman", "he", "his", "him", "tenor",
+                       "baritone", "bass", "masculine")
+
+
+def vocalist_gender(text: str | None) -> str:
+    """The sex a free-text vocalist line states — "male", "female", or "" when
+    it says neither (or both). Whole words only: "female" must not count as
+    "male", nor "she" as "he" — the substring cue lists _guess_gender uses on
+    a character's prose description collide on exactly those."""
+    words = set(re.findall(r"[a-z]+", (text or "").lower()))
+    f = bool(words & set(_VOCALIST_FEMALE_WORDS))
+    m = bool(words & set(_VOCALIST_MALE_WORDS))
+    return "female" if f and not m else ("male" if m and not f else "")
+
+
+def singer_descriptor(char: dict | None, cfg: dict | None = None,
+                      voice: dict | None = None) -> str:
     """A catalogue character as a vocalist description — "young female
     vocalist, Brazilian, warm smoky voice, Irish accent".
 
     The identity half (sex, age, background) comes from the CHARACTER — its
     gender/age casting hints (else a cue-word guess from the description) and
     its background field — so the sung voice matches the person the film shows
-    singing. The voice-quality half (tone/accent) is borrowed from the
-    character's library voice when one is set. Empty when nothing identifying
-    is known."""
+    singing. The voice-quality half (tone/accent) is borrowed from *voice* —
+    the library voice the song is sung as — else from the character's own
+    library voice when one is set. Empty when nothing identifying is known."""
     if not char:
         return ""
     gender = _guess_gender(char)
@@ -4155,8 +4173,7 @@ def singer_descriptor(char: dict | None, cfg: dict | None = None) -> str:
     bits = [" ".join(x for x in (age, gender, "vocalist") if x).strip()]
     if (char.get("background") or "").strip():
         bits.append(char["background"].strip())
-    voice = None
-    if cfg is not None and (char.get("voice") or "").strip():
+    if voice is None and cfg is not None and (char.get("voice") or "").strip():
         voice = next((v for v in (cfg.get("voices") or [])
                       if isinstance(v, dict) and v.get("name") == char["voice"].strip()), None)
     if voice:
@@ -4168,18 +4185,30 @@ def singer_descriptor(char: dict | None, cfg: dict | None = None) -> str:
     return "" if note == "vocalist" else note
 
 
-def pick_song_singer(cfg: dict, style_name: str, *texts: str | None) -> dict | None:
+def song_singer_candidates(cfg: dict, style_name: str) -> list[dict]:
+    """The catalogue characters a song film may cast as its lead singer: the
+    style's enabled, named, described ones — what pick_song_singer draws from
+    and what the Song tab's Lead singer picker lists."""
+    return [c for c in _style_characters(cfg, style_name)
+            if c.get("enabled", True) and (c.get("name") or "").strip()
+            and (c.get("description") or "").strip()]
+
+
+def pick_song_singer(cfg: dict, style_name: str, *texts: str | None,
+                     gender: str = "") -> dict | None:
     """The catalogue character who fronts a song film — its LEAD SINGER.
 
     A character the brief NAMES (topic, title, style instructions) wins, in
     catalogue order — asking for "a song about Ada" casts Ada. Otherwise one is
     drawn at random from the style's enabled, described characters, so a
     channel's videos rotate through its cast rather than always fronting the
-    same face. None when the style has no usable catalogue character — the
-    song then defines its own vocalist."""
-    usable = [c for c in _style_characters(cfg, style_name)
-              if c.get("enabled", True) and (c.get("name") or "").strip()
-              and (c.get("description") or "").strip()]
+    same face. *gender* ("male"/"female" — the singing voice's sex, when one
+    was picked) narrows the draw to characters of that sex, so the person on
+    camera matches the voice on the track. None when no usable catalogue
+    character fits — the song then defines its own vocalist."""
+    usable = song_singer_candidates(cfg, style_name)
+    if gender in ("male", "female"):
+        usable = [c for c in usable if _guess_gender(c) in (gender, "")]
     if not usable:
         return None
     blob = "\n".join(t for t in texts if (t or "").strip())
