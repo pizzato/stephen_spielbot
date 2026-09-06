@@ -1225,26 +1225,28 @@ class StartGenerationActedTests(unittest.TestCase):
         self.assertIn("a frame", by_id[2]["image_prompt"])        # narrated: as before
 
 
-class MixedEngineTests(unittest.TestCase):
-    """A mixed film's narrated scenes render on H3, matching the acted takes."""
+class OneModelMixedFilmTests(unittest.TestCase):
+    """A mixed film shoots its narrated scenes on the ACTED engine (as silent
+    takes) — the old rule that moved them onto H3 I2V is gone."""
 
-    def _unify(self, engine_key, **kw):
+    def test_the_engine_unify_rule_is_gone(self):
         import resume_generation as rg
-        from pipeline import engines
-        eng = engines.resolve_video({}, engine_key)
-        return rg.unify_mixed_engine(eng, {}, **kw)
+        self.assertFalse(hasattr(rg, "unify_mixed_engine"))
+        self.assertTrue(callable(rg.render_narrated_take))
 
-    def test_mixed_film_moves_narrated_scenes_onto_h3(self):
-        out = self._unify("ltx25", has_acted=True, has_classic=True)
-        self.assertEqual(out["key"], "minimax-h3")
-
-    def test_a_style_already_on_a_minimax_engine_keeps_its_pick(self):
-        out = self._unify("minimax-h3-turbo", has_acted=True, has_classic=True)
-        self.assertEqual(out["key"], "minimax-h3-turbo")
-
-    def test_unmixed_films_are_untouched(self):
-        self.assertEqual(self._unify("ltx25", has_acted=False, has_classic=True)["key"], "ltx25")
-        self.assertEqual(self._unify("ltx25", has_acted=True, has_classic=False)["key"], "ltx25")
+    def test_mixed_film_needs_both_acted_and_narrated_scenes(self):
+        from pipeline import performance as perf
+        acted = {"metadata": {"mode": "dialogue",
+                              "lines": [{"speaker": "Ana", "text": "Hi."}]}}
+        narrated = {"metadata": {"mode": "narration"}}
+        silent = {"metadata": {"mode": "silent"}}
+        self.assertTrue(perf.mixed_film([acted, narrated], {}))
+        self.assertFalse(perf.mixed_film([narrated, narrated], {}))
+        self.assertFalse(perf.mixed_film([acted, acted], {}))
+        self.assertFalse(perf.mixed_film([], {}))
+        # A silent scene counts as acted only where the style performs it.
+        self.assertTrue(perf.mixed_film([silent, narrated], {"h3_silent_scenes": True}))
+        self.assertFalse(perf.mixed_film([silent, narrated], {"h3_silent_scenes": False}))
 
 
 class ActedSceneRegenTests(ActedSceneEditingTests):

@@ -461,10 +461,15 @@ everything, keeping each clip's own audio.
 (Settings → *Narrator & audio* → **Music**) or per film (Create → **Music**), and the
 final cut is the concatenation itself. An all-acted film never plans a score at all.
 
-**One production, one look.** A mixed film's narrated scenes render on **H3 I2V** rather
-than the style's usual video engine — H3 acted takes cut against LTX clips read as two
-different productions, with colour and motion shifting shot to shot. A style already on a
-MiniMax engine keeps its own pick; unmixed films are untouched.
+**One production, one model.** A mixed film shoots its **narrated scenes as silent takes on
+the acted-scene engine** too, rather than cutting them in from a different video model. Each
+take is sized to its narration, opens on the scene's own first frame (painted first when
+there is none), and anyone the prompts name from the cast rides along as a portrait so faces
+match the acted scenes; the take's own sound becomes the scene's ambience and the narration
+is laid over it exactly as over an I2V clip. A take is held to the acted-scene cap (12 s, ~23 s
+with chained scenes) — under a longer narration its closing frame freezes for the remainder.
+The *Narrated & silent scenes* engine only animates narration-only films. The film editor
+re-shoots such a scene the same way.
 
 ### Continued shots
 
@@ -516,7 +521,8 @@ film can hold two kinds of scene:
 
 - **Narrated & silent scenes** — the I2V engine (LTX 2.5 or MiniMax H3) that animates each
   scene from its first-frame still. (Silent scenes leave for the Ref2VA picker below when
-  the style acts them — see [Silent scenes, performed](#silent-scenes-performed).)
+  the style acts them — see [Silent scenes, performed](#silent-scenes-performed) — and so
+  do the narrated scenes of a mixed film, see *One production, one model* above.)
 - **Acted (dialogue) scenes** — the Ref2VA engine that performs each acted scene from
   portraits and voices. Always a MiniMax H3 variant:
 

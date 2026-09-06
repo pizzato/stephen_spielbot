@@ -15460,26 +15460,45 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             # the value stamped at render time so a re-render stays consistent.
             negative_prompt=(jc.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT,
         )
+        # A mixed film re-shoots a narrated scene the way it was rendered: as a
+        # silent take on the acted engine (resume_generation.render_narrated_take),
+        # off the same predicate the renderer used — never the video engine's I2V.
+        store = DurableStore.default()
+        try:
+            all_rows = store.scene_rows(job_id_from_work_dir(wd))
+        finally:
+            store.close()
+        mixed = performance_mode.mixed_film(
+            [{"metadata": r.get("metadata") or {}} for r in all_rows], _acted_silent_cfg(jc))
         url = _acquire_render_worker(pool, task_id)
         try:
             # acquire() can block a long time behind a busy GPU — re-check
             # before submitting work the film may no longer exist to receive.
             _film_checkpoint(task_id)
-            scene_video, _ = gen_scene_video(
-                scene, wd, nar_dur, vid_w, vid_h,
-                float(jc.get("max_clip_secs", 12.0)),
-                float(jc.get("lora_strength", cfg.get("lora_strength", 0.5))),
-                float(jc.get("first_pass_cfg", cfg.get("first_pass_cfg", 1.0))),
-                int(jc.get("first_pass_steps", cfg.get("first_pass_steps", 8))),
-                float(jc.get("second_pass_cfg", cfg.get("second_pass_cfg", 3.0))),
-                int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
-                url,
-                scene_first_frame if scene_first_frame.exists() else None,
-                gapp.engines.resolve(cfg, jc.get("image_engine")
-                                     or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine")),
-                video_engine=_resolve_video_for_job(cfg, jc),
-                chained=_chain_scenes_for_job(cfg, jc),
-            )
+            if mixed:
+                from resume_generation import render_narrated_take
+                scene_cfg = {**cfg, **jc, "style_name": jc.get("style_name") or ""}
+                scene_video, _ = render_narrated_take(
+                    scene, wd, scene_cfg, nar_dur, comfy_url=url,
+                    vid_width=vid_w, vid_height=vid_h,
+                    style_name=scene_cfg["style_name"],
+                    scene_first_frame=scene_first_frame if scene_first_frame.exists() else None)
+            else:
+                scene_video, _ = gen_scene_video(
+                    scene, wd, nar_dur, vid_w, vid_h,
+                    float(jc.get("max_clip_secs", 12.0)),
+                    float(jc.get("lora_strength", cfg.get("lora_strength", 0.5))),
+                    float(jc.get("first_pass_cfg", cfg.get("first_pass_cfg", 1.0))),
+                    int(jc.get("first_pass_steps", cfg.get("first_pass_steps", 8))),
+                    float(jc.get("second_pass_cfg", cfg.get("second_pass_cfg", 3.0))),
+                    int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
+                    url,
+                    scene_first_frame if scene_first_frame.exists() else None,
+                    gapp.engines.resolve(cfg, jc.get("image_engine")
+                                         or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine")),
+                    video_engine=_resolve_video_for_job(cfg, jc),
+                    chained=_chain_scenes_for_job(cfg, jc),
+                )
         finally:
             pool.release(url)
 
