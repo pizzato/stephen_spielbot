@@ -251,11 +251,48 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(brief["n_scenes"], 10)
         self.assertEqual(res["n_scenes"], 10)
 
+    def test_redraft_without_a_length_keeps_the_drafts_own_plan(self):
+        """A guided redraft ("tell it how", no new length) retells the story at
+        the length it has — a song film's plan is the song's real length, which
+        the narrator-cadence arithmetic would never reproduce."""
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        story = json.loads((wd / "story.json").read_text())
+        story["scene_plan"] = {"n_scenes": 4, "minutes": 0.67, "scene_secs_target": 10.0}
+        (wd / "story.json").write_text(json.dumps(story))
+        body = backend.StoryRedraftBody(instruction="the singer is a man")
+        with mock.patch.object(backend.story_mode, "redraft_story",
+                               return_value=_fake_story(4)) as rd:
+            backend._do_story_redraft(draft["job_id"], body)
+        story_arg, n_arg = rd.call_args.args
+        self.assertEqual(n_arg, 4)
+        self.assertEqual(rd.call_args.kwargs["scene_plan"]["scene_secs_target"], 10.0)
+        self.assertEqual(rd.call_args.kwargs["instruction"], "the singer is a man")
+
+    def test_redraft_of_a_song_film_carries_the_lyrics_and_the_singer(self):
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        brief = json.loads((wd / "create_brief.json").read_text())
+        brief["format"] = "song"
+        (wd / "create_brief.json").write_text(json.dumps(brief))
+        (wd / "song.json").write_text(json.dumps({
+            "lyrics": "[Verse]\nRain on the tracks", "caption": "c",
+            "vocalist": "adult male vocalist, Australian", "singer": ""}))
+        with mock.patch.object(backend.story_mode, "redraft_story",
+                               return_value=_fake_story(4)) as rd:
+            backend._do_story_redraft(draft["job_id"],
+                                      backend.StoryRedraftBody(instruction="set it at night"))
+        note = rd.call_args.kwargs["dialogue_note"]
+        self.assertIn("Rain on the tracks", note)
+        self.assertIn("adult male vocalist, Australian", note)
+        self.assertIn("invent this one performer", note)
+
     def test_redraft_rejects_bad_count_and_missing_draft(self):
         draft = self._draft(4)
+        # (no length and no count is a retell at the draft's own length, above)
         with self.assertRaises(HTTPException) as ctx:
             backend._do_story_redraft(draft["job_id"],
-                                      backend.StoryRedraftBody(n_scenes=0))
+                                      backend.StoryRedraftBody(n_scenes=-1))
         self.assertEqual(ctx.exception.status_code, 400)
         with self.assertRaises(HTTPException) as ctx:
             backend._do_story_redraft(draft["job_id"],
@@ -269,6 +306,71 @@ class StoryEndpointTests(TempConfigCase):
         with self.assertRaises(HTTPException) as ctx:
             backend._do_story_redraft(job_id, backend.StoryRedraftBody(n_scenes=10))
         self.assertEqual(ctx.exception.status_code, 404)
+
+    # ── the song's lead singer follows the voice it is sung by ───────────────
+
+    def _singing_cfg(self):
+        self.write_config({
+            "styles": [_style("Pop")], "default_style": "Pop",
+            "characters": [
+                {"name": "Ada", "description": "a tall singer", "gender": "female",
+                 "age": "young", "enabled": True},
+                {"name": "Ben", "description": "a drummer", "gender": "male",
+                 "age": "adult", "enabled": True},
+            ],
+            "characters_migrated_v2": True,
+            "voices": [{"name": "Rob", "path": "/x", "gender": "male", "age": "mature",
+                        "tone": "gravelly"}],
+        })
+        cfg = backend.gapp.load_config()
+        return cfg, backend.gapp.style_settings(cfg, "Pop")
+
+    def test_lead_singer_is_dropped_when_the_vocalist_line_changes_sex(self):
+        cfg, ss = self._singing_cfg()
+        # as drafted: Ada, described as herself — she stays
+        char, desc = backend._song_lead_singer(
+            cfg, ss, {"singer": "Ada", "vocalist": "young female vocalist"})
+        self.assertEqual(char["name"], "Ada")
+        self.assertEqual(desc, "young female vocalist")
+        # the user re-describes the singer as a man — Ada can't be him
+        char, desc = backend._song_lead_singer(
+            cfg, ss, {"singer": "Ada", "vocalist": "adult male vocalist, Australian"})
+        self.assertIsNone(char)
+        self.assertEqual(desc, "adult male vocalist, Australian")
+        note = backend._song_singer_story_note(
+            cfg, ss, {"singer": "Ada", "vocalist": "adult male vocalist, Australian"})
+        self.assertNotIn("Ada", note)
+        self.assertIn("adult male vocalist, Australian", note)
+        self.assertIn("invent this one performer", note)
+        # a wording tweak that keeps her sex keeps her
+        char, _ = backend._song_lead_singer(
+            cfg, ss, {"singer": "Ada", "vocalist": "young female vocalist, smoky voice"})
+        self.assertEqual(char["name"], "Ada")
+
+    def test_lead_singer_follows_the_singing_voice_over_the_vocalist_line(self):
+        cfg, ss = self._singing_cfg()
+        # generated with (or re-voiced as) the male library voice: that is
+        # what the track sounds like, whatever the Vocalist line still says
+        for key in ("voice", "sung_as"):
+            char, desc = backend._song_lead_singer(
+                cfg, ss, {"singer": "Ada", "vocalist": "young female vocalist", key: "Rob"})
+            self.assertIsNone(char, key)
+            self.assertIn("mature male vocalist", desc)
+        # the picker's explicit choice of a matching character is honoured
+        char, _ = backend._song_lead_singer(
+            cfg, ss, {"singer": "Ben", "vocalist": "young female vocalist", "voice": "Rob"})
+        self.assertEqual(char["name"], "Ben")
+
+    def test_song_draft_casts_a_singer_of_the_picked_voices_sex(self):
+        cfg, ss = self._singing_cfg()
+        for _ in range(5):
+            name, desc = backend._pick_song_singer(cfg, ss, "a song", voice="Rob")
+            self.assertEqual(name, "Ben")
+            self.assertIn("adult male vocalist", desc)
+            self.assertIn("gravelly voice", desc)
+        # no voice picked: either may be cast, described as themselves
+        name, desc = backend._pick_song_singer(cfg, ss, "a song about Ada")
+        self.assertEqual((name, desc), ("Ada", "young female vocalist"))
 
     # ── headless chain ───────────────────────────────────────────────────────
 

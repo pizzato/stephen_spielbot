@@ -243,6 +243,35 @@ class RedraftStoryTests(unittest.TestCase):
             scenes, *_ = story.divide_story(s2)
         self.assertEqual([sc.id for sc in scenes], list(range(1, 7)))
 
+    def test_redraft_prompts_carry_the_staging_note_and_the_users_changes(self):
+        fake = make_fake()
+        seen = []
+        real = fake
+
+        def spy(cfg, system, user_msg, max_tokens, label, retries=3):
+            seen.append((label, user_msg))
+            return real(cfg, system, user_msg, max_tokens, label, retries)
+        fake.outline_json = _outline_json(1, 4)
+        fake.redraft_outline_json = _outline_json(1, 4)
+        with mock.patch.object(story, "_chat_complete", spy):
+            s = story.generate_story("Test topic", 4)
+            story.redraft_story(s, 4, dialogue_note="THE LEAD SINGER IS: adult male vocalist",
+                                instruction="the singer is a man")
+        redraft = [(l, u) for l, u in seen if l.startswith("story redraft")]
+        self.assertEqual(len(redraft), 2)  # outline + one chapter
+        for label, user_msg in redraft:
+            self.assertIn("THE LEAD SINGER IS: adult male vocalist", user_msg, label)
+            self.assertIn("the singer is a man", user_msg, label)
+            self.assertIn("CHANGES THE USER ASKS FOR", user_msg, label)
+            self.assertNotIn("${", user_msg, label)
+        # a plain redraft leaves no placeholder and no changes block behind
+        seen.clear()
+        with mock.patch.object(story, "_chat_complete", spy):
+            story.redraft_story(s, 4)
+        for label, user_msg in seen:
+            self.assertNotIn("${", user_msg, label)
+            self.assertNotIn("CHANGES THE USER ASKS FOR", user_msg, label)
+
     def test_empty_story_raises(self):
         with self.assertRaises(RuntimeError):
             story.redraft_story({"chapters": []}, 10)

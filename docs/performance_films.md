@@ -123,7 +123,12 @@ pipeline changes in three places:
   by name as the one performer in every singing scene, so the person shown singing is
   the person heard. A style with no usable catalogue character still gets a vocalist —
   the songwriter defines one (sex, age, background, voice quality) and the story invents
-  a matching performer. Each video also dresses the singer in **one fresh outfit** chosen
+  a matching performer. The cast follows the voice: a **Singing voice** picked at Create
+  narrows the draw to characters of its sex, and the story (draft, redraft and divide
+  alike) is written for whoever the track in use is sung as — the re-voicing, else the
+  singing voice, else the Vocalist line. Change the Vocalist (or the voice) to the other
+  sex and the character cast at draft time is dropped rather than cast against the voice;
+  the Song tab's **Lead singer** picker swaps in another character explicitly. Each video also dresses the singer in **one fresh outfit** chosen
   for that film — described consistently across its scenes, different film to film — so
   the catalogue portrait anchors the face, not an unchanging costume.
 - **The cast performs it.** Every scene is staged as a **performed silent take** —

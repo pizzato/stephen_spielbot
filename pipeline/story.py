@@ -300,11 +300,19 @@ def _critique_and_revise(call, title_context: str, chapters: list[dict],
 def redraft_story(story: dict, n_scenes: int,
                   character_sheet: str | None = None,
                   avoid_hint: str | None = None,
-                  scene_plan: dict | None = None) -> dict:
+                  scene_plan: dict | None = None,
+                  dialogue_note: str | None = None,
+                  instruction: str | None = None) -> dict:
     """Re-plan and rewrite an existing prose story for a new scene count —
     expanding (more depth around the same beats) or contracting (keep the
-    strongest beats). Returns an updated story dict (status back to "draft");
-    style/music/characters are kept from the original."""
+    strongest beats) — and/or with the changes the user asks for. Returns an
+    updated story dict (status back to "draft"); style/music/characters are
+    kept from the original.
+
+    *dialogue_note* is the same staging note the draft was written with (who
+    tells the story; a song film's lyrics and singer). *instruction* is the
+    user's free-text "tell it how": what to change in the retelling — it
+    outranks the retell-faithfully rule where the two conflict."""
     cfg = _load_cfg()
     call = _call_fn(cfg)
     n_scenes = int(n_scenes)
@@ -321,6 +329,13 @@ def redraft_story(story: dict, n_scenes: int,
     avoid_note = _avoid_note(avoid_hint)
     identified = _norm_identified_characters(story.get("characters"))
     character_note = _merge_character_note(_character_note(character_sheet), identified)
+    dialogue_str = f"\n{dialogue_note.strip()}" if dialogue_note and dialogue_note.strip() else ""
+    instruction_str = (
+        "\nCHANGES THE USER ASKS FOR in this retelling — make them, and where they "
+        "conflict with retelling faithfully the user's changes win and the rest of "
+        "the story adapts to them: " + instruction.strip()[:1000]
+        if instruction and instruction.strip() else ""
+    )
     story_str = "\n\n".join(
         f'Chapter {c["chapter"]} — "{c.get("title") or ""}":\n{c["text"]}'
         for c in old_chapters
@@ -332,6 +347,7 @@ def redraft_story(story: dict, n_scenes: int,
         _prompts.user("story_redraft_outline", title_line=_title_line(title, video_title),
                       n_scenes=n_scenes, n_chapters=n_chapters, old_n_scenes=old_n_scenes,
                       avoid_note=avoid_note, character_note=character_note,
+                      dialogue_note=dialogue_str, instruction_note=instruction_str,
                       story_str=story_str),
         1500 + 150 * n_chapters, "story redraft outline",
     )
@@ -366,7 +382,8 @@ def redraft_story(story: dict, n_scenes: int,
                           outline_str=outline_str, chapter_title=o["title"],
                           chapter_summary=o["summary"], target_words=target_words,
                           prev_tail=prev_tail, avoid_note=avoid_note,
-                          character_note=character_note, story_str=story_str),
+                          character_note=character_note, dialogue_note=dialogue_str,
+                          instruction_note=instruction_str, story_str=story_str),
             o["scenes"] * (words_per_scene * 2 + 30) + 300, f'story redraft chapter {o["chapter"]}',
         ).strip()
         if not text:

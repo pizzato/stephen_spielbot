@@ -17,6 +17,7 @@ const REGEN_CHIPS = {
   look: ['More detail', 'Different angle', 'Friendlier'],
   sound: ['Slower', 'Bigger', 'Stripped back', 'Different genre'],
   lyrics: ['Simpler words', 'Fewer words', 'Stronger chorus', 'More hopeful'],
+  story: ['Simpler, more visual', 'Raise the stakes', 'Different setting', 'Different ending'],
 }
 
 // Shared style for the floating arrow / close controls in the enlarged-image view.
@@ -182,9 +183,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       const cur = songDraft ?? song
       const s = await api.saveSong(job.job_id, cur.caption, cur.lyrics, cur.direction ?? null,
-                                   cur.vocalist ?? null)
+                                   cur.vocalist ?? null, cur.singer ?? null)
       setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
                 vocalist: s.vocalist ?? (cur.vocalist || ''),
+                singer: s.singer ?? (cur.singer || ''),
                 direction: s.direction ?? (cur.direction || '') })
       setSongDraft(null)
       syncBriefTopic(s.direction ?? cur.direction)
@@ -200,9 +202,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       const cur = songDraft ?? song
       const s = await api.regenSong(job.job_id, field, cur.caption, cur.lyrics,
-                                    instruction, cur.direction ?? null, cur.vocalist ?? null)
+                                    instruction, cur.direction ?? null, cur.vocalist ?? null,
+                                    cur.singer ?? null)
       setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
                 vocalist: s.vocalist ?? (cur.vocalist || ''),
+                singer: cur.singer ?? song.singer,
                 direction: s.direction ?? (cur.direction || '') })
       setSongDraft(null)
       syncBriefTopic(s.direction ?? cur.direction)
@@ -222,6 +226,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const s = await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
                                          lyrics: cur.lyrics, voice: songVoiceSel,
                                          vocalist: cur.vocalist ?? null,
+                                         singer: cur.singer ?? null,
                                          add_seconds: addSeconds })
       setSongDraft(null); await refreshSong()
       setSongMsg(!addSeconds
@@ -307,14 +312,22 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       setStoryMsg('Story saved — you can come back to it any time.')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
+  // Redraft = rewrite the WHOLE prose story: at a new length (the Length box
+  // moved), with the changes typed into "tell it how", or both. Either way the
+  // draft is replaced, so the click asks for confirmation first; the
+  // instruction waits with it.
+  const [redraftInstruction, setRedraftInstruction] = useState('')
+  const askRedraft = (instruction) => { setRedraftInstruction(instruction || ''); setConfirmRedraft(true) }
   const redraftStory = async () => {
     setBusy('story-redraft'); setError(''); setStoryMsg(''); setConfirmRedraft(false)
     try {
       const s = await api.redraftStory(job.job_id, {
-        minutes: minutesTargetN,
+        minutes: minutesTargetChanged ? minutesTargetN : 0,
+        instruction: redraftInstruction,
         chapters: storyChapters(),
       })
       setStory(s); setStoryDrafts({}); setMinutesTarget(String(storyMinutes(s)))
+      setRedraftInstruction('')
       setStoryMsg(`Story redrafted for ${fmtDuration(storyMinutes(s))} (${s.n_scenes} scenes) — review it, then divide into scenes.`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -1505,8 +1518,27 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   value={(songDraft ?? song).caption}
                   onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
               </Field>
+              {(song.singers || []).length > 0 && (
+                <Field label="Lead singer"
+                  hint="The character the story shows singing, cast by name from the style catalogue — picking one fills the Vocalist line in from their card. Leave it on the invented performer to describe the singer freely below. A Vocalist (or Singing voice) of the other sex to the character drops them: the story then invents a performer to match the voice.">
+                  <select className="select" style={{ maxWidth: 340 }}
+                    value={(songDraft ?? song).singer || ''}
+                    onChange={(e) => {
+                      const name = e.target.value
+                      const cur = songDraft ?? song
+                      const pick = (song.singers || []).find((c) => c.name === name)
+                      setSongDraft({ ...cur, singer: name,
+                                     vocalist: pick ? (pick.vocalist || cur.vocalist || '') : (cur.vocalist || '') })
+                    }}>
+                    <option value="">An invented performer, matching the Vocalist below</option>
+                    {(song.singers || []).map((c) => (
+                      <option key={c.name} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <Field label="Vocalist"
-                hint={`Who sings — sex, age, background, voice quality. Appended to the Sound description when the track is generated, so the voice matches the singer on camera.${song.singer ? ` Cast from the style catalogue: ${song.singer}.` : ''} Picking a Singing voice below overrides it.`}>
+                hint="Who sings — sex, age, background, voice quality. Appended to the Sound description when the track is generated, so the voice matches the singer on camera, and the story casts a performer of this sex and age. Picking a Singing voice below overrides it.">
                 <input className="input"
                   placeholder="e.g. young female vocalist, Brazilian, warm airy voice"
                   value={(songDraft ?? song).vocalist || ''}
@@ -1652,7 +1684,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <div className="stack gap-22">
               {storyMsg && <Banner tone="ok">{storyMsg}</Banner>}
               {busy === 'story-redraft' && (
-                <Banner tone="info">Redrafting the story to {fmtDuration(minutesTargetN)} — every chapter is being rewritten, this takes a while…</Banner>
+                <Banner tone="info">Redrafting the story{minutesTargetChanged ? ` to ${fmtDuration(minutesTargetN)}` : ''}{redraftInstruction ? ` — "${redraftInstruction}"` : ''} — every chapter is being rewritten, this takes a while…</Banner>
               )}
               {(story.chapters || []).map((c) => (
                 <Field key={c.chapter}
@@ -1671,26 +1703,36 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   <span className="label-sm">Length</span>
                   <DurationInput value={minutesTarget} disabled={!!busy}
                     onChange={(v) => { setMinutesTarget(v); setConfirmRedraft(false) }} />
-                  {!minutesTargetChanged ? (
-                    <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={divideStory}>
-                      {busy === 'story-divide'
-                        ? 'Dividing into scenes…'
-                        : (scenes.length
-                          ? 'Divide again → new script'
-                          : `Divide into ${story.n_scenes || '?'} scenes →`)}
-                    </Button>
-                  ) : confirmRedraft ? (
+                  {confirmRedraft ? (
                     <>
                       <Button variant="danger" icon="wand-magic-sparkles" disabled={!!busy} onClick={redraftStory}>
-                        {busy === 'story-redraft' ? 'Redrafting…' : `Confirm — rewrite for ${fmtDuration(minutesTargetN)}`}
+                        {busy === 'story-redraft' ? 'Redrafting…'
+                          : minutesTargetChanged ? `Confirm — rewrite for ${fmtDuration(minutesTargetN)}`
+                          : 'Confirm — rewrite the whole story'}
                       </Button>
                       <Button variant="ghost" disabled={!!busy} onClick={() => setConfirmRedraft(false)}>Cancel</Button>
                     </>
                   ) : (
-                    <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
-                      disabled={!!busy} onClick={() => setConfirmRedraft(true)}>
-                      {`Redraft to ${fmtDuration(minutesTargetN)}…`}
-                    </Button>
+                    <>
+                      {/* Plain click = a faithful retell (at the new length when
+                          the Length box moved); the caret takes the changes to
+                          make — the singer, the setting, the ending… */}
+                      <GuidedRegenButton icon="wand-magic-sparkles" chips={REGEN_CHIPS.story}
+                        variant={minutesTargetChanged ? 'primary' : 'ghost'}
+                        size={minutesTargetChanged ? 'lg' : undefined}
+                        disabled={!!busy} onRegen={askRedraft}
+                        placeholder="e.g. the singer is a man, set it at night, end on the reunion…"
+                        label={minutesTargetChanged ? `Redraft to ${fmtDuration(minutesTargetN)}…` : 'Redraft the story…'} />
+                      {!minutesTargetChanged && (
+                        <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={divideStory}>
+                          {busy === 'story-divide'
+                            ? 'Dividing into scenes…'
+                            : (scenes.length
+                              ? 'Divide again → new script'
+                              : `Divide into ${story.n_scenes || '?'} scenes →`)}
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -1714,12 +1756,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <div className="row center gap-10">
                 <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
                 <span className="muted" style={{ fontSize: 12.5 }}>
-                  {minutesTargetChanged
-                    ? `Redrafting rewrites the WHOLE prose story to run ${fmtDuration(minutesTargetN)} — the current draft is replaced and you'll review + divide again afterwards.`
+                  {confirmRedraft
+                    ? `Redrafting rewrites the WHOLE prose story${minutesTargetChanged ? ` to run ${fmtDuration(minutesTargetN)}` : ''}${redraftInstruction ? ` with your changes ("${redraftInstruction}")` : ''} — the current draft is replaced and you'll review + divide again afterwards.`
                       + (scenes.length ? ' Existing scenes stay untouched; dividing later forks into a new script.' : '')
-                    : scenes.length
-                      ? 'This script already has scenes, so dividing again forks the edited story into a NEW script — the current scenes stay untouched. Change the length to redraft the story longer or shorter first.'
-                      : 'Edit freely and Save to come back later — the draft is kept until you divide it into scenes. Change the length to redraft the story longer or shorter.'}
+                    : minutesTargetChanged
+                      ? `Redrafting rewrites the WHOLE prose story to run ${fmtDuration(minutesTargetN)} — the current draft is replaced and you'll review + divide again afterwards.`
+                        + (scenes.length ? ' Existing scenes stay untouched; dividing later forks into a new script.' : '')
+                      : scenes.length
+                        ? 'This script already has scenes, so dividing again forks the edited story into a NEW script — the current scenes stay untouched. Redraft the story to rewrite it with changes (its caret takes them), or change the length to make it longer or shorter first.'
+                        : 'Edit freely and Save to come back later — the draft is kept until you divide it into scenes. Redraft the story to rewrite it with changes (its caret takes them), or change the length to make it longer or shorter.'}
                 </span>
               </div>
             </Card>
