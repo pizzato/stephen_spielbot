@@ -1,1 +1,3 @@
-file:///workspace/stephen_spielbot/docs/manual/edit-film.md
+# Edit film
+
+TEMPORARY PLACEHOLDER - will be replaced with full docs.
