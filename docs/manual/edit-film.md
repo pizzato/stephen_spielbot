@@ -1,1 +1,1 @@
-FILE:/workspace/stephen_spielbot/docs/manual/edit-film.md
+file:///workspace/stephen_spielbot/docs/manual/edit-film.md
