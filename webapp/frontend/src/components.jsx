@@ -2,6 +2,7 @@
 // components.jsx / App.jsx into ES modules.
 
 import { useRef, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { fileUrl } from './api'
 import { resolveStyle } from './styleUtils.js'
 
@@ -529,45 +530,79 @@ export function Card({ span, rowSpan, well, padLg, link, onClick, href, classNam
 // A "tell it how" popover: a small caret button beside a Re-generate control that
 // opens a text box for a one-off regeneration instruction — "shorten it", "make it
 // all robots". Calls onSubmit(instruction) then closes. `chips` are optional quick
-// presets; `align` places the popover to the 'left' or 'right' of the caret —
-// whichever side, it is nudged back inside the window if it would hang off.
+// presets; `align` hangs the popover from the caret's 'left' or 'right' edge.
+// The panel is portaled to <body> and fixed-positioned from the caret's on-screen
+// rect, so an overflow:hidden card or a scrolling column can never clip it; it is
+// nudged back inside the window if it would hang off, and flips above the caret
+// when there is no room below.
 export function RegenGuide({ busy, disabled, onSubmit, chips = [],
   placeholder = 'e.g. shorten it, make it all robots…', align = 'right' }) {
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
-  const [shift, setShift] = useState(0)
+  const [pos, setPos] = useState(null)
   const wrapRef = useRef(null)
   const popRef = useRef(null)
   const inputRef = useRef(null)
 
   useEffect(() => {
-    if (!open) { setShift(0); return }
-    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
-    // Keep the panel on screen: measure where it landed and slide it back by
-    // whatever it overhangs (carets near the window edge would go off-screen).
-    const clamp = () => {
-      const r = popRef.current?.getBoundingClientRect()
-      if (!r) return
-      const gap = 8
-      const over = r.right > window.innerWidth - gap ? (window.innerWidth - gap) - r.right
-        : r.left < gap ? gap - r.left : 0
-      if (over) setShift((s) => s + over)
+    if (!open) { setPos(null); return }
+    const inside = (el, t) => el && t && el.contains(t)
+    const onDoc = (e) => {
+      if (inside(wrapRef.current, e.target) || inside(popRef.current, e.target)) return
+      setOpen(false)
     }
-    clamp()
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    const place = () => {
+      const c = wrapRef.current?.getBoundingClientRect()
+      const pop = popRef.current
+      if (!c || !pop) return
+      const gap = 8
+      const w = pop.offsetWidth, h = pop.offsetHeight
+      let left = align === 'left' ? c.left : c.right - w
+      left = Math.max(gap, Math.min(left, window.innerWidth - gap - w))
+      let top = c.bottom + 6
+      if (top + h > window.innerHeight - gap && c.top - 6 - h >= gap) top = c.top - 6 - h
+      setPos({ top, left })
+    }
+    place()
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey)
-    window.addEventListener('resize', clamp)
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
     const t = setTimeout(() => inputRef.current?.focus(), 0)
     return () => {
       document.removeEventListener('mousedown', onDoc)
       document.removeEventListener('keydown', onKey)
-      window.removeEventListener('resize', clamp)
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
       clearTimeout(t)
     }
-  }, [open])
+  }, [open, align])
 
   const submit = () => { onSubmit((text || '').trim()); setText(''); setOpen(false) }
+
+  const pop = open ? createPortal(
+    <div ref={popRef} className="regen-guide__pop"
+      style={pos ? { top: pos.top, left: pos.left } : { top: 0, left: 0, visibility: 'hidden' }}
+      onClick={(e) => e.stopPropagation()}>
+      <div className="regen-guide__title">Tell it how…</div>
+      <textarea ref={inputRef} className="textarea regen-guide__input" rows={2} value={text}
+        placeholder={placeholder} onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() } }} />
+      {chips.length ? (
+        <div className="regen-guide__chips">
+          {chips.map((c) => (
+            <button key={c} type="button" className="regen-guide__chip" onClick={() => setText(c)}>{c}</button>
+          ))}
+        </div>
+      ) : null}
+      <div className="regen-guide__actions">
+        <button type="button" className="btn btn--primary btn--sm" disabled={busy}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); submit() }}>
+          <Icon name="rotate" /> Re-generate
+        </button>
+      </div>
+    </div>, document.body) : null
 
   return (
     <span className="regen-guide" ref={wrapRef}>
@@ -577,29 +612,7 @@ export function RegenGuide({ busy, disabled, onSubmit, chips = [],
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v) }}>
         <Icon name="chevron-down" />
       </button>
-      {open && (
-        <div ref={popRef} className={`regen-guide__pop regen-guide__pop--${align}`}
-          style={shift ? { transform: `translateX(${shift}px)` } : undefined}
-          onClick={(e) => e.stopPropagation()}>
-          <div className="regen-guide__title">Tell it how…</div>
-          <textarea ref={inputRef} className="textarea regen-guide__input" rows={2} value={text}
-            placeholder={placeholder} onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() } }} />
-          {chips.length ? (
-            <div className="regen-guide__chips">
-              {chips.map((c) => (
-                <button key={c} type="button" className="regen-guide__chip" onClick={() => setText(c)}>{c}</button>
-              ))}
-            </div>
-          ) : null}
-          <div className="regen-guide__actions">
-            <button type="button" className="btn btn--primary btn--sm" disabled={busy}
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); submit() }}>
-              <Icon name="rotate" /> Re-generate
-            </button>
-          </div>
-        </div>
-      )}
+      {pop}
     </span>
   )
 }
