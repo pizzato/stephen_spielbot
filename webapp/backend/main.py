@@ -14636,11 +14636,11 @@ def _save_scene_order(work_dir: Path, order: list) -> None:
     (work_dir / "scene_edit_order.json").write_text(json.dumps(order))
 
 
-# Per-scene review marks for the film editor's QA pass (issue #383): "good" is
-# a scene signed off, "todo" one still being worked on, and no entry at all a
-# scene nobody has looked at yet. Kept beside the film rather than on the scene
+# Per-scene review marks for the film editor's QA pass (issue #383): "approved"
+# is a scene signed off, "todo" one still being worked on, and no entry at all
+# a scene still to be reviewed. Kept beside the film rather than on the scene
 # row — it is a note about the edit, not part of what renders.
-_SCENE_REVIEW_STATES = ("good", "todo")
+_SCENE_REVIEW_STATES = ("approved", "todo")
 
 
 def _load_scene_review(work_dir: Path) -> dict:
@@ -14972,13 +14972,14 @@ def reorder_film_scenes(body: ReorderFilmScenesBody) -> dict:
 
 class FilmSceneReviewBody(BaseModel):
     work_dir: str
-    status: str = ""     # "good" | "todo" | "" to clear the mark
+    status: str = ""     # "approved" | "todo" | "" (still to be reviewed)
 
 
 @api.post("/api/films/scenes/{scene_id}/review")
 def set_film_scene_review(scene_id: int, body: FilmSceneReviewBody) -> dict:
-    """Mark one scene good or still-to-work-on (issue #383), so the edit of a
-    long film can be tracked scene by scene."""
+    """Mark one scene approved or still-to-work-on — or clear it back to
+    to-be-reviewed with an empty status (issue #383), so the edit of a long
+    film can be tracked scene by scene."""
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")

@@ -1,8 +1,9 @@
 """Per-scene review marks in the film editor (issue #383).
 
-Scenes are marked "good" (signed off) or "todo" (still being worked on) so the
-edit of a long film can be tracked card by card. The marks live in
-scene_review.json beside the film — they are notes about the edit, not part of
+Scenes are marked "approved" (signed off) or "todo" (still being worked on),
+and an unmarked scene is one still to be reviewed, so the edit of a long film
+can be tracked card by card. The marks live in scene_review.json beside the
+film — they are notes about the edit, not part of
 what renders — and ride back out on GET /api/films/scenes.
 """
 import json
@@ -57,16 +58,17 @@ class SceneReviewTests(unittest.TestCase):
         return {s["id"]: s["review"] for s in backend.film_scenes(work_dir=str(self.wd))["scenes"]}
 
     def test_marks_persist_and_ride_back_on_the_scene_list(self):
-        self._mark(1, "good")
+        self._mark(1, "approved")
         self._mark(3, "todo")
 
         self.assertEqual(json.loads((self.wd / "scene_review.json").read_text()),
-                         {"1": "good", "3": "todo"})
-        # Unmarked scenes come back with an empty mark, not a missing key.
-        self.assertEqual(self._reviews(), {1: "good", 2: "", 3: "todo"})
+                         {"1": "approved", "3": "todo"})
+        # A scene still to be reviewed comes back with an empty mark, not a
+        # missing key — the editor reads that as its own category.
+        self.assertEqual(self._reviews(), {1: "approved", 2: "", 3: "todo"})
 
     def test_empty_status_clears_the_mark(self):
-        self._mark(2, "good")
+        self._mark(2, "approved")
         out = self._mark(2, "")
 
         self.assertEqual(out["review"], "")
@@ -79,12 +81,12 @@ class SceneReviewTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_deleting_a_scene_drops_its_mark(self):
-        self._mark(1, "good")
+        self._mark(1, "approved")
         self._mark(2, "todo")
 
         backend.delete_film_scene(backend.DeleteFilmSceneBody(work_dir=str(self.wd), scene_id=2))
 
-        self.assertEqual(json.loads((self.wd / "scene_review.json").read_text()), {"1": "good"})
+        self.assertEqual(json.loads((self.wd / "scene_review.json").read_text()), {"1": "approved"})
 
     def test_unreadable_store_is_ignored(self):
         (self.wd / "scene_review.json").write_text("not json")
@@ -93,7 +95,7 @@ class SceneReviewTests(unittest.TestCase):
     def test_path_outside_the_output_folder_is_rejected(self):
         with self.assertRaises(HTTPException) as ctx:
             backend.set_film_scene_review(
-                1, backend.FilmSceneReviewBody(work_dir="/etc", status="good"))
+                1, backend.FilmSceneReviewBody(work_dir="/etc", status="approved"))
         self.assertEqual(ctx.exception.status_code, 400)
 
 

@@ -326,16 +326,22 @@ re-rendering one scene only replaces that clip; it never redoes the upscale.
 
 ### Review marks
 
-A long film is edited scene by scene, so each card carries its own QA state.
-**Good** signs the scene off, **To work on** flags it as still being worked on, and
-clicking the mark it already has clears it back to unmarked. The mark shows as a chip
-on the collapsed card, and is saved on the film — come back tomorrow and the pass is
-where you left it.
+A long film is edited scene by scene, so every scene sits in one of three review
+categories, picked on its own card:
 
-The filter above the cards is the point of it: **All**, **To work on** (everything not
-signed off — flagged *and* never-looked-at), and **Good**. Work through *To work on*
-and the film is fully edited when it empties; the line beside the filter counts how
-many scenes are marked good.
+| Category | Means |
+|---|---|
+| **To be reviewed** | Nobody has looked at it yet — where every scene starts |
+| **To work on** | Looked at, and it still needs work |
+| **Approved** | Signed off, leave it alone |
+
+The category shows as a chip on the collapsed card and is saved on the film, so come
+back tomorrow and the pass is where you left it.
+
+The filter above the cards is the point of it: **All**, then one segment per category
+with its count. Work through *To be reviewed*, park what needs another pass in *To
+work on*, and the film is fully edited when everything is approved — the line beside
+the filter counts how many scenes are.
 
 Filtering only hides cards. Scene numbering, the chevrons and **Reassemble film** all
 still act on the whole film, and deleting a scene takes its mark with it.

@@ -19,6 +19,15 @@ const REGEN_CHIPS = {
   cover: ['Bolder', 'Simpler', 'More dramatic'],
 }
 
+// The review categories a scene can be in (issue #383). 'review' is the
+// unmarked default and is stored as an empty mark — the other two are what the
+// backend keeps in scene_review.json.
+const REVIEW_STATES = [
+  { value: 'review', label: 'To be reviewed' },
+  { value: 'todo', label: 'To work on' },
+  { value: 'approved', label: 'Approved' },
+]
+
 const resPixels = (name) => {
   const m = /\((\d+)[×x](\d+)\)/.exec(name || '')
   return m ? Number(m[1]) * Number(m[2]) : 0
@@ -517,8 +526,11 @@ function SceneCard({
                       ? <Chip tone={scene.has_final ? 'ok' : 'warn'} dot>{scene.has_final ? 'Rendered' : 'Partial'}</Chip>
                       : <Chip tone="warn">No video</Chip>
                     }
-                    {review === 'good' && <Chip tone="ok"><Icon name="circle-check" /> Good</Chip>}
-                    {review === 'todo' && <Chip tone="warn"><Icon name="screwdriver-wrench" /> To work on</Chip>}
+                    {review === 'approved'
+                      ? <Chip tone="ok"><Icon name="circle-check" /> Approved</Chip>
+                      : review === 'todo'
+                        ? <Chip tone="warn"><Icon name="screwdriver-wrench" /> To work on</Chip>
+                        : <Chip><Icon name="clipboard-check" /> To be reviewed</Chip>}
                   </div>
                 </div>
                 {narration && (
@@ -726,14 +738,10 @@ function SceneCard({
 
               <div style={{ flex: 1 }} />
 
-              {/* QA marks (issue #383): sign a scene off, or flag it as still
-                  being worked on. Clicking the current mark clears it. */}
-              <Button variant={review === 'good' ? 'primary' : 'ghost'} icon="circle-check" size="sm"
-                title="Mark this scene as good — it drops out of the “To work on” view"
-                onClick={() => onReview(scene.id, review === 'good' ? '' : 'good')}>Good</Button>
-              <Button variant={review === 'todo' ? 'primary' : 'ghost'} icon="screwdriver-wrench" size="sm"
-                title="Flag this scene as still needing work"
-                onClick={() => onReview(scene.id, review === 'todo' ? '' : 'todo')}>To work on</Button>
+              {/* Which of the three review categories this scene is in
+                  (issue #383) — every one a single click away. */}
+              <Segmented value={review || 'review'} onChange={(v) => onReview(scene.id, v === 'review' ? '' : v)}
+                options={REVIEW_STATES.map(({ value, label }) => ({ value, label }))} />
 
               <Button variant="ghost" icon="chevron-up" size="sm" disabled={index === 0 || isRendering} onClick={() => onMove(index, index - 1)} />
               <Button variant="ghost" icon="chevron-down" size="sm" disabled={index >= total - 1 || isRendering} onClick={() => onMove(index, index + 1)} />
@@ -2665,14 +2673,13 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const [activeRenders, setActiveRenders] = useState(0)
   const [resumeTasks, setResumeTasks] = useState({})
   const [adding, setAdding] = useState(false)
-  // QA pass over a long film (issue #383): 'all' shows every scene, 'todo'
-  // only the ones not signed off yet (flagged or never looked at), 'good' the
-  // ones already marked good.
+  // QA pass over a long film (issue #383): the cards narrow to one review
+  // category at a time — everything still to be reviewed, everything flagged
+  // to work on, or everything approved.
   const [reviewFilter, setReviewFilter] = useState('all')
-  const goodCount = scenes.filter((s) => s.review === 'good').length
-  const todoCount = scenes.length - goodCount
-  const showScene = (s) => reviewFilter === 'all'
-    || (reviewFilter === 'good' ? s.review === 'good' : s.review !== 'good')
+  const approvedCount = scenes.filter((s) => s.review === 'approved').length
+  const countIn = (value) => scenes.filter((s) => (s.review || 'review') === value).length
+  const showScene = (s) => reviewFilter === 'all' || (s.review || 'review') === reviewFilter
 
   const load = useCallback(async () => {
     setError('')
@@ -2856,15 +2863,14 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
 
       {scenes.length > 0 && (
         <div className="row between center row--wrap gap-10" style={{ marginBottom: 12 }}>
-          <Segmented value={reviewFilter} onChange={setReviewFilter} options={[
+          <Segmented className="seg--wrap" value={reviewFilter} onChange={setReviewFilter} options={[
             { value: 'all', label: `All (${scenes.length})` },
-            { value: 'todo', label: `To work on (${todoCount})` },
-            { value: 'good', label: `Good (${goodCount})` },
+            ...REVIEW_STATES.map(({ value, label }) => ({ value, label: `${label} (${countIn(value)})` })),
           ]} />
           <span className="muted" style={{ fontSize: 12.5 }}>
-            {todoCount === 0
-              ? <><Icon name="circle-check" style={{ color: 'var(--ok)' }} /> Every scene is marked good — this film is fully edited.</>
-              : <>{goodCount} of {scenes.length} scenes marked good</>}
+            {approvedCount === scenes.length
+              ? <><Icon name="circle-check" style={{ color: 'var(--ok)' }} /> Every scene is approved — this film is fully edited.</>
+              : <>{approvedCount} of {scenes.length} scenes approved</>}
           </span>
         </div>
       )}
@@ -2876,7 +2882,9 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       ) : !scenes.some(showScene) ? (
         <Card span={12} well>
           <p className="muted" style={{ margin: 0 }}>
-            {reviewFilter === 'good' ? 'No scene is marked good yet.' : 'Every scene is marked good — nothing left to work on.'}
+            {reviewFilter === 'approved' ? 'No scene is approved yet.'
+              : reviewFilter === 'todo' ? 'No scene is flagged to work on.'
+                : 'Every scene has been reviewed — nothing left to look at.'}
           </p>
         </Card>
       ) : (
