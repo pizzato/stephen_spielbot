@@ -42,7 +42,8 @@ Around the pipeline, the web app also handles the full channel workflow: a rende
 queue with automation — global or per style, unattended in any format, music videos
 included, their song written, sung and re-voiced before the pictures are made —
 AI-suggested video ideas, per-scene editing with image
-inpainting, clip trimming and version history, opening titles and end credits
+inpainting, clip trimming, per-scene review marks (to be reviewed / to work on /
+approved) and version history, opening titles and end credits
 joined onto the finished film, an ending fade that dips the last seconds to
 black, one-click **restyling** (the same script
 or finished film in another visual style), misspelling-proof cover thumbnails (text-free

@@ -19,6 +19,15 @@ const REGEN_CHIPS = {
   cover: ['Bolder', 'Simpler', 'More dramatic'],
 }
 
+// The review categories a scene can be in (issue #383). 'review' is the
+// unmarked default and is stored as an empty mark — the other two are what the
+// backend keeps in scene_review.json.
+const REVIEW_STATES = [
+  { value: 'review', label: 'To be reviewed' },
+  { value: 'todo', label: 'To work on' },
+  { value: 'approved', label: 'Approved' },
+]
+
 const resPixels = (name) => {
   const m = /\((\d+)[×x](\d+)\)/.exec(name || '')
   return m ? Number(m[1]) * Number(m[2]) : 0
@@ -72,8 +81,8 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 function SceneCard({
   scene, prevScene = null, index, total, jobId, workDir, resolution, style,
   voices, filmVoice, voiceMeta = {}, castOpts = [], actedSilent = false,
-  acted = null, performance = null,
-  onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
+  acted = null, performance = null, review = '',
+  onDelete, onMove, onReview, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
   const [lightbox, setLightbox] = useState(false)
@@ -517,6 +526,11 @@ function SceneCard({
                       ? <Chip tone={scene.has_final ? 'ok' : 'warn'} dot>{scene.has_final ? 'Rendered' : 'Partial'}</Chip>
                       : <Chip tone="warn">No video</Chip>
                     }
+                    {review === 'approved'
+                      ? <Chip tone="ok"><Icon name="circle-check" /> Approved</Chip>
+                      : review === 'todo'
+                        ? <Chip tone="warn"><Icon name="screwdriver-wrench" /> To work on</Chip>
+                        : <Chip><Icon name="clipboard-check" /> To be reviewed</Chip>}
                   </div>
                 </div>
                 {narration && (
@@ -723,6 +737,11 @@ function SceneCard({
               )}
 
               <div style={{ flex: 1 }} />
+
+              {/* Which of the three review categories this scene is in
+                  (issue #383) — every one a single click away. */}
+              <Segmented value={review || 'review'} onChange={(v) => onReview(scene.id, v === 'review' ? '' : v)}
+                options={REVIEW_STATES.map(({ value, label }) => ({ value, label }))} />
 
               <Button variant="ghost" icon="chevron-up" size="sm" disabled={index === 0 || isRendering} onClick={() => onMove(index, index - 1)} />
               <Button variant="ghost" icon="chevron-down" size="sm" disabled={index >= total - 1 || isRendering} onClick={() => onMove(index, index + 1)} />
@@ -2654,6 +2673,13 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const [activeRenders, setActiveRenders] = useState(0)
   const [resumeTasks, setResumeTasks] = useState({})
   const [adding, setAdding] = useState(false)
+  // QA pass over a long film (issue #383): the cards narrow to one review
+  // category at a time — everything still to be reviewed, everything flagged
+  // to work on, or everything approved.
+  const [reviewFilter, setReviewFilter] = useState('all')
+  const approvedCount = scenes.filter((s) => s.review === 'approved').length
+  const countIn = (value) => scenes.filter((s) => (s.review || 'review') === value).length
+  const showScene = (s) => reviewFilter === 'all' || (s.review || 'review') === reviewFilter
 
   const load = useCallback(async () => {
     setError('')
@@ -2725,6 +2751,17 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       await load()
     } catch (e) {
       setError(e.message)
+    }
+  }
+
+  const setReview = async (sceneId, status) => {
+    setError('')
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, review: status } : s)))
+    try {
+      await api.setFilmSceneReview(workDir, sceneId, status)
+    } catch (e) {
+      setError(e.message)
+      await load()
     }
   }
 
@@ -2824,13 +2861,37 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
         </div>
       )}
 
+      {scenes.length > 0 && (
+        <div className="row between center row--wrap gap-10" style={{ marginBottom: 12 }}>
+          <Segmented className="seg--wrap" value={reviewFilter} onChange={setReviewFilter} options={[
+            { value: 'all', label: `All (${scenes.length})` },
+            ...REVIEW_STATES.map(({ value, label }) => ({ value, label: `${label} (${countIn(value)})` })),
+          ]} />
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            {approvedCount === scenes.length
+              ? <><Icon name="circle-check" style={{ color: 'var(--ok)' }} /> Every scene is approved — this film is fully edited.</>
+              : <>{approvedCount} of {scenes.length} scenes approved</>}
+          </span>
+        </div>
+      )}
+
       {scenes.length === 0 ? (
         <Card span={12} well>
           <p className="muted" style={{ margin: 0 }}>No scenes found for this film. “Add scene” starts a new one from scratch.</p>
         </Card>
+      ) : !scenes.some(showScene) ? (
+        <Card span={12} well>
+          <p className="muted" style={{ margin: 0 }}>
+            {reviewFilter === 'approved' ? 'No scene is approved yet.'
+              : reviewFilter === 'todo' ? 'No scene is flagged to work on.'
+                : 'Every scene has been reviewed — nothing left to look at.'}
+          </p>
+        </Card>
       ) : (
         <div className="bento" style={{ rowGap: 8 }}>
-          {scenes.map((scene, i) => (
+          {/* Filtered cards keep their real position and count, so the move
+              chevrons and the numbering still act on the whole film. */}
+          {scenes.map((scene, i) => (showScene(scene) ? (
             <SceneCard
               key={scene.id}
               scene={scene}
@@ -2853,9 +2914,11 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
               onSaved={load}
               onRerenderStart={() => setActiveRenders((n) => n + 1)}
               onRerenderDone={() => { setActiveRenders((n) => Math.max(0, n - 1)); load() }}
+              review={scene.review || ''}
+              onReview={setReview}
               initialTask={resumeTasks[scene.id]}
             />
-          ))}
+          ) : null))}
         </div>
       )}
 

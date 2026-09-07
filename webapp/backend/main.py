@@ -14636,6 +14636,36 @@ def _save_scene_order(work_dir: Path, order: list) -> None:
     (work_dir / "scene_edit_order.json").write_text(json.dumps(order))
 
 
+# Per-scene review marks for the film editor's QA pass (issue #383): "approved"
+# is a scene signed off, "todo" one still being worked on, and no entry at all
+# a scene still to be reviewed. Kept beside the film rather than on the scene
+# row — it is a note about the edit, not part of what renders.
+_SCENE_REVIEW_STATES = ("approved", "todo")
+
+
+def _load_scene_review(work_dir: Path) -> dict:
+    try:
+        raw = json.loads((work_dir / "scene_review.json").read_text())
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for k, v in raw.items():
+        try:
+            sid = int(k)
+        except (TypeError, ValueError):
+            continue
+        if v in _SCENE_REVIEW_STATES:
+            out[sid] = v
+    return out
+
+
+def _save_scene_review(work_dir: Path, marks: dict) -> None:
+    (work_dir / "scene_review.json").write_text(
+        json.dumps({str(k): v for k, v in sorted(marks.items())}))
+
+
 def _last_scene_id(work_dir: Path) -> int | None:
     """Id of the film's closing scene in display order, or None if unknown."""
     order = _load_scene_order(work_dir)
@@ -14787,11 +14817,13 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
         ordered = rows
 
     jc = _film_job_config(wd)
+    reviews = _load_scene_review(wd)
     result = []
     for r in ordered:
         sid = int(r.get("id") or r.get("scene_id") or 0)
         scene_json = {**_scene_to_json(r, wd), **_film_scene_files(wd, sid)}
         scene_json["effective_voice"] = _voice_label(_scene_voice_name(r, jc))
+        scene_json["review"] = reviews.get(sid, "")
         result.append(scene_json)
 
     title = ""
@@ -14869,6 +14901,9 @@ def delete_film_scene(body: DeleteFilmSceneBody) -> dict:
     order = _load_scene_order(wd) or all_ids
     new_order = [i for i in order if i != sid]
     _save_scene_order(wd, new_order)
+    marks = _load_scene_review(wd)
+    if marks.pop(sid, None):
+        _save_scene_review(wd, marks)
     return {"ok": True, "order": new_order}
 
 
@@ -14933,6 +14968,33 @@ def reorder_film_scenes(body: ReorderFilmScenesBody) -> dict:
         raise HTTPException(400, "Path is outside the output folder.")
     _save_scene_order(wd, [int(x) for x in body.order])
     return {"ok": True}
+
+
+class FilmSceneReviewBody(BaseModel):
+    work_dir: str
+    status: str = ""     # "approved" | "todo" | "" (still to be reviewed)
+
+
+@api.post("/api/films/scenes/{scene_id}/review")
+def set_film_scene_review(scene_id: int, body: FilmSceneReviewBody) -> dict:
+    """Mark one scene approved or still-to-work-on — or clear it back to
+    to-be-reviewed with an empty status (issue #383), so the edit of a long
+    film can be tracked scene by scene."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    status = (body.status or "").strip()
+    if status and status not in _SCENE_REVIEW_STATES:
+        raise HTTPException(400, f"Unknown review status: {status}")
+    marks = _load_scene_review(wd)
+    if status:
+        marks[int(scene_id)] = status
+    else:
+        marks.pop(int(scene_id), None)
+    _save_scene_review(wd, marks)
+    return {"ok": True, "scene_id": scene_id, "review": status}
 
 
 class ReassembleBody(BaseModel):
