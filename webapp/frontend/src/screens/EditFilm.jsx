@@ -72,8 +72,8 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 function SceneCard({
   scene, prevScene = null, index, total, jobId, workDir, resolution, style,
   voices, filmVoice, voiceMeta = {}, castOpts = [], actedSilent = false,
-  acted = null, performance = null,
-  onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
+  acted = null, performance = null, review = '',
+  onDelete, onMove, onReview, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
   const [lightbox, setLightbox] = useState(false)
@@ -517,6 +517,8 @@ function SceneCard({
                       ? <Chip tone={scene.has_final ? 'ok' : 'warn'} dot>{scene.has_final ? 'Rendered' : 'Partial'}</Chip>
                       : <Chip tone="warn">No video</Chip>
                     }
+                    {review === 'good' && <Chip tone="ok"><Icon name="circle-check" /> Good</Chip>}
+                    {review === 'todo' && <Chip tone="warn"><Icon name="screwdriver-wrench" /> To work on</Chip>}
                   </div>
                 </div>
                 {narration && (
@@ -723,6 +725,15 @@ function SceneCard({
               )}
 
               <div style={{ flex: 1 }} />
+
+              {/* QA marks (issue #383): sign a scene off, or flag it as still
+                  being worked on. Clicking the current mark clears it. */}
+              <Button variant={review === 'good' ? 'primary' : 'ghost'} icon="circle-check" size="sm"
+                title="Mark this scene as good — it drops out of the “To work on” view"
+                onClick={() => onReview(scene.id, review === 'good' ? '' : 'good')}>Good</Button>
+              <Button variant={review === 'todo' ? 'primary' : 'ghost'} icon="screwdriver-wrench" size="sm"
+                title="Flag this scene as still needing work"
+                onClick={() => onReview(scene.id, review === 'todo' ? '' : 'todo')}>To work on</Button>
 
               <Button variant="ghost" icon="chevron-up" size="sm" disabled={index === 0 || isRendering} onClick={() => onMove(index, index - 1)} />
               <Button variant="ghost" icon="chevron-down" size="sm" disabled={index >= total - 1 || isRendering} onClick={() => onMove(index, index + 1)} />
@@ -2654,6 +2665,14 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const [activeRenders, setActiveRenders] = useState(0)
   const [resumeTasks, setResumeTasks] = useState({})
   const [adding, setAdding] = useState(false)
+  // QA pass over a long film (issue #383): 'all' shows every scene, 'todo'
+  // only the ones not signed off yet (flagged or never looked at), 'good' the
+  // ones already marked good.
+  const [reviewFilter, setReviewFilter] = useState('all')
+  const goodCount = scenes.filter((s) => s.review === 'good').length
+  const todoCount = scenes.length - goodCount
+  const showScene = (s) => reviewFilter === 'all'
+    || (reviewFilter === 'good' ? s.review === 'good' : s.review !== 'good')
 
   const load = useCallback(async () => {
     setError('')
@@ -2725,6 +2744,17 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       await load()
     } catch (e) {
       setError(e.message)
+    }
+  }
+
+  const setReview = async (sceneId, status) => {
+    setError('')
+    setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, review: status } : s)))
+    try {
+      await api.setFilmSceneReview(workDir, sceneId, status)
+    } catch (e) {
+      setError(e.message)
+      await load()
     }
   }
 
@@ -2824,13 +2854,36 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
         </div>
       )}
 
+      {scenes.length > 0 && (
+        <div className="row between center row--wrap gap-10" style={{ marginBottom: 12 }}>
+          <Segmented value={reviewFilter} onChange={setReviewFilter} options={[
+            { value: 'all', label: `All (${scenes.length})` },
+            { value: 'todo', label: `To work on (${todoCount})` },
+            { value: 'good', label: `Good (${goodCount})` },
+          ]} />
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            {todoCount === 0
+              ? <><Icon name="circle-check" style={{ color: 'var(--ok)' }} /> Every scene is marked good — this film is fully edited.</>
+              : <>{goodCount} of {scenes.length} scenes marked good</>}
+          </span>
+        </div>
+      )}
+
       {scenes.length === 0 ? (
         <Card span={12} well>
           <p className="muted" style={{ margin: 0 }}>No scenes found for this film. “Add scene” starts a new one from scratch.</p>
         </Card>
+      ) : !scenes.some(showScene) ? (
+        <Card span={12} well>
+          <p className="muted" style={{ margin: 0 }}>
+            {reviewFilter === 'good' ? 'No scene is marked good yet.' : 'Every scene is marked good — nothing left to work on.'}
+          </p>
+        </Card>
       ) : (
         <div className="bento" style={{ rowGap: 8 }}>
-          {scenes.map((scene, i) => (
+          {/* Filtered cards keep their real position and count, so the move
+              chevrons and the numbering still act on the whole film. */}
+          {scenes.map((scene, i) => (showScene(scene) ? (
             <SceneCard
               key={scene.id}
               scene={scene}
@@ -2853,9 +2906,11 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
               onSaved={load}
               onRerenderStart={() => setActiveRenders((n) => n + 1)}
               onRerenderDone={() => { setActiveRenders((n) => Math.max(0, n - 1)); load() }}
+              review={scene.review || ''}
+              onReview={setReview}
               initialTask={resumeTasks[scene.id]}
             />
-          ))}
+          ) : null))}
         </div>
       )}
 

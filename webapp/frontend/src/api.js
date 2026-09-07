@@ -464,6 +464,7 @@ export const api = {
   addFilmScene: (workDir, afterSceneId) => req('POST', '/films/scenes/add', { work_dir: workDir, after_scene_id: afterSceneId || 0 }),
   deleteFilmScene: (workDir, sceneId) => req('POST', '/films/scenes/delete', { work_dir: workDir, scene_id: sceneId }),
   reorderFilmScenes: (workDir, order) => req('POST', '/films/scenes/reorder', { work_dir: workDir, order }),
+  setFilmSceneReview: (workDir, sceneId, status) => req('POST', `/films/scenes/${sceneId}/review`, { work_dir: workDir, status }),
   rerenderFilmScene: (workDir, sceneId, component, instruction) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component, instruction: instruction || '' }),
   selectFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-select`, { work_dir: workDir, version_id: versionId }),
   selectFilmVideo: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/video-select`, { work_dir: workDir, version_id: versionId }),
