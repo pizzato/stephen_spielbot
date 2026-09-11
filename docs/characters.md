@@ -67,7 +67,9 @@ sentence. `gender`/`age` (set on the card, or filled by the LLM identify pass) d
 library-voice auto-cast, and together with `background` they define the character's
 **vocalist identity** — when a music video casts them as its lead singer, that identity is
 what the music model is told to sing as, so the voice on the track matches the person on
-camera (see [Singing films](performance_films.md#singing-films-the-music-video-format)). A `ref_strength` field is stored and normalized but **not consumed anywhere**
+camera (see [Singing films](performance_films.md#singing-films-the-music-video-format)).
+A music video can also **create a character from Create** (Main character → Create one):
+it is saved into this library, scoped to the film's style, then used as the lead. A `ref_strength` field is stored and normalized but **not consumed anywhere**
 (the `ReferenceLatent` node has no strength input) — it is a forward-compatible
 placeholder with no UI.
 

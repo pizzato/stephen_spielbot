@@ -113,6 +113,18 @@ export function styleTreeOrder(styles) {
   return out
 }
 
+// Catalogue characters visible to a style (mirrors app._style_characters):
+// the global pool plus anything owned by this style or an ancestor. "(none)"
+// sees only the global pool. Disabled / nameless rows are dropped — Create's
+// main-character picker lists the rest.
+export function styleCharacters(cfg, styleName) {
+  const chars = (cfg?.characters || []).filter((c) => c && (c.name || '').trim() && c.enabled !== false)
+  const noStyle = !styleName || styleName === '(none)'
+  if (noStyle) return chars.filter((c) => !(c.style || '').trim())
+  const lineage = new Set(styleLineage(cfg?.styles || [], styleName).map((s) => s.name))
+  return chars.filter((c) => !(c.style || '').trim() || lineage.has(c.style))
+}
+
 // Effective settings for `name`, or null when no such style exists (matching
 // list.find() semantics so callers keep their existing fallbacks).
 export function resolveStyle(styles, name) {

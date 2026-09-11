@@ -223,5 +223,47 @@ class PromoteScriptCharacterTests(TempConfigCase):
             app.promote_script_character(self._work_dir(), "char_missing", "Hero")
 
 
+class AddCharacterTests(TempConfigCase):
+    def test_adds_to_the_style_and_assigns_an_id(self):
+        self.write_config({
+            "characters": [], "styles": [_style("Hero")],
+            "default_style": "Hero", "characters_migrated_v2": True,
+            "characters_scoped_v3": True,
+        })
+        cfg = app.add_character(
+            "Ada Vale", description="a young woman with cropped black hair",
+            style="Hero", gender="female", age="young",
+            background="Brazilian, light Portuguese accent")
+        lib = cfg["characters"]
+        self.assertEqual(len(lib), 1)
+        self.assertEqual(lib[0]["name"], "Ada Vale")
+        self.assertTrue(lib[0]["id"].startswith("char_"))
+        self.assertEqual(lib[0]["style"], "Hero")
+        self.assertEqual(lib[0]["gender"], "female")
+        self.assertEqual(lib[0]["age"], "young")
+        self.assertIn("Portuguese", lib[0]["background"])
+
+    def test_none_style_lands_in_the_global_pool(self):
+        self.write_config({
+            "characters": [], "styles": [_style("Hero")],
+            "default_style": "Hero", "characters_migrated_v2": True,
+            "characters_scoped_v3": True,
+        })
+        cfg = app.add_character("Mascot", description="a blue robot", style=app.NO_STYLE)
+        self.assertEqual(cfg["characters"][0]["style"], "")
+
+    def test_rejects_a_blank_name_and_a_duplicate_in_scope(self):
+        self.write_config({
+            "characters": [{"name": "Ada", "description": "a singer", "style": "Hero"}],
+            "styles": [_style("Hero")],
+            "default_style": "Hero", "characters_migrated_v2": True,
+            "characters_scoped_v3": True,
+        })
+        with self.assertRaises(ValueError):
+            app.add_character("", description="x", style="Hero")
+        with self.assertRaises(ValueError):
+            app.add_character("Ada", description="another look", style="Hero")
+
+
 if __name__ == "__main__":
     unittest.main()

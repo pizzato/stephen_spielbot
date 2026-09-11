@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimate, lengthEstimateLabel, sceneBounds, fmtDuration, LEGACY_SCENE_SECS, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX } from '../components.jsx'
 import { api } from '../api.js'
-import { resolveStyle, resolveAutomation, styleTreeOrder } from '../styleUtils.js'
+import { resolveStyle, resolveAutomation, styleTreeOrder, styleCharacters } from '../styleUtils.js'
 
 // Read a picked file into a base64 data-URL for upload.
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
@@ -31,7 +31,7 @@ const PIPELINE = [
 // are appended, and render quality + audio mix fall back to the default style.
 const NO_STYLE = '(none)'
 
-export default function Create({ seed, meta, onGenerated }) {
+export default function Create({ seed, meta, setMeta, onGenerated }) {
   const voiceChoices = useMemo(() => (
     meta.voices?.length ? meta.voices : ['Default (F5-TTS)']
   ), [meta.voices])
@@ -54,6 +54,9 @@ export default function Create({ seed, meta, onGenerated }) {
     return raw ? resolveStyle(styleList, raw.name) : null
   }, [styleList, styleName, meta.config?.default_style])
   const locked = !!profile
+  const catalogueChars = useMemo(
+    () => styleCharacters(meta.config, profile ? profile.name : NO_STYLE),
+    [meta.config, profile])
   // The style's DEFAULT format (Settings → Styles → Default format): the
   // same per-style setting unattended runs film in. It only seeds the picker —
   // the format stays free to change per film.
@@ -103,6 +106,12 @@ export default function Create({ seed, meta, onGenerated }) {
   // generated: the upload IS the film's track, and the story is drafted from it.
   const [songSource, setSongSource] = useState('write')   // 'write' | 'file'
   const [songFile, setSongFile] = useState(null)
+  // Music-video main character: none / an existing catalogue character / create
+  // one into the catalogue as part of drafting. Default none — a music video
+  // has no narrator, and auto-casting a lead used to happen silently.
+  const [mainCharMode, setMainCharMode] = useState(seed?.mainCharacter ? 'existing' : 'none')
+  const [mainCharacter, setMainCharacter] = useState(seed?.mainCharacter || '')
+  const [newChar, setNewChar] = useState({ name: '', description: '', gender: '', age: '', background: '', voice: '' })
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   // An active style keeps narrator + visuals synced to it (the inputs are
@@ -120,6 +129,13 @@ export default function Create({ seed, meta, onGenerated }) {
     if (!locked && !voiceChoices.includes(voice)) setVoice(voiceChoices[0] || 'Default (F5-TTS)')
   }, [locked, voice, voiceChoices])
 
+  // Drop a main-character pick that the new style can't see. Wait until the
+  // catalogue has loaded so a Brief restore isn't cleared on the empty first paint.
+  useEffect(() => {
+    if (!mainCharacter || !Array.isArray(meta.config?.characters)) return
+    if (!catalogueChars.some((c) => c.name === mainCharacter)) setMainCharacter('')
+  }, [catalogueChars, mainCharacter, meta.config?.characters])
+
   useEffect(() => {
     if (!seed) return
     setVideoTitle(seed.title || '')
@@ -135,6 +151,13 @@ export default function Create({ seed, meta, onGenerated }) {
     if (seed.voice) setVoice(seed.voice)
     if (seed.visualStyle) setStyle(seed.visualStyle)
     if (seed.autoApprove != null) setAutoApprove(!!seed.autoApprove)
+    if (seed.mainCharacter) {
+      setMainCharMode('existing')
+      setMainCharacter(seed.mainCharacter)
+    } else if (seed.noMainCharacter || seed.format === 'song') {
+      setMainCharMode('none')
+      setMainCharacter('')
+    }
   }, [seed])
 
   // After seed applies a style name, locked profiles still own voice/visuals —
@@ -220,9 +243,37 @@ export default function Create({ seed, meta, onGenerated }) {
   // the film comes out at whatever it adds up to.
   const lengthGaveWay = Math.abs(est.minutes - (Number(minutes) || 0)) > 0.02
 
+  // Create's main-character pick: '' = none, a name = that catalogue character.
+  // "Create one" writes the character to the catalogue first, then uses it.
+  const resolveMainCharacter = async () => {
+    if (mainCharMode === 'none') return ''
+    if (mainCharMode === 'existing') {
+      const name = (mainCharacter || '').trim()
+      if (!name) throw new Error('Pick a main character, or choose No main character.')
+      return name
+    }
+    const name = (newChar.name || '').trim()
+    if (!name) throw new Error('Name the main character, or pick No main character.')
+    if (!(newChar.description || '').trim()) throw new Error('Describe the main character’s appearance.')
+    const r = await api.addCharacter({
+      name,
+      description: newChar.description.trim(),
+      style: profile ? (profile.name || '') : '',
+      gender: newChar.gender || '',
+      age: newChar.age || '',
+      background: (newChar.background || '').trim(),
+      voice: newChar.voice || '',
+    })
+    if (r.config && setMeta) setMeta((m) => ({ ...m, config: r.config }))
+    setMainCharacter(name)
+    setMainCharMode('existing')
+    return name
+  }
+
   const draftSong = async () => {
     setBusy(true); setError('')
     try {
+      const main = await resolveMainCharacter()
       const r = await api.songDraft({
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
@@ -232,6 +283,7 @@ export default function Create({ seed, meta, onGenerated }) {
         n_scenes: Number(sceneCount) || 0,
         style_name: profile ? (profile.name || '') : NO_STYLE,
         voice: songVoice,
+        main_character: main,
       })
       // The song studio is the Script screen's Song tab — hand straight off.
       onGenerated(r, { voice, resolution, autoApprove: false, queueItemId: seed?.queueItemId || '', styleName: r.style_name || profile?.name || '' })
@@ -247,12 +299,14 @@ export default function Create({ seed, meta, onGenerated }) {
     }
     setBusy(true); setError('')
     try {
+      const main = await resolveMainCharacter()
       const r = await api.songImport({
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
         n_scenes: Number(sceneCount) || 0,
         style_name: profile ? (profile.name || '') : NO_STYLE,
         voice: songVoice,
+        main_character: main,
         filename: songFile.name,
         data: await fileToDataUrl(songFile),
       })
@@ -384,15 +438,17 @@ export default function Create({ seed, meta, onGenerated }) {
                 value={style} disabled={styleLocked} onChange={(e) => setStyle(e.target.value)} />
             </Field>
 
+            {!songFmt && (
             <Field label="Narrator voice"
               hint={locked ? 'Set by the style — pick “No style” to experiment.' : undefined}>
               <select className="select" value={voice} disabled={locked} onChange={(e) => setVoice(e.target.value)}>
                 {voiceChoices.map((v) => <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>)}
               </select>
             </Field>
+            )}
 
             <Field label="Format"
-              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes. Silent = told in pictures, no narrator, with a spoken line only where a beat needs one. Music video = the story becomes a SONG — sung vocals over the whole film — while the lead character performs it on camera. Whichever you pick, the direction box can steer the balance — “mostly silent, one exchange near the end”.">
+              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes. Silent = told in pictures, no narrator, with a spoken line only where a beat needs one. Music video = the story becomes a SONG — sung vocals over the whole film — and you pick a main character (or none) instead of a narrator. Whichever you pick, the direction box can steer the balance — “mostly silent, one exchange near the end”.">
               <div className="row gap-8">
                 {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed'], ['silent', 'Silent'], ['song', 'Music video']].map(([f, lbl]) => (
                   <Button key={f} variant={format === f ? 'primary' : 'ghost'} onClick={() => setFormat(f)}>{lbl}</Button>
@@ -408,6 +464,87 @@ export default function Create({ seed, meta, onGenerated }) {
               <Check checked={musicable && music} onChange={setMusic} disabled={!musicable}
                 label="Score this film with background music" />
             </Field>
+            )}
+
+            {songFmt && (
+              <Field label="Main character"
+                hint={mainCharMode === 'none'
+                  ? 'No lead — the video can be scenery, crowds, or changing people. The song still sings; nobody is the person the camera follows.'
+                  : mainCharMode === 'create'
+                    ? 'Saved to this style’s catalogue and used as the lead the story shows singing. Name and appearance are required.'
+                    : 'The catalogue character the story shows singing. Picking one fills the song’s vocalist line from their card.'}>
+                <Segmented value={mainCharMode} onChange={setMainCharMode} options={[
+                  { value: 'none', label: 'No main character' },
+                  { value: 'existing', label: 'Existing' },
+                  { value: 'create', label: 'Create one' },
+                ]} />
+              </Field>
+            )}
+
+            {songFmt && mainCharMode === 'existing' && (
+              <Field label="Character"
+                hint={catalogueChars.length
+                  ? 'Characters this style can see — global plus this style’s own.'
+                  : 'This style has no catalogue characters yet. Create one, or pick No main character.'}>
+                <select className="select" value={mainCharacter} onChange={(e) => setMainCharacter(e.target.value)}
+                  style={{ maxWidth: 340 }}>
+                  <option value="">{catalogueChars.length ? 'Pick a character…' : 'No characters yet'}</option>
+                  {catalogueChars.map((c) => (
+                    <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
+
+            {songFmt && mainCharMode === 'create' && (
+              <div className="stack gap-14" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+                <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-start' }}>
+                  <div className="grow" style={{ minWidth: 160 }}>
+                    <Field label="Name">
+                      <input className="input" placeholder="e.g. Ada Vale"
+                        value={newChar.name} onChange={(e) => setNewChar({ ...newChar, name: e.target.value })} />
+                    </Field>
+                  </div>
+                  <div style={{ width: 120 }}>
+                    <Field label="Sex">
+                      <select className="select" value={newChar.gender}
+                        onChange={(e) => setNewChar({ ...newChar, gender: e.target.value })}>
+                        {['', 'male', 'female'].map((g) => <option key={g} value={g}>{g || 'unset…'}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <div style={{ width: 120 }}>
+                    <Field label="Age">
+                      <select className="select" value={newChar.age}
+                        onChange={(e) => setNewChar({ ...newChar, age: e.target.value })}>
+                        {['', 'child', 'young', 'adult', 'mature', 'elderly'].map((a) => (
+                          <option key={a} value={a}>{a || 'unset…'}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                </div>
+                <Field label="Appearance" hint="Look only, no name — written into every scene image so they stay consistent.">
+                  <textarea className="textarea" rows={3}
+                    placeholder="e.g. a young woman, cropped black hair, gold hoop earring, worn leather jacket"
+                    value={newChar.description}
+                    onChange={(e) => setNewChar({ ...newChar, description: e.target.value })} />
+                </Field>
+                <Field label="Background" hint="Nationality, language, accent — shapes the sung voice.">
+                  <input className="input" placeholder="e.g. Brazilian, light Portuguese accent"
+                    value={newChar.background}
+                    onChange={(e) => setNewChar({ ...newChar, background: e.target.value })} />
+                </Field>
+                <Field label="Voice" hint="Optional. Used when they speak in acted scenes; the music model still only matches a description.">
+                  <select className="select" value={newChar.voice} style={{ maxWidth: 340 }}
+                    onChange={(e) => setNewChar({ ...newChar, voice: e.target.value })}>
+                    <option value="">None — the model invents one</option>
+                    {voiceChoices.filter((v) => v !== 'Default (F5-TTS)').map((v) => (
+                      <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
             )}
 
             {songFmt && (

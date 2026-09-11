@@ -372,6 +372,66 @@ class StoryEndpointTests(TempConfigCase):
         name, desc = backend._pick_song_singer(cfg, ss, "a song about Ada")
         self.assertEqual((name, desc), ("Ada", "young female vocalist"))
 
+    def test_pick_honours_an_explicit_main_character(self):
+        cfg, ss = self._singing_cfg()
+        # Named pick outranks the brief and the singing-voice sex filter.
+        name, desc = backend._pick_song_singer(
+            cfg, ss, "a song about Ben", voice="Rob", singer="Ada")
+        self.assertEqual(name, "Ada")
+        self.assertIn("young female vocalist", desc)
+
+    def test_pick_empty_singer_means_no_main_character(self):
+        cfg, ss = self._singing_cfg()
+        name, desc = backend._pick_song_singer(cfg, ss, "a song", singer="")
+        self.assertEqual(name, "")
+        self.assertEqual(desc, "")  # no singing voice → no vocalist line either
+        name, desc = backend._pick_song_singer(
+            cfg, ss, "a song", voice="Rob", singer="")
+        self.assertEqual(name, "")
+        self.assertIn("mature male vocalist", desc)
+
+    def test_story_note_for_no_main_character(self):
+        cfg, ss = self._singing_cfg()
+        note = backend._song_singer_story_note(
+            cfg, ss, {"singer": "Ada", "vocalist": "young female vocalist",
+                      "no_main_character": True})
+        self.assertIn("NO MAIN CHARACTER", note)
+        self.assertNotIn("Ada", note)
+        self.assertNotIn("invent this one performer", note)
+        char, _ = backend._song_lead_singer(
+            cfg, ss, {"singer": "Ada", "no_main_character": True})
+        self.assertIsNone(char)
+
+    def test_song_draft_stores_an_explicit_main_character(self):
+        self._singing_cfg()
+        with mock.patch.object(backend.story_mode, "write_song",
+                               return_value={"caption": "synthpop",
+                                             "lyrics": "[Verse]\nHi",
+                                             "vocalist": "young female vocalist"}):
+            res = backend.song_draft(backend.SongDraftBody(
+                video_title="Night Drive", topic="a song", style_name="Pop",
+                main_character="Ada"))
+        song = json.loads(Path(res["work_dir"]).joinpath("song.json").read_text())
+        self.assertEqual(song["singer"], "Ada")
+        self.assertFalse(song.get("no_main_character"))
+        self.assertEqual(res["create_brief"]["main_character"], "Ada")
+        self.assertFalse(res["create_brief"]["no_main_character"])
+
+    def test_song_draft_no_main_character_skips_auto_cast(self):
+        self._singing_cfg()
+        with mock.patch.object(backend.story_mode, "write_song",
+                               return_value={"caption": "synthpop",
+                                             "lyrics": "[Verse]\nHi",
+                                             "vocalist": ""}):
+            res = backend.song_draft(backend.SongDraftBody(
+                video_title="Empty Street", topic="a song", style_name="Pop",
+                main_character=""))
+        song = json.loads(Path(res["work_dir"]).joinpath("song.json").read_text())
+        self.assertEqual(song["singer"], "")
+        self.assertTrue(song["no_main_character"])
+        self.assertTrue(res["create_brief"]["no_main_character"])
+        self.assertEqual(res["create_brief"]["main_character"], "")
+
     # ── headless chain ───────────────────────────────────────────────────────
 
     def test_do_script_generate_chains_both_phases_headless(self):

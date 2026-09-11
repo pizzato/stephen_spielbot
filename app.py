@@ -3877,6 +3877,42 @@ def promote_script_character(work_dir, char_id: str, style_name: str = "") -> di
     return load_config()
 
 
+def add_character(name: str, *, description: str = "", style: str = "",
+                  gender: str = "", age: str = "", background: str = "",
+                  voice: str = "", aliases=None) -> dict:
+    """Append a named character to the catalogue and return the new config.
+
+    *style* is the owning scope (``""`` / ``NO_STYLE`` → the global pool). A
+    name that already belongs to a character visible in that scope is
+    rejected so a music-video main-character pick can't collide with the
+    existing cast."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Character name is required.")
+    scope = "" if (style or "").strip() == NO_STYLE else (style or "").strip()
+    cfg = load_config()
+    visible = _style_characters(cfg, NO_STYLE if not scope else scope)
+    want = name.lower()
+    for c in visible:
+        names = [c.get("name") or ""] + list(c.get("aliases") or [])
+        if want in (n.strip().lower() for n in names if n):
+            raise ValueError(f"A character named “{name}” is already in this style’s catalogue.")
+    entry = {
+        "name": name,
+        "aliases": list(aliases or []),
+        "description": (description or "").strip(),
+        "style": scope,
+        "gender": (gender or "").strip().lower(),
+        "age": (age or "").strip().lower(),
+        "background": (background or "").strip(),
+        "voice": (voice or "").strip(),
+        "enabled": True,
+    }
+    cfg["characters"] = _norm_characters(list(cfg.get("characters") or []) + [entry])
+    save_config(cfg)
+    return load_config()
+
+
 def _find_script_character(chars: list[dict], char_id: str) -> dict:
     """The per-script character with *char_id*, raising ValueError if unknown."""
     char = next((c for c in chars if c.get("id") == char_id), None)

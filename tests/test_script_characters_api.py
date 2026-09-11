@@ -208,6 +208,24 @@ class ScriptCharacterApiTests(unittest.TestCase):
         self.assertNotIn("previews", calls)
         self.assertEqual(calls, ["plan", "launch"])
 
+    def test_post_characters_adds_to_the_catalogue(self):
+        r = self.client.post("/api/characters", json={
+            "name": "Ada Vale", "description": "a young woman with cropped black hair",
+            "style": "Hero", "gender": "female", "age": "young",
+            "background": "Brazilian",
+        })
+        self.assertEqual(r.status_code, 200, r.text)
+        chars = r.json()["config"]["characters"]
+        self.assertEqual(chars[0]["name"], "Ada Vale")
+        self.assertEqual(chars[0]["style"], "Hero")
+        self.assertEqual(chars[0]["gender"], "female")
+        # Duplicate in the same style is rejected.
+        r = self.client.post("/api/characters", json={
+            "name": "Ada Vale", "description": "another look", "style": "Hero"})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/characters", json={"name": "", "description": "x"})
+        self.assertEqual(r.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

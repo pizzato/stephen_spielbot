@@ -8,10 +8,10 @@ happens here.
 
 ## Style
 
-The first choice, because it decides the others. A **style** owns the narrator voice,
-visual direction, render quality, audio mix, and which channel the film
-publishes to. Pick one and the fields it owns lock to it — the hint under the picker shows
-the style's description.
+The first choice, because it decides the others. A **style** owns the narrator voice
+(except on a music video, which has none), visual direction, render quality, audio mix,
+and which channel the film publishes to. Pick one and the fields it owns lock to it — the
+hint under the picker shows the style's description.
 
 Child styles are shown indented under their parent (`↳`), and the default style is marked.
 
@@ -74,7 +74,8 @@ this film only.
 
 The cloned voice that reads the narration. Locked while a style is active. Voices come from
 the bundled LibriVox library plus anything you've recorded or uploaded in
-[Settings → Voices](settings.md#voices).
+[Settings → Voices](settings.md#voices). Hidden on a **music video** — that format has no
+narrator; pick a [main character](#main-character) instead.
 
 ## Format
 
@@ -84,7 +85,7 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 | **Dialogue** | The characters act and speak on screen. Needs characters with a portrait (a voice keeps them consistent) |
 | **Mixed** | The AI blends narration, dialogue, and silent scenes |
 | **Silent** | Told in pictures: no narrator, and a spoken line only where a beat truly needs one |
-| **Music video** | The story becomes a **song**: the AI writes tagged lyrics from the approved draft, the music model sings them over the whole film, and the lead character performs it on camera in silent acted takes. Or [bring your own song](#the-song) and the film is built around that |
+| **Music video** | The story becomes a **song**: the AI writes tagged lyrics from the approved draft, the music model sings them over the whole film, and a [main character](#main-character) you pick (or none) performs it on camera in silent acted takes. Or [bring your own song](#the-song) and the film is built around that |
 
 See [acted scenes](../performance_films.md) for what the modes actually render, and
 [singing films](../performance_films.md#singing-films-the-music-video-format) for the
@@ -122,7 +123,22 @@ mixed in at the very end, never baked into a scene, so switching it off simply l
 film with its voices and room tone. An all-dialogue film has no score at all: the acted
 takes already carry their own sound, so the toggle is disabled. A **music-video** film is
 the opposite extreme — it *is* its song, played at full volume, so the toggle disappears
-and a **Singing voice** picker takes its place.
+and a **Main character** picker plus a **Singing voice** picker take its place.
+
+## Main character
+
+Music videos only. Who the film *shows* — the person the story follows, and the lead the
+camera sees singing. A music video has no narrator, so this sits where the narrator
+picker would.
+
+| Choice | What you get |
+|---|---|
+| **No main character** | No lead. Shots may be empty, scenery, crowds, or changing people — the song still sings, but nobody is the person the camera follows |
+| **Existing** | A character from this style's [catalogue](../characters.md) (global plus the style's own). The story casts them by name, and their card fills the song's vocalist line |
+| **Create one** | Name, appearance, and optional sex / age / background / voice. Saved to this style's catalogue when you write the song, then used as the lead |
+
+Unattended music videos still auto-cast from the catalogue when nothing was picked (a
+character the brief names, else a random one of the singing voice's sex).
 
 ## The song
 
@@ -174,5 +190,5 @@ reads **1. Use this song** and uploads your file into that same tab.
 If you arrived here from a queued request, a banner says so — generating fills that
 existing queue slot and keeps its position. If you arrived via **Brief** from an existing
 film ([Script](script.md) page header, on every view), your previous settings are restored
-— including the format and, for a music video, the singing voice and scene count — and
+— including the format and, for a music video, the singing voice, main character and scene count — and
 generating creates a fresh work folder, leaving that film untouched.

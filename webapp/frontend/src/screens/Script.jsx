@@ -183,10 +183,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       const cur = songDraft ?? song
       const s = await api.saveSong(job.job_id, cur.caption, cur.lyrics, cur.direction ?? null,
-                                   cur.vocalist ?? null, cur.singer ?? null)
+                                   cur.vocalist ?? null, cur.singer ?? null, cur.no_main_character ?? null)
       setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
                 vocalist: s.vocalist ?? (cur.vocalist || ''),
                 singer: s.singer ?? (cur.singer || ''),
+                no_main_character: s.no_main_character ?? !!cur.no_main_character,
                 direction: s.direction ?? (cur.direction || '') })
       setSongDraft(null)
       syncBriefTopic(s.direction ?? cur.direction)
@@ -203,10 +204,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const cur = songDraft ?? song
       const s = await api.regenSong(job.job_id, field, cur.caption, cur.lyrics,
                                     instruction, cur.direction ?? null, cur.vocalist ?? null,
-                                    cur.singer ?? null)
+                                    cur.singer ?? null, cur.no_main_character ?? null)
       setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
                 vocalist: s.vocalist ?? (cur.vocalist || ''),
-                singer: cur.singer ?? song.singer,
+                singer: s.singer ?? (cur.singer ?? song.singer),
+                no_main_character: s.no_main_character ?? !!cur.no_main_character,
                 direction: s.direction ?? (cur.direction || '') })
       setSongDraft(null)
       syncBriefTopic(s.direction ?? cur.direction)
@@ -227,6 +229,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                                          lyrics: cur.lyrics, voice: songVoiceSel,
                                          vocalist: cur.vocalist ?? null,
                                          singer: cur.singer ?? null,
+                                         no_main_character: cur.no_main_character ?? null,
                                          add_seconds: addSeconds })
       setSongDraft(null); await refreshSong()
       setSongMsg(!addSeconds
@@ -383,6 +386,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       visualStyle: b.visual_style || '',
       format: b.format || '',
       autoApprove: b.auto_approve,
+      mainCharacter: b.main_character || '',
+      noMainCharacter: !!b.no_main_character,
       queueItemId: job.queue_item_id || null,
     })
   }
@@ -1518,25 +1523,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   value={(songDraft ?? song).caption}
                   onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
               </Field>
-              {(song.singers || []).length > 0 && (
-                <Field label="Lead singer"
-                  hint="The character the story shows singing, cast by name from the style catalogue — picking one fills the Vocalist line in from their card. Leave it on the invented performer to describe the singer freely below. A Vocalist (or Singing voice) of the other sex to the character drops them: the story then invents a performer to match the voice.">
-                  <select className="select" style={{ maxWidth: 340 }}
-                    value={(songDraft ?? song).singer || ''}
-                    onChange={(e) => {
-                      const name = e.target.value
-                      const cur = songDraft ?? song
-                      const pick = (song.singers || []).find((c) => c.name === name)
-                      setSongDraft({ ...cur, singer: name,
-                                     vocalist: pick ? (pick.vocalist || cur.vocalist || '') : (cur.vocalist || '') })
-                    }}>
-                    <option value="">An invented performer, matching the Vocalist below</option>
-                    {(song.singers || []).map((c) => (
-                      <option key={c.name} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                </Field>
-              )}
+              <Field label="Lead singer"
+                hint="The character the story shows singing. No main character keeps the video without a lead; an invented performer is described by the Vocalist line below; picking a catalogue character fills that line in from their card. A Vocalist (or Singing voice) of the other sex to the character drops them: the story then invents a performer to match the voice.">
+                <select className="select" style={{ maxWidth: 340 }}
+                  value={(songDraft ?? song).no_main_character ? '__none__' : ((songDraft ?? song).singer || '')}
+                  onChange={(e) => {
+                    const name = e.target.value
+                    const cur = songDraft ?? song
+                    if (name === '__none__') {
+                      setSongDraft({ ...cur, singer: '', no_main_character: true })
+                      return
+                    }
+                    const pick = (song.singers || []).find((c) => c.name === name)
+                    setSongDraft({ ...cur, singer: name, no_main_character: false,
+                                   vocalist: pick ? (pick.vocalist || cur.vocalist || '') : (cur.vocalist || '') })
+                  }}>
+                  <option value="__none__">No main character</option>
+                  <option value="">An invented performer, matching the Vocalist below</option>
+                  {(song.singers || []).map((c) => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Vocalist"
                 hint="Who sings — sex, age, background, voice quality. Appended to the Sound description when the track is generated, so the voice matches the singer on camera, and the story casts a performer of this sex and age. Picking a Singing voice below overrides it.">
                 <input className="input"

@@ -59,12 +59,13 @@ the format does to the render.
 - **Sound** — what the music model is told about the song (genre, tempo, mood,
   arrangement). The Vocalist below is appended to this automatically when the track is
   sung, so leave the vocalist out of the Sound itself.
-- **Lead singer** — the catalogue character the story shows singing, cast by name
-  (shown only when the style has a usable cast). Picking a character fills the Vocalist
-  line in from their card; *An invented performer* leaves the story to invent one
-  matching the Vocalist. A song is drafted with a singer already cast — one the brief
-  names, else drawn at random from the style's cast, narrowed to the sex of the Singing
-  voice when one was picked at Create.
+- **Lead singer** — who the story shows singing. *No main character* keeps the video
+  without a lead (scenery, crowds, changing people). *An invented performer* leaves the
+  story to invent one matching the Vocalist. Picking a catalogue character casts them by
+  name and fills the Vocalist line in from their card. Create already chose this
+  ([Main character](create.md#main-character)); changing it here updates the brief so
+  **Brief** restores the new pick. A Vocalist (or Singing voice) of the other sex to the
+  character drops them: the story then invents a performer to match the voice.
 - **Vocalist** — WHO sings, in one editable line: sex, age, background, voice quality
   (e.g. *"adult male vocalist, Australian"*). Filled at draft time from the lead singer,
   or by the songwriter itself when the style has no usable cast (see

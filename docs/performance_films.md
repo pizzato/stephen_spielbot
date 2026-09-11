@@ -112,10 +112,13 @@ pipeline changes in three places:
   music **caption** (genre, tempo, mood, arrangement) that becomes the film's music
   description. Both music engines sing lyrics natively; the caption reads best structured,
   and for song films it must *not* say "instrumental".
-- **One lead singer fronts it.** Before the song is written, a **lead singer is cast
-  from the style's [character catalogue](characters.md)** — a character the brief names
-  wins, otherwise one is drawn at random so a channel's videos rotate through its cast —
-  and their identity (sex, age, **background** — the character card's fields, plus their
+- **One lead singer fronts it — or none.** Create's **Main character** picker decides
+  who the film shows, instead of a narrator: an existing catalogue character, a new one
+  saved into the style's catalogue as you write the song, or **no main character** (the
+  video has no lead — scenery, crowds, changing people). Unattended runs still auto-cast
+  from the style's [character catalogue](characters.md) — a character the brief names
+  wins, otherwise one is drawn at random so a channel's videos rotate through its cast.
+  Their identity (sex, age, **background** — the character card's fields, plus their
   library voice's tone and accent) becomes the song's **vocalist** line, stored in
   `song.json` and shown as the Song tab's editable **Vocalist** field. That one line is enforced everywhere it matters: it is appended to the
   caption when the track is sung, so the voice on the track matches; the lyrics are
@@ -123,12 +126,13 @@ pipeline changes in three places:
   by name as the one performer in every singing scene, so the person shown singing is
   the person heard. A style with no usable catalogue character still gets a vocalist —
   the songwriter defines one (sex, age, background, voice quality) and the story invents
-  a matching performer. The cast follows the voice: a **Singing voice** picked at Create
-  narrows the draw to characters of its sex, and the story (draft, redraft and divide
+  a matching performer — unless Create asked for no main character, in which case the
+  story is told not to invent a lead. The cast follows the voice: a **Singing voice** picked at Create
+  narrows an auto-draw to characters of its sex, and the story (draft, redraft and divide
   alike) is written for whoever the track in use is sung as — the re-voicing, else the
   singing voice, else the Vocalist line. Change the Vocalist (or the voice) to the other
   sex and the character cast at draft time is dropped rather than cast against the voice;
-  the Song tab's **Lead singer** picker swaps in another character explicitly. Each video also dresses the singer in **one fresh outfit** chosen
+  the Song tab's **Lead singer** picker swaps in another character (or none) explicitly. Each video also dresses the singer in **one fresh outfit** chosen
   for that film — described consistently across its scenes, different film to film — so
   the catalogue portrait anchors the face, not an unchanging costume.
 - **The cast performs it.** Every scene is staged as a **performed silent take** —

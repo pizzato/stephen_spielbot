@@ -1249,10 +1249,36 @@ def voices_reading_script(body: VoiceReadingScript) -> dict:
     return {"ok": True, "text": text or canned, "language": lang}
 
 
-# ── Character reference images (consistent characters, Phase 2) ──────────────
-# Characters are a global library, identified by char_id. These persist
+# ── Character catalogue (consistent characters) ──────────────────────────────
+# Characters are a global library, identified by char_id. Mutations persist
 # immediately (mirroring voice ops) and return the fresh config; the client
 # merges the global characters list back into any staged edits.
+
+
+class CharacterAdd(BaseModel):
+    name: str
+    description: str = ""
+    style: str = ""          # "" / "(none)" = global pool; else owning style
+    gender: str = ""
+    age: str = ""
+    background: str = ""
+    voice: str = ""
+    aliases: list[str] = []
+
+
+@api.post("/api/characters")
+def characters_add(body: CharacterAdd) -> dict:
+    """Create a catalogue character (Create's music-video “create one”, or
+    a one-shot add that doesn't go through Save settings)."""
+    try:
+        cfg = gapp.add_character(
+            body.name, description=body.description, style=body.style,
+            gender=body.gender, age=body.age, background=body.background,
+            voice=body.voice, aliases=body.aliases)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _character_response(cfg)
+
 
 class CharacterImage(BaseModel):
     char_id: str
@@ -2078,6 +2104,19 @@ def _read_create_brief(wd: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _save_brief_main_character(wd: Path, singer: str, no_main_character: bool) -> None:
+    """Keep Create's Brief restore in sync with the Song tab's lead-singer pick."""
+    brief = _read_create_brief(wd)
+    if not brief:
+        return
+    name = (singer or "").strip()
+    if (brief.get("main_character") or "") == name and bool(brief.get("no_main_character")) == bool(no_main_character):
+        return
+    brief["main_character"] = name
+    brief["no_main_character"] = bool(no_main_character)
+    _write_create_brief(wd, brief)
 
 
 def _save_brief_direction(wd: Path, direction: str | None) -> None:
@@ -2966,10 +3005,17 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
             except Exception:
                 song = None
         if not (song and (song.get("lyrics") or "").strip()):
+            # Headless fallback: honour a Create brief's main-character pick
+            # when one was stored; otherwise auto-cast as before.
+            brief_singer = (
+                "" if brief.get("no_main_character")
+                else brief.get("main_character") if "main_character" in brief
+                else None)
             singer, singer_desc = _pick_song_singer(
                 cfg, ss, user_topic, video_title,
                 (ss.get("extra_instructions") or ""),
-                voice=(brief.get("voice") or ""))
+                voice=(brief.get("voice") or ""),
+                singer=brief_singer)
             try:
                 with _track_op("Writing the song", display_topic):
                     song = story_mode.write_song(story, secs, language=language,
@@ -2977,7 +3023,9 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
             except Exception as e:
                 raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
             (wd / "song.json").write_text(json.dumps(
-                {**song, "singer": singer, "created_at": time.time()}, indent=2))
+                {**song, "singer": singer,
+                 "no_main_character": brief_singer == "",
+                 "created_at": time.time()}, indent=2))
         # Each singing scene gets its WINDOW of the song and the words sung in
         # it — timed against the real generated track when one exists.
         track_secs = None
@@ -3077,6 +3125,10 @@ class SongDraftBody(BaseModel):
     style_name: str = ""
     voice: str = ""          # the SINGING voice (library name); "" = model's pick
     n_scenes: int = 0        # how many scenes to split the song into; 0 = Auto
+    # Main character the film fronts. None = auto-cast from the style catalogue
+    # (automation / older clients); "" = no main character; a name = that
+    # catalogue character.
+    main_character: str | None = None
     # The queue slot this song belongs to, when automation drafted it. Kept in
     # the create brief so the script written from the song later links back to
     # that slot rather than opening a second one.
@@ -3092,7 +3144,8 @@ def _library_voice(cfg: dict, name: str | None) -> dict | None:
                  if isinstance(v, dict) and v.get("name") == want), None)
 
 
-def _pick_song_singer(cfg: dict, ss: dict, *texts: str, voice: str = "") -> tuple[str, str]:
+def _pick_song_singer(cfg: dict, ss: dict, *texts: str, voice: str = "",
+                      singer: str | None = None) -> tuple[str, str]:
     """Cast the film's LEAD SINGER from the style's character catalogue.
 
     Returns ``(name, descriptor)`` — the character's name and their vocalist
@@ -3102,12 +3155,29 @@ def _pick_song_singer(cfg: dict, ss: dict, *texts: str, voice: str = "") -> tupl
     appended to the music caption when the track is generated, and the story
     prompts cast the named character in the singing scenes.
 
-    *voice* is the SINGING voice picked for the song (a library voice name).
-    It replaces the vocalist line at generation, so the cast has to follow it:
-    only a character of the voice's sex is cast, with the voice's own
-    tone/accent — and when the catalogue has nobody of that sex, the voice's
-    description alone is the vocalist and the story invents the performer."""
+    *singer* is the Create-screen pick: ``None`` auto-casts (automation and
+    older clients), ``""`` means no main character, and a name pins that
+    catalogue character. *voice* is the SINGING voice picked for the song
+    (a library voice name). It replaces the vocalist line at generation, so
+    an auto-cast has to follow it: only a character of the voice's sex is
+    drawn, with the voice's own tone/accent — and when the catalogue has
+    nobody of that sex, the voice's description alone is the vocalist and
+    the story invents the performer."""
     picked = _library_voice(cfg, voice)
+    if singer is not None:
+        want = singer.strip()
+        if not want:
+            return "", gapp.voice_descriptor(picked)
+        char = gapp._catalogue_character_named(cfg, ss["name"], want)
+        if not char:
+            gapp.logger.info("Song singer: %r is not in style %r catalogue — "
+                             "the story will use the name as given", want, ss["name"])
+            return want, gapp.voice_descriptor(picked)
+        desc = gapp.singer_descriptor(char, cfg, voice=picked) or gapp.voice_descriptor(picked)
+        if desc:
+            gapp.logger.info("Song singer: using %r from style %r catalogue (%s)",
+                             char.get("name"), ss["name"], desc)
+        return str(char.get("name") or want), desc
     gender = (picked or {}).get("gender") or ""
     char = gapp.pick_song_singer(cfg, ss["name"], *texts, gender=str(gender).strip().lower())
     if not char:
@@ -3138,6 +3208,8 @@ def _song_lead_singer(cfg: dict, ss: dict, song_data: dict) -> tuple[dict | None
         if desc:
             break
     desc = desc or (song_data.get("vocalist") or "").strip()
+    if song_data.get("no_main_character"):
+        return None, desc
     char = gapp._catalogue_character_named(cfg, ss["name"], song_data.get("singer") or "")
     if char is not None:
         want = gapp.vocalist_gender(desc)
@@ -3156,7 +3228,15 @@ def _song_singer_story_note(cfg: dict, ss: dict, song_data: dict) -> str:
     Whoever is singing (a catalogue character by name, else the song's own
     vocalist description — _song_lead_singer) must be the person the film
     SHOWS singing — sex and age on camera matching the sung voice — and each
-    video dresses them fresh rather than repeating the catalogue look."""
+    video dresses them fresh rather than repeating the catalogue look.
+    ``no_main_character`` is the explicit Create-screen pick: no lead, no
+    invented performer."""
+    if song_data.get("no_main_character"):
+        return (
+            "\nTHIS MUSIC VIDEO HAS NO MAIN CHARACTER — do not invent a lead "
+            "performer and do not cast anyone as the film's one singer on "
+            "camera. Shots may be empty, scenery, crowds, or changing people; "
+            "never a single named person the camera follows through the film.\n")
     char, desc = _song_lead_singer(cfg, ss, song_data)
     name = str((char or {}).get("name") or "").strip()
     if not (name or desc):
@@ -3199,7 +3279,9 @@ def _song_lyrics_story_note(song_data: dict) -> str:
 
 def _register_song_job(wd: Path, *, title: str, video_title: str, topic: str,
                        minutes: float, n_scenes: int, voice: str, ss: dict,
-                       caption: str, queue_item_id: str) -> tuple[str, dict]:
+                       caption: str, queue_item_id: str,
+                       main_character: str = "",
+                       no_main_character: bool = False) -> tuple[str, dict]:
     """Register a song-FIRST job — one that exists BEFORE any story or scenes —
     so the Script screen's Song tab (the song studio) can load it and carry the
     flow from there. Returns ``(job_id, create_brief)``.
@@ -3216,6 +3298,10 @@ def _register_song_job(wd: Path, *, title: str, video_title: str, topic: str,
         "style_name": ss["name"], "auto_approve": False,
         "format": "song", "music": True,
         "queue_item_id": (queue_item_id or "").strip(),
+        # Who fronts the video: a catalogue name, or the explicit none-flag
+        # (Brief restores the Create picker from these).
+        "main_character": (main_character or "").strip(),
+        "no_main_character": bool(no_main_character),
     }
     _write_create_brief(wd, create_brief)
     job_id = job_id_from_work_dir(wd)
@@ -3252,10 +3338,13 @@ def song_draft(body: SongDraftBody) -> dict:
     # The lead singer is cast BEFORE the song is written: the track is sung
     # from this draft's caption + vocalist and reused verbatim at render, so
     # who sings has to be settled here — not discovered from the cast later,
-    # when the vocals are already on disk.
+    # when the vocals are already on disk. Create's main-character pick
+    # (None = auto, "" = none, a name = that character) outranks the draw.
     singer, singer_desc = _pick_song_singer(cfg, ss, topic,
                                             (body.video_title or ""), extra,
-                                            voice=(body.voice or ""))
+                                            voice=(body.voice or ""),
+                                            singer=body.main_character)
+    no_main = body.main_character is not None and not (body.main_character or "").strip()
     try:
         with _track_op("Writing the song", display_topic):
             song = story_mode.write_song(
@@ -3269,12 +3358,14 @@ def song_draft(body: SongDraftBody) -> dict:
     wd = gapp._script_work_dir(title)
     song.update({"voice": (body.voice or "").strip(), "seconds": secs,
                  "title": title, "style_name": ss["name"], "singer": singer,
+                 "no_main_character": no_main,
                  "created_at": time.time()})
     (wd / "song.json").write_text(json.dumps(song, indent=2))
     job_id, create_brief = _register_song_job(
         wd, title=title, video_title=(body.video_title or "").strip(), topic=topic,
         minutes=minutes, n_scenes=body.n_scenes, voice=(body.voice or "").strip(),
-        ss=ss, caption=song["caption"], queue_item_id=body.queue_item_id)
+        ss=ss, caption=song["caption"], queue_item_id=body.queue_item_id,
+        main_character=singer, no_main_character=no_main)
     return {"work_dir": str(wd), "job_id": job_id, "title": title,
             "video_title": (body.video_title or "").strip(), "topic": topic,
             "style": "", "style_name": ss["name"], "music_desc": song["caption"],
@@ -3369,6 +3460,8 @@ class SongImportBody(BaseModel):
     caption: str = ""
     filename: str = ""
     data: str
+    # Same contract as SongDraftBody.main_character.
+    main_character: str | None = None
     queue_item_id: str = ""
 
 
@@ -3387,15 +3480,18 @@ def song_import(body: SongImportBody) -> dict:
     wd = gapp._script_work_dir(title)
     topic = (body.topic or "").strip() or title
     # An uploaded track's vocals are already baked in, but the film still needs
-    # a lead singer for the VISUALS — cast one so the story shows a consistent
-    # performer (with luck, one matching what the file sings).
+    # a lead singer for the VISUALS — Create's main-character pick (or the
+    # auto-cast, when automation omitted it) is who the story shows.
     singer, singer_desc = _pick_song_singer(cfg, ss, topic,
                                             (body.video_title or ""),
-                                            voice=(body.voice or ""))
+                                            voice=(body.voice or ""),
+                                            singer=body.main_character)
+    no_main = body.main_character is not None and not (body.main_character or "").strip()
     (wd / "song.json").write_text(json.dumps(
         {"caption": (body.caption or "").strip(), "lyrics": (body.lyrics or "").strip(),
          "voice": (body.voice or "").strip(), "title": title,
          "singer": singer, "vocalist": singer_desc,
+         "no_main_character": no_main,
          "style_name": ss["name"], "created_at": time.time()}, indent=2))
     result = _import_song_file(wd, body.data, body.filename)
     song = json.loads((wd / "song.json").read_text())
@@ -3403,7 +3499,8 @@ def song_import(body: SongImportBody) -> dict:
         wd, title=title, video_title=(body.video_title or "").strip(), topic=topic,
         minutes=round(float(result["duration"]) / 60.0, 3), n_scenes=body.n_scenes,
         voice=(body.voice or "").strip(), ss=ss, caption=song.get("caption") or "",
-        queue_item_id=body.queue_item_id)
+        queue_item_id=body.queue_item_id,
+        main_character=singer, no_main_character=no_main)
     return {"work_dir": str(wd), "job_id": job_id, "title": title,
             "video_title": (body.video_title or "").strip(), "topic": topic,
             "style": "", "style_name": ss["name"],
@@ -3426,6 +3523,7 @@ class SongGenerateBody(BaseModel):
     # The catalogue character the story casts as the singer ("" = invent a
     # performer to match the vocalist). None = keep the stored one.
     singer: str | None = None
+    no_main_character: bool | None = None
     # "Re-generate X seconds longer": added to the song's current length before
     # it is sung again, so the model has room to land an ending it was cutting
     # off. 0 = generate at the length it already has.
@@ -3554,6 +3652,10 @@ def song_generate(body: SongGenerateBody) -> dict:
         data["vocalist"] = body.vocalist.strip()
     if body.singer is not None:
         data["singer"] = body.singer.strip()
+    if body.no_main_character is not None:
+        data["no_main_character"] = bool(body.no_main_character)
+        if body.no_main_character:
+            data["singer"] = ""
     add = float(body.add_seconds or 0)
     if add and not (0.5 <= add <= _MAX_SONG_EXTEND):
         raise HTTPException(400, f"Extend by between 0.5 and {int(_MAX_SONG_EXTEND)} seconds.")
@@ -3561,6 +3663,9 @@ def song_generate(body: SongGenerateBody) -> dict:
         raise HTTPException(400, "The song has no lyrics.")
     data["updated_at"] = time.time()
     path.write_text(json.dumps(data, indent=2))
+    if body.singer is not None or body.no_main_character is not None:
+        _save_brief_main_character(
+            wd, str(data.get("singer") or ""), bool(data.get("no_main_character")))
     task_id = uuid.uuid4().hex[:12]
     _script_tasks[task_id] = {"status": "running"}
     # The length arithmetic happens in _do_song_generate, measured off the take
@@ -3780,6 +3885,7 @@ def get_job_song(job_id: str) -> dict:
             # silently, it looked like the model was picking its own singer.
             "vocalist": str(data.get("vocalist") or ""),
             "singer": str(data.get("singer") or ""),
+            "no_main_character": bool(data.get("no_main_character")),
             # The catalogue characters the singer can be swapped for, each
             # with the vocalist line picking them fills in.
             "singers": [{"name": str(c.get("name") or ""),
@@ -3871,18 +3977,24 @@ class SongUpdateBody(BaseModel):
     # that doesn't send the field must not clear it).
     vocalist: str | None = None
     # The catalogue character the story casts by name as the singer; "" makes
-    # the story invent a performer matching the vocalist. None = leave it alone.
+    # the story invent a performer matching the vocalist (unless
+    # no_main_character). None = leave it alone.
     singer: str | None = None
+    # Explicit "no lead character" from Create / the Song tab. None = leave
+    # the stored flag alone.
+    no_main_character: bool | None = None
     # The film's direction, saved into the create brief. None = leave it alone
     # (an older client that doesn't send the field must not clear it).
     direction: str | None = None
 
 
 def _save_song_text(wd: Path, caption: str, lyrics: str,
-                    vocalist: str | None = None, singer: str | None = None) -> dict:
+                    vocalist: str | None = None, singer: str | None = None,
+                    no_main_character: bool | None = None) -> dict:
     """Write the song's words and sound into song.json (and the job_config
-    mirror a rendered film re-sings from). *vocalist* / *singer* None leave the
-    stored values untouched. Returns the saved song.json."""
+    mirror a rendered film re-sings from). *vocalist* / *singer* /
+    *no_main_character* None leave the stored values untouched. Returns the
+    saved song.json."""
     path = wd / "song.json"
     try:
         data = json.loads(path.read_text())
@@ -3893,7 +4005,14 @@ def _save_song_text(wd: Path, caption: str, lyrics: str,
         data["vocalist"] = vocalist.strip()
     if singer is not None:
         data["singer"] = singer.strip()
+    if no_main_character is not None:
+        data["no_main_character"] = bool(no_main_character)
+        if no_main_character:
+            data["singer"] = ""
     path.write_text(json.dumps(data, indent=2))
+    if singer is not None or no_main_character is not None:
+        _save_brief_main_character(
+            wd, str(data.get("singer") or ""), bool(data.get("no_main_character")))
     # A film that already rendered stamped the song into job_config.json for
     # the Remix regen — keep that mirror fresh so a re-sing uses the edit.
     jc_path = wd / "job_config.json"
@@ -3919,10 +4038,12 @@ def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
         raise HTTPException(400, "The lyrics can't be empty — the song is the film's audio.")
     _save_brief_direction(wd, body.direction)
     data = _save_song_text(wd, (body.caption or "").strip(), body.lyrics.strip(),
-                           vocalist=body.vocalist, singer=body.singer)
+                           vocalist=body.vocalist, singer=body.singer,
+                           no_main_character=body.no_main_character)
     return {"ok": True, "caption": data["caption"], "lyrics": data["lyrics"],
             "vocalist": str(data.get("vocalist") or ""),
             "singer": str(data.get("singer") or ""),
+            "no_main_character": bool(data.get("no_main_character")),
             "direction": _brief_direction(wd, data)}
 
 
@@ -3941,6 +4062,7 @@ class SongRegenBody(BaseModel):
     # The lead singer as the studio shows it — saved with the re-write.
     # None = keep what song.json has.
     singer: str | None = None
+    no_main_character: bool | None = None
 
 
 @api.post("/api/jobs/{job_id}/song/regenerate")
@@ -4012,10 +4134,13 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
         except Exception as e:
             raise HTTPException(503, f"Sound re-write failed: {str(e).splitlines()[0][:200]}")
 
-    saved = _save_song_text(wd, caption, lyrics, vocalist=vocalist, singer=body.singer)
+    saved = _save_song_text(wd, caption, lyrics, vocalist=vocalist,
+                           singer=body.singer, no_main_character=body.no_main_character)
     return {"ok": True, "field": body.field,
             "caption": saved["caption"], "lyrics": saved["lyrics"],
             "vocalist": str(saved.get("vocalist") or ""),
+            "singer": str(saved.get("singer") or ""),
+            "no_main_character": bool(saved.get("no_main_character")),
             "direction": _brief_direction(wd, saved)}
 
 

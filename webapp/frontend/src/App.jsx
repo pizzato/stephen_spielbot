@@ -262,7 +262,7 @@ export default function App() {
     }
     switch (route) {
       case 'home': return <Home go={go} initialTopic={topic} setTopic={setTopic} />
-      case 'create': return <Create seed={createSeed} meta={meta} onGenerated={onScriptGenerated} />
+      case 'create': return <Create seed={createSeed} meta={meta} setMeta={setMeta} onGenerated={onScriptGenerated} />
       case 'script': return <Script job={job} setJob={setJob} meta={meta} onGenerate={onGenerationStarted} go={go} />
       case 'progress': return <Progress workDir={workDir} job={job} go={go} onOpenScript={onOpenScript} />
       case 'activity': return <Activity go={go} />
