@@ -12,6 +12,9 @@ opt-in. ``MUSIC_ENGINES`` is the same again for the background bed (per-style
 ``music_engine``): ``ace-step`` is the default, ``minimax-music3`` is opt-in.
 Unlike the image engines, video and music engines are not Apache-only — each
 entry carries its license terms and the Settings UI surfaces them.
+``PLANNED_MUSIC_ENGINES`` holds extras that are documented but not wired
+(currently YuE2); they must not be added to ``MUSIC_ENGINES`` until a
+backend exists — see ``docs/yue2_music.md``.
 
 Only commercial-usable (Apache-2.0) engines are bundled:
 - ``flux2-klein`` — the default; fast 4-step FLUX.2 (Apache-2.0, commercial OK).
@@ -619,6 +622,27 @@ MUSIC_ENGINES: dict[str, dict] = {
 
 DEFAULT_MUSIC_ENGINE = "ace-step"
 
+# Documented extras that are NOT live backends. generate_music never sees
+# these keys: resolve_music() falls through to ACE-Step, and the style
+# picker is fed only by public_list_music(). Settings → Infrastructure
+# renders this list as a "not wired" row. Do not add a workflow-less
+# entry to MUSIC_ENGINES to "reserve" the key — that would either fail
+# test_every_engine_has_a_workflow_file or pretend the model is queued.
+PLANNED_MUSIC_ENGINES: dict[str, dict] = {
+    "yue2": {
+        "key": "yue2",
+        "label": "YuE2 (MAP)",
+        "sub": "Not wired · lyrics-to-song · ~3.6B · 24 GB GPU",
+        "commercial_ok": False,
+        "license": "CC-BY-NC-4.0 (weights); Apache-2.0 (code)",
+        "license_note": (
+            "Weights are CC BY-NC 4.0 — not licensed for monetized YouTube/X. "
+            "Not a live engine: there is no ComfyUI graph and generate_music "
+            "does not call it. See docs/yue2_music.md."
+        ),
+    },
+}
+
 
 def get_music(key: str) -> dict | None:
     return MUSIC_ENGINES.get((key or "").strip())
@@ -632,3 +656,16 @@ def resolve_music(key: str) -> dict:
 def public_list_music() -> list[dict]:
     """Compact music-engine descriptors for the Settings UI."""
     return [_public_video(e) for e in MUSIC_ENGINES.values()]
+
+
+def public_list_planned_music() -> list[dict]:
+    """Extras shown in Settings as not-wired (never selectable per style)."""
+    out = []
+    for e in PLANNED_MUSIC_ENGINES.values():
+        out.append({
+            "key": e["key"], "label": e["label"], "sub": e["sub"],
+            "commercial_ok": e["commercial_ok"], "license": e["license"],
+            "license_note": e.get("license_note"),
+            "wired": False, "downloadable": False,
+        })
+    return out

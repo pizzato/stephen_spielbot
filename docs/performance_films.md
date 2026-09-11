@@ -110,8 +110,10 @@ pipeline changes in three places:
   writes the film's **song** (`song.json` in the work dir): tagged lyrics —
   `[Verse]`/`[Chorus]`/`[Bridge]` — telling the story's arc in singable lines, plus a
   music **caption** (genre, tempo, mood, arrangement) that becomes the film's music
-  description. Both music engines sing lyrics natively; the caption reads best structured,
-  and for song films it must *not* say "instrumental".
+  description. Both live music engines (ACE-Step and MiniMax Music 3) sing lyrics
+  natively; the caption reads best structured, and for song films it must *not*
+  say "instrumental". [YuE2](yue2_music.md) is a planned lyrics-to-song extra,
+  not selectable.
 - **One lead singer fronts it.** Before the song is written, a **lead singer is cast
   from the style's [character catalogue](characters.md)** — a character the brief names
   wins, otherwise one is drawn at random so a channel's videos rotate through its cast —

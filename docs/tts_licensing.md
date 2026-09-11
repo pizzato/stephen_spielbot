@@ -69,4 +69,8 @@ for the full terms.
 
 This note covers only the TTS narration weights and the singing-voice conversion above.
 The reference voice clip used for voice cloning is a separate provenance question and is
-**not** addressed here.
+**not** addressed here. Background-music licenses live in
+[`docs/models.md`](models.md#music-engines-per-style) and
+[`THIRD_PARTY_NOTICES.md`](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md);
+the planned YuE2 extra (CC-BY-NC weights, not wired) is documented in
+[`docs/yue2_music.md`](yue2_music.md).

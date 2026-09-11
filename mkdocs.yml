@@ -120,6 +120,7 @@ nav:
       - Environment variables: environment.md
       - Cluster & workers: cluster.md
       - Models: models.md
+      - YuE2 music (planned extra): yue2_music.md
       - Architecture: architecture.md
       - Durable orchestration: orchestration.md
       - Security: security.md

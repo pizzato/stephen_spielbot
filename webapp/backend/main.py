@@ -6224,10 +6224,12 @@ def list_engines() -> dict:
         "reference_engines": eng.public_list_reference(),
         "default_reference_engine": eng.DEFAULT_REFERENCE_ENGINE,
         # Background-music models — same availability rule (weights present AND,
-        # for MiniMax Music 3, the ComfyUI nodes registered).
+        # for MiniMax Music 3, the ComfyUI nodes registered). Planned extras
+        # (YuE2) are listed separately so the style picker cannot select them.
         "music_engines": eng.public_list_music(),
         "music_availability": {k: _video_avail(e) for k, e in eng.MUSIC_ENGINES.items()},
         "default_music_engine": eng.DEFAULT_MUSIC_ENGINE,
+        "planned_music_engines": eng.public_list_planned_music(),
         "hf_token_set": bool((cfg.get("hf_token") or "").strip()),
         "probed": probe_url,
     }

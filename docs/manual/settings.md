@@ -66,7 +66,9 @@ rebuild. See [Models → Video engines](../models.md#video-engines-per-style).
 ### Music models
 
 ACE-Step 1.5 and the opt-in MiniMax Music 3, downloaded the same way. See
-[Models → Music engines](../models.md#music-engines-per-style).
+[Models → Music engines](../models.md#music-engines-per-style). A **YuE2**
+row may appear as **not wired** — it is not selectable under Styles; see
+[YuE2 music engine](../yue2_music.md).
 
 ### Voice models
 

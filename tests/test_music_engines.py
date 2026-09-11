@@ -31,6 +31,27 @@ class MusicEngineRegistryTests(unittest.TestCase):
         self.assertEqual(gapp.STYLE_FIELD_TO_FLAT["music_engine"], "default_music_engine")
 
 
+class PlannedMusicEngineTests(unittest.TestCase):
+    """YuE2 is documented as an extra, not a live MUSIC_ENGINES backend."""
+
+    def test_yue2_is_planned_not_live(self):
+        self.assertNotIn("yue2", engines.MUSIC_ENGINES)
+        self.assertIsNone(engines.get_music("yue2"))
+        live = {e["key"] for e in engines.public_list_music()}
+        self.assertNotIn("yue2", live)
+        planned = {e["key"]: e for e in engines.public_list_planned_music()}
+        self.assertIn("yue2", planned)
+        self.assertFalse(planned["yue2"]["wired"])
+        self.assertFalse(planned["yue2"]["downloadable"])
+        self.assertFalse(planned["yue2"]["commercial_ok"])
+        self.assertIn("CC-BY-NC", planned["yue2"]["license"])
+
+    def test_yue2_config_key_falls_back_to_ace_step(self):
+        # A hand-edited music_engine: yue2 must not invent a missing graph.
+        self.assertEqual(engines.resolve_music("yue2")["key"], "ace-step")
+        self.assertEqual(gapp._norm_music_engine("yue2"), "ace-step")
+
+
 class MusicWorkflowTests(unittest.TestCase):
     def _generate(self, engine_key, duration=90.0):
         captured = {}
@@ -58,6 +79,12 @@ class MusicWorkflowTests(unittest.TestCase):
         classes = {n["class_type"] for n in cap["workflow"].values()}
         self.assertIn("TextEncodeAceStepAudio1.5", classes)
         self.assertEqual(cap["wait_kwargs"]["timeout"], 600)
+
+    def test_yue2_key_still_queues_the_ace_graph(self):
+        # Planned extras are not live: generate_music("yue2") is ACE-Step.
+        cap = self._generate("yue2")
+        classes = {n["class_type"] for n in cap["workflow"].values()}
+        self.assertIn("TextEncodeAceStepAudio1.5", classes)
 
     def test_minimax_graph_is_wired_to_the_minimax_nodes(self):
         cap = self._generate("minimax-music3")

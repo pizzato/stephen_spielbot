@@ -2239,6 +2239,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                         <span style={{ fontWeight: 600 }}>{e.label}</span>
                         {avail === true && <Chip tone="ok" dot>installed</Chip>}
                         {avail === false && <Chip tone="warn">not installed</Chip>}
+                        {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
                       </div>
                       <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
                       {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
@@ -2255,7 +2256,20 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </div>
                 )
               })}
-              <div className="field__hint">MiniMax Music 3 is ~14 GB per worker and needs ComfyUI ≥ v0.33.0 for its nodes — “not installed” with the weights already downloaded means the worker container needs a rebuild. It writes song-shaped tracks and takes minutes where ACE-Step takes seconds (measured on a GB10: 83 s for a 30 s bed); it also stops at 6 minutes, and a longer film loops the bed.</div>
+              {(engineInfo?.planned_music_engines || []).map((e) => (
+                <div key={e.key} className="row center between" style={{ borderTop: '1px solid var(--line)', paddingTop: 10, gap: 12 }}>
+                  <div className="grow">
+                    <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600 }}>{e.label}</span>
+                      <Chip tone="warn">not wired</Chip>
+                      {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
+                    </div>
+                    <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
+                    {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
+                  </div>
+                </div>
+              ))}
+              <div className="field__hint">MiniMax Music 3 is ~14 GB per worker and needs ComfyUI ≥ v0.33.0 for its nodes — “not installed” with the weights already downloaded means the worker container needs a rebuild. It writes song-shaped tracks and takes minutes where ACE-Step takes seconds (measured on a GB10: 83 s for a 30 s bed); it also stops at 6 minutes, and a longer film loops the bed. YuE2 is listed as a planned extra only — it is not selectable under Styles and generate_music does not call it.</div>
             </div>
           </Card>
 

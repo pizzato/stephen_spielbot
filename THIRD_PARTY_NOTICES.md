@@ -43,6 +43,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 |---|---|---|---|
 | ACE-Step 1.5 (music — **default**) + Qwen text encoders | `Comfy-Org/ace_step_1.5_ComfyUI_files` | Apache-2.0 | ✅ Yes |
 | MiniMax Music 3 (music — opt-in engine: DiT, pruned text encoder, audio VAE) | `Comfy-Org/MiniMax-Music-3` (repackaged from `MiniMaxAI/MiniMax-Music3`) | **MiniMax-Music3 Community License** (not an OSI license) | ⚠️ Yes, with conditions: a prominently displayed "MiniMax-Music3" credit on any commercial product using it, machine-generated disclosure, and separate authorization above US$20M yearly revenue. No territory restriction |
+| YuE2-3B + YuE2-Vae (music — **planned extra, not wired, not downloaded**) | `m-a-p/YuE2-3B`, `m-a-p/YuE2-Vae` ([demo](https://map-yue2.github.io/), [code](https://github.com/multimodal-art-projection/YuE)) | Weights **CC-BY-NC-4.0**; inference code Apache-2.0 | ❌ No (non-commercial). Not a live engine — see [`docs/yue2_music.md`](docs/yue2_music.md). Do not use for monetized output if a later PR wires it |
 | **OpenF5-TTS-Base** (narration — **default**) | `mrfakename/OpenF5-TTS-Base` | Apache-2.0 | ✅ Yes |
 | F5-TTS Base original (narration — opt-in) | `SWivid/F5-TTS` (`F5TTS_v1_Base`) | CC-BY-NC-4.0 | ❌ No (non-commercial) |
 | Chatterbox Multilingual (narration — 23-language option) | `ResembleAI/chatterbox` | MIT | ✅ Yes (embeds Resemble's Perth watermark — kept on purpose) |

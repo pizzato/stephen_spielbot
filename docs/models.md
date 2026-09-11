@@ -306,13 +306,15 @@ huggingface-cli download lightx2v/Minimax-h3-Turbo minimax_h3_ref2v_turbo_4step_
 
 Each style picks the model that writes its background bed under **Settings →
 Styles → Narrator & audio → Music model** (shown only when music is on); child
-styles inherit the choice like every other style field. Download either engine
-per worker from **Settings → Infrastructure → Music models**.
+styles inherit the choice like every other style field. Download the live
+engines per worker from **Settings → Infrastructure → Music models**. YuE2 is
+listed there as not-wired and is not in the style picker.
 
 | Engine | Character | License |
 |---|---|---|
 | **ACE-Step 1.5 Turbo** (default) | ~5 GB, 8 sampling steps, seconds per film. Instrumental beds from a tag list, any length | Apache-2.0 |
 | **MiniMax Music 3** (opt-in) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps. Song-shaped and higher fidelity, capped at 6 minutes. Measured on a GB10 worker: **83 s for a 30 s bed** | MiniMax-Music3 Community License |
+| **YuE2** (planned extra — **not wired**) | ~3.6B lyrics-to-song with an editable ABC plan. Weights are public; **not selectable**, not downloaded. [Plan](yue2_music.md) | CC-BY-NC-4.0 (weights) |
 
 MiniMax Music 3 notes:
 
@@ -338,6 +340,12 @@ MiniMax Music 3 notes:
   commercial product using it, and machine-generated disclosure; separate
   authorization above US$20M yearly revenue. There is no territory restriction
   (unlike MiniMax H3). The picker shows the same note.
+
+[YuE2](https://map-yue2.github.io/) is a planned lyrics-to-song extra
+(M·A·P / HKUST). Weights are on Hugging Face under **CC BY-NC 4.0**, so it
+cannot be a default for monetized channels and is **not wired**: Settings
+shows a not-wired row, the style picker does not offer it, and
+`generate_music` still runs ACE-Step. See [YuE2 music engine](yue2_music.md).
 
 ## Gated weights
 
@@ -408,6 +416,9 @@ an opt-in **non-commercial** preview. MiniMax H3 is opt-in with its own
 attribution-bearing; review it before switching a publishing style over. MiniMax
 Music 3 is opt-in under a [separate community license](#music-engines-per-style)
 — no territory restriction, but it wants a visible "MiniMax-Music3" credit.
+[YuE2](yue2_music.md) is a planned extra whose **weights are CC-BY-NC-4.0**; it
+is not selectable and must not be used for monetized output if a later PR
+wires it.
 
 Read [model licensing](tts_licensing.md) and
 [THIRD_PARTY_NOTICES.md](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)
