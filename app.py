@@ -1504,6 +1504,13 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     target = None
     if requested != NO_STYLE:
         target = next((s for s in styles if s.get("name") == requested), None)
+    if target is None and requested and requested != NO_STYLE:
+        # A non-empty name matching no style is a stale reference (e.g. a job
+        # stamped before a style was renamed/split by the style-hierarchy
+        # refactor) rather than the normal "use the default style" case —
+        # silently substituting the default style's channel/settings here
+        # previously misrouted a published video to the wrong YouTube channel.
+        logger.warning("style_settings: unknown style %r, falling back to default_style", requested)
     if target is None:
         target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
                       styles[0] if styles else None)
