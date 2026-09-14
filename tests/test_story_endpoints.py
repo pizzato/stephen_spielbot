@@ -768,6 +768,45 @@ class StoryEndpointTests(TempConfigCase):
 
     # ── automation auto-critic ───────────────────────────────────────────────
 
+    def test_music_video_manual_critic_preserves_script_and_history(self):
+        job = self._divided_job(4)
+        wd = Path(job["work_dir"])
+        (wd / "song.json").write_text(json.dumps({"lyrics": "[Verse]\nHello"}))
+        script_before = (wd / "script.json").read_bytes()
+        report = wd / "critic.json"
+        report.write_text('{"passes": []}')
+        with mock.patch.object(backend.story_mode, "critique_scenes") as crit, \
+             mock.patch.object(backend, "_apply_critic_ops") as apply:
+            backend._run_critic_task("music-critic-test", job["job_id"], backend.CriticRunBody())
+        task = backend._script_tasks.pop("music-critic-test")
+        self.assertEqual(task["status"], "error")
+        self.assertIn("disabled for music videos", task["error"])
+        crit.assert_not_called()
+        apply.assert_not_called()
+        self.assertEqual((wd / "script.json").read_bytes(), script_before)
+        self.assertEqual(report.read_text(), '{"passes": []}')
+        self.assertFalse((wd / "script_versions").exists())
+
+    def test_music_video_auto_critic_is_skipped(self):
+        body = backend.GenerateScriptBody(video_title="Song QC", topic="t", n_scenes=4,
+                                          style_name="Plain", format="song", auto_critic=True)
+        scenes = _fake_scenes(4)
+        for scene in scenes:
+            scene.mode = "silent"
+        with stub_script(scenes), \
+             mock.patch.object(backend, "_pick_song_singer", return_value=("", "")), \
+             mock.patch.object(backend.story_mode, "write_song",
+                               return_value={"lyrics": "[Verse]\nHello", "caption": "folk"}), \
+             mock.patch.object(backend, "_do_critic_run") as crit:
+            res = backend._do_script_generate(body)
+        crit.assert_not_called()
+        self.assertEqual(len(res["scenes"]), 4)
+        self.assertTrue(all(s["singing"] for s in res["scenes"]))
+        windows = [s["song_window"] for s in res["scenes"]]
+        self.assertEqual(windows[0][0], 0)
+        self.assertTrue(all(a[1] == b[0] for a, b in zip(windows, windows[1:])))
+        self.assertFalse((Path(res["work_dir"]) / "critic.json").exists())
+
     def test_auto_critic_runs_before_result_when_flagged(self):
         body = backend.GenerateScriptBody(video_title="Auto QC", topic="t", n_scenes=3,
                                           style_name="Plain", auto_critic=True)

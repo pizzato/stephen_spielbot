@@ -2512,7 +2512,9 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     # Automation QC (youtube_auto_critic): run the critic now, BEFORE the queue
     # attach below can auto-start a render — its edits must land while nothing
     # is rendering. Best-effort: a critic failure never fails script creation.
-    if body.auto_critic:
+    # Song scenes occupy fixed track windows; critic cuts/reorders would move
+    # the pictures against the uninterrupted soundtrack used in the final mix.
+    if body.auto_critic and create_brief["format"] != "song" and not _is_music_video(work_dir):
         p = gapp.automation_settings(cfg, ss["name"])["auto_critic_passes"]
         try:
             _do_critic_run(job_id, CriticRunBody(passes=p or 1, until_converged=(p == 0)))
@@ -4369,6 +4371,8 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     a background task."""
     wd = _job_wd_or_404(job_id)
     _, _, _, style_name, brief = _script_source_meta(job_id, wd.name)
+    if _is_music_video(wd) or brief.get("format") == "song":
+        raise HTTPException(400, "The script critic is disabled for music videos to preserve song timing.")
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, style_name)
     # Rewrites must keep the script's own scene word caps (the plan it was

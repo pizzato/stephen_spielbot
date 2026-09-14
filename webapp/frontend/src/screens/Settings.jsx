@@ -3452,7 +3452,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </div>
               )}
               <div>
-                <Check checked={!!av.auto_critic} onChange={(v) => setAuto('auto_critic', v)} label="Run the script critic on every automation-written script — QC for consistency, repetition and engagement (may rewrite, delete, add or reorder scenes) before it can render" />
+                <Check checked={!!av.auto_critic} onChange={(v) => setAuto('auto_critic', v)} label="Run the script critic on automation-written scripts except music videos — QC for consistency, repetition and engagement (may rewrite, delete, add or reorder scenes) before rendering" />
                 <AutoVal k="auto_critic" />
               </div>
               {!!av.auto_critic && (

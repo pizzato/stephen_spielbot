@@ -103,8 +103,12 @@ one clip either way, rather than paying the join's overhead for nothing.
 
 ### Singing films (the Music-video format)
 
-The **Music video** format in [Create](manual/create.md#format) makes the film a song. The
-pipeline changes in three places:
+The **Music video** format in [Create](manual/create.md#format) makes the film a song.
+The script critic is disabled for this format, including automatic passes, so it cannot
+delete or reorder scenes and break their timing against the song. The lyrics-only song
+critic remains available before song generation.
+
+The pipeline changes in three places:
 
 - **The story becomes lyrics.** After you approve the prose draft, the divide step also
   writes the film's **song** (`song.json` in the work dir): tagged lyrics —
