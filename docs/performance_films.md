@@ -252,9 +252,13 @@ arrangement is — a distorted-guitar intro used to read as singing on the mix-l
 measurement, and the lead mouthed a verse over it. The lyric lines are
 then paced through the **singing** rather than through the running time, and each scene
 is told two things — the words its own slice actually contains, and when inside its clip
-a voice is heard. That second part is what keeps a mouth shut over an intro: a song
-opening with a 7.5-second instrumental used to have the lead mouthing a verse to silence
-while the whole film ran a scene ahead of its own song. A track with no bare-instrumental
+a voice is heard. A lyric line that the seam cuts through is truncated to the words
+that fall in the window (a take that opens on the last word of "I love you" is told
+"you" from 0s, not the whole line); phrase start/end stay the unit the prompt and
+captions use, with word timestamps only deciding the split. That second part is what
+keeps a mouth shut over an intro: a song opening with a 7.5-second instrumental used
+to have the lead mouthing a verse to silence while the whole film ran a scene ahead
+of its own song. A track with no bare-instrumental
 stretch is treated as sung end to end, and if the measurement cannot be made the older
 proportional split is used unchanged. Without demucs, the coarser mix-level split stands:
 it finds intros and breaks on tracks whose bed is quieter than the voice, but cannot
@@ -311,7 +315,9 @@ grows past the 12-second single-clip cap, and a seam with no line boundary in re
 falls back to the even grid — takes planned right at the 5-second floor have no slack
 and keep the grid exactly. When the lyric lines were whisper-aligned (above), the seams
 cut between *measured* lines; when the alignment is off or fell back to the paced
-estimate, a cut can still graze a word if the delivery is very uneven. Cuts that land in
+estimate, a cut can still graze a word if the delivery is very uneven. A seam that
+still lands inside a line no longer hands the whole line to both takes: each side
+keeps only the words whose sung midpoint falls in its window. Cuts that land in
 instrumental breaks are exact either way.
 
 **Every cut lands on a frame.** The seams are then snapped forward to the film's 24 fps
