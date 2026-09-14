@@ -1303,6 +1303,31 @@ class FrameGridTests(unittest.TestCase):
         self.assertEqual(song_timing.lines_in_window(["one", "two"], spans,
                                                      5.02, 10.0), ["two"])
 
+    def test_a_cut_phrase_keeps_only_the_words_in_the_window(self):
+        from pipeline import song_timing
+        # "I love you" is sung 8–11s; the seam at 10s cuts through "you".
+        lines = ["I love you", "more than this"]
+        spans = [(8.0, 11.0), (12.0, 15.0)]
+        words = [[("I", 8.0, 9.0), ("love", 9.0, 10.0), ("you", 10.0, 11.0)],
+                 [("more", 12.0, 13.0), ("than", 13.0, 14.0), ("this", 14.0, 15.0)]]
+        first, first_t = song_timing.window_phrases(lines, spans, 0.0, 10.0,
+                                                    word_times=words)
+        second, second_t = song_timing.window_phrases(lines, spans, 10.0, 20.0,
+                                                      word_times=words)
+        self.assertEqual(first, ["I love"])
+        self.assertEqual(first_t, [[8.0, 10.0]])
+        self.assertEqual(second, ["you", "more than this"])
+        self.assertEqual(second_t[0], [0.0, 1.0])
+        self.assertEqual(second[0], "you")
+
+    def test_a_whole_line_in_the_window_keeps_its_wording(self):
+        from pipeline import song_timing
+        lines = ["I love you"]
+        spans = [(2.0, 5.0)]
+        texts, times = song_timing.window_phrases(lines, spans, 0.0, 10.0)
+        self.assertEqual(texts, ["I love you"])
+        self.assertEqual(times, [[2.0, 5.0]])
+
 
 class VoicedRegionTests(unittest.TestCase):
     """What counts as singing: the level split, held to the words actually
@@ -1528,6 +1553,23 @@ class LyricAlignTests(unittest.TestCase):
                                             regions=[(4.0, 13.0)])
         self.assertEqual(spans[2], (10.0, 12.8))
 
+    def test_line_word_times_dates_each_word(self):
+        from pipeline import lyric_align
+        timed = lyric_align.line_word_times(self.LINES, self._words())
+        self.assertEqual(timed[0], [("one", 4.0, 4.8), ("two", 5.0, 5.8),
+                                    ("three", 6.0, 6.8)])
+        self.assertEqual(timed[2][-1], ("nine", 12.0, 12.8))
+
+    def test_a_garbled_word_is_interpolated_inside_its_line(self):
+        from pipeline import lyric_align
+        # "five" never transcribed; it takes the gap between "four" and "six".
+        words = [w for w in self._words() if w[0] != "five"]
+        timed = lyric_align.line_word_times(self.LINES, words)
+        self.assertEqual(timed[1][0], ("four", 7.0, 7.8))
+        self.assertEqual(timed[1][2], ("six", 9.0, 9.8))
+        self.assertAlmostEqual(timed[1][1][1], 7.8, places=1)
+        self.assertAlmostEqual(timed[1][1][2], 9.0, places=1)
+
     def test_slices_use_aligned_spans_when_the_option_is_on(self):
         # All four lines measured inside the first 8s of a 20s track: with
         # alignment on, scene 1 carries every word and scene 2 stays silent;
@@ -1557,6 +1599,35 @@ class LyricAlignTests(unittest.TestCase):
         self.assertIn("four", on[0].metadata["sings"])
         self.assertEqual(on[1].metadata["sings"], "")
         self.assertIn("four", off[1].metadata["sings"])
+
+    def test_a_scene_opening_mid_phrase_is_told_only_the_rest(self):
+        # The user's bug: "I love you" straddles the seam at 10s, "you" starts
+        # there. Scene 2 must be told "you" from 0s, not the whole line.
+        lyrics = "[Verse]\nI love you\nmore than this"
+        words = [("I", 8.0, 9.0), ("love", 9.0, 10.0), ("you", 10.0, 11.0),
+                 ("more", 12.0, 13.0), ("than", 13.0, 14.0), ("this", 14.0, 15.0)]
+        scenes = [Scene(id=i, title="t", image_prompt="i", video_prompt="v",
+                        narration="", mode="silent", duration=10.0,
+                        metadata_extra={"mode": "silent", "singing": True,
+                                        "cast": ["Ada"]})
+                  for i in (1, 2)]
+        with unittest.mock.patch("pipeline.song_timing.measure_regions",
+                                 return_value=[(0.0, 20.0)]), \
+             unittest.mock.patch("pipeline.song_timing.vocal_stem",
+                                 return_value=Path("stem.wav")), \
+             unittest.mock.patch("pipeline.song_timing.snap_cuts",
+                                 return_value=[0.0, 10.0, 20.0]), \
+             unittest.mock.patch("pipeline.lyric_align.word_times",
+                                 return_value=words), \
+             unittest.mock.patch("pipeline.lyric_align._words_in_slice",
+                                 return_value=[]):
+            story.assign_song_slices(scenes, lyrics, total_seconds=20.0,
+                                     track=Path("song.wav"), align_lyrics=True)
+        first, second = scenes[0].metadata["sings"], scenes[1].metadata["sings"]
+        self.assertEqual(first, "I love")
+        self.assertTrue(second.startswith("you"))
+        self.assertNotIn("I love you", second)
+        self.assertEqual(scenes[1].metadata["line_times"][0][0], 0.0)
 
 
 class SongSliceTimingTests(unittest.TestCase):

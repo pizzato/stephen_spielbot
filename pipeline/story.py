@@ -815,6 +815,7 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     # told to mime words the sheet has none of; the transcription below throws
     # those regions out. Without it (no whisper install) the split stands.
     sung = regions
+    word_times = None
     if regions and align_lyrics:
         # The option (song_align_lyrics): whisper-align the KNOWN lyric sheet
         # against the cached vocal stem so each line's time is measured, not
@@ -827,6 +828,9 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
                                               language=language)
             spans = lyric_align.align_lines(stem, lines, language=language,
                                             regions=regions, words=words) or []
+            if words:
+                word_times = lyric_align.line_word_times(
+                    lines, words, regions=regions)
     if not spans:
         spans = _song_timing.line_times(regions, len(lines)) if regions else []
 
@@ -834,13 +838,16 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         """What is sung in [t0, t1) — measured off the track when we can,
         and the proportional guess (*lo*:*hi*) when we cannot."""
         if spans:
-            extra["sings"] = "\n".join(
-                _song_timing.lines_in_window(lines, spans, t0, t1)).strip()
+            sung_lines, sung_times = _song_timing.window_phrases(
+                lines, spans, t0, t1, word_times=word_times)
+            extra["sings"] = "\n".join(sung_lines).strip()
             extra["vocal_ranges"] = _song_timing.window_vocals(sung, t0, t1)
-            # When each ``sings`` line is heard, relative to the clip's own
+            # When each ``sings`` phrase is heard, relative to the clip's own
             # start — the caption track (pipeline/captions.py) dates its cues
-            # off these instead of pacing the lines evenly.
-            extra["line_times"] = _song_timing.window_lines(spans, t0, t1)
+            # off these instead of pacing the lines evenly. A line the seam
+            # cuts through is truncated to the words this window actually
+            # holds, so a take that opens on "you" is not told "I love you".
+            extra["line_times"] = sung_times
         else:
             extra["sings"] = "\n".join(lines[lo:hi]).strip()
 

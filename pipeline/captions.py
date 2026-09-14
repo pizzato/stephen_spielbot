@@ -320,10 +320,11 @@ def build_srt(work_dir: Path, lang: str | None = None,
         mode = str(meta.get("mode") or "narration")
         if meta.get("singing"):
             lyric = _lyric_cues(meta, cursor, dur)
-            # A line straddling the seam between two takes rides BOTH scenes'
-            # lyric slices (lines_in_window hands it to each side), which
-            # would caption it twice back to back — extend the standing cue
-            # across the seam instead.
+            # A line the seam used to hand to both takes (the full wording on
+            # each side) would caption twice back to back — extend the standing
+            # cue across the seam instead. window_phrases now splits at the
+            # word, so the two cues usually differ; identical leftovers still
+            # merge.
             if (lyric and cues and lyric[0][2] == cues[-1][2]
                     and lyric[0][0] - cues[-1][1] < 0.5):
                 cues[-1] = (cues[-1][0], lyric[0][1], cues[-1][2])

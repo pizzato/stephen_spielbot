@@ -339,6 +339,51 @@ def lines_in_window(lines: list[str], spans: list[tuple[float, float]],
             if min(end, t1) - max(start, t0) > 1.0 / FPS]
 
 
+def window_phrases(lines: list[str], spans: list[tuple[float, float]],
+                   t0: float, t1: float, *,
+                   word_times: list[list[tuple[str, float, float]]] | None = None,
+                   ) -> tuple[list[str], list[list[float]]]:
+    """The phrases sung in [*t0*, *t1*), split at word boundaries when a line
+    straddles the window.
+
+    Returns ``(texts, relative_times)`` in lockstep — one pair per phrase the
+    window actually holds. A line fully inside keeps its original wording; a
+    line the seam cuts through keeps only the words whose sung midpoint falls
+    in the window, dated from the first of those (so a scene that opens on the
+    last word of "I love you" is told "you" from 0s, not the whole line).
+    *word_times* is per-line ``[(word, start, end)]`` from lyric_align; without
+    it each line's words are paced evenly through its span."""
+    texts: list[str] = []
+    times: list[list[float]] = []
+    n = min(len(lines), len(spans))
+    for i in range(n):
+        line = str(lines[i])
+        start, end = spans[i]
+        tokens = [tok for tok in line.split() if tok]
+        if word_times and i < len(word_times) and word_times[i]:
+            words = list(word_times[i])
+        elif tokens:
+            width = max(end - start, 0.2 * len(tokens))
+            per = width / len(tokens)
+            words = [(tok, start + j * per, start + (j + 1) * per)
+                     for j, tok in enumerate(tokens)]
+        else:
+            continue
+        kept = [(w, a, b) for w, a, b in words
+                if t0 <= (a + b) / 2 < t1]
+        if not kept:
+            continue
+        lo = max(min(a for _, a, _ in kept), t0)
+        hi = min(max(b for _, _, b in kept), t1)
+        if hi - lo <= 1.0 / FPS:
+            continue
+        kept_words = [w for w, _, _ in kept]
+        text = line if kept_words == tokens else " ".join(kept_words)
+        texts.append(text)
+        times.append([round(lo - t0, 2), round(hi - t0, 2)])
+    return texts, times
+
+
 def merge_ranges(spans: list, min_gap: float = 1.5) -> list[list[float]]:
     """The union of the given [start, end] spans, gaps shorter than *min_gap*
     closed — the same breath rule ``vocal_regions`` applies to the measured

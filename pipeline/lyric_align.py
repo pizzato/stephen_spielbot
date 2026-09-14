@@ -160,6 +160,101 @@ def _unheard(start: float, end: float,
     return [(start, min(lo, end)), (max(hi, start), end)]
 
 
+def _match(lines: list[str], words: list[tuple[str, float, float]],
+           regions: list[tuple[float, float]] | None = None,
+           ) -> tuple[float, list[list[tuple[str, float | None, float | None]]],
+                      list[tuple[str, float, float]]]:
+    """Match the lyric sheet against the (region-gated) transcript.
+
+    Returns ``(ratio, per_line, transcript)``. *per_line[i]* is each original
+    lyric word of line *i* with its matched (start, end), or Nones when that
+    word was not in the transcript. *transcript* is the gated
+    ``(norm, t0, t1)`` list used for matching."""
+    if regions:
+        words = [w for w in words
+                 if any(a - _REGION_SLACK <= (w[1] + w[2]) / 2 <= b + _REGION_SLACK
+                        for a, b in regions)]
+    transcript = [(_norm_word(w), t0, t1) for w, t0, t1 in words if _norm_word(w)]
+    lyric: list[tuple[int, str]] = []  # (line index, original word)
+    for i, line in enumerate(lines):
+        lyric.extend((i, w) for w in str(line).split() if _norm_word(w))
+    per_line: list[list[tuple[str, float | None, float | None]]] = [
+        [] for _ in lines]
+    if not transcript or not lyric:
+        return 0.0, per_line, transcript
+    times: list[tuple[float, float] | None] = [None] * len(lyric)
+    matcher = difflib.SequenceMatcher(
+        a=[_norm_word(w) for _, w in lyric],
+        b=[w for w, _, _ in transcript], autojunk=False)
+    matched = 0
+    for block in matcher.get_matching_blocks():
+        for k in range(block.size):
+            times[block.a + k] = (transcript[block.b + k][1],
+                                  transcript[block.b + k][2])
+            matched += 1
+    for (line_idx, word), t in zip(lyric, times):
+        if t is None:
+            per_line[line_idx].append((word, None, None))
+        else:
+            per_line[line_idx].append((word, t[0], t[1]))
+    return matched / len(lyric), per_line, transcript
+
+
+def _fill_untimed(words: list[list]) -> None:
+    """Give unmatched words in a line the gap between their matched neighbours."""
+    timed = [i for i, w in enumerate(words) if w[1] is not None]
+    if not timed:
+        return
+    durs = [words[i][2] - words[i][1] for i in timed
+            if words[i][2] is not None and words[i][2] > words[i][1]]
+    dur = (sum(durs) / len(durs)) if durs else 0.3
+    end = words[timed[0]][1]
+    for j in range(timed[0] - 1, -1, -1):
+        words[j][2] = end
+        words[j][1] = end - dur
+        end = words[j][1]
+    start = words[timed[-1]][2]
+    for j in range(timed[-1] + 1, len(words)):
+        words[j][1] = start
+        words[j][2] = start + dur
+        start = words[j][2]
+    for a, b in zip(timed, timed[1:]):
+        n = b - a - 1
+        if n <= 0:
+            continue
+        gap0, gap1 = words[a][2], words[b][1]
+        width = max(gap1 - gap0, 0.2 * n) / n
+        for k in range(n):
+            i = a + 1 + k
+            words[i][1] = gap0 + k * width
+            words[i][2] = gap0 + (k + 1) * width
+
+
+def line_word_times(lines: list[str],
+                    words: list[tuple[str, float, float]] | None, *,
+                    regions: list[tuple[float, float]] | None = None,
+                    ) -> list[list[tuple[str, float, float]]] | None:
+    """Each lyric line's words with their sung times, or None when the match
+    is too weak to trust.
+
+    A word whisper garbled is interpolated between its matched neighbours
+    so a line straddling a scene seam can be split at the words it actually
+    carries. A line no word matched comes back empty — the caller then
+    splits it by its line span instead."""
+    if not words:
+        return None
+    ratio, per_line, _ = _match(lines, words, regions)
+    if not lines or ratio < _MIN_MATCH:
+        return None
+    out: list[list[tuple[str, float, float]]] = []
+    for ws in per_line:
+        filled = [[w, t0, t1] for w, t0, t1 in ws]
+        _fill_untimed(filled)
+        out.append([(w, round(float(t0), 2), round(float(t1), 2))
+                    for w, t0, t1 in filled if t0 is not None and t1 is not None])
+    return out
+
+
 def align_lines(stem: Path, lines: list[str], *, language: str = "",
                 regions: list[tuple[float, float]] | None = None,
                 words: list[tuple[str, float, float]] | None = None,
@@ -178,29 +273,15 @@ def align_lines(stem: Path, lines: list[str], *, language: str = "",
         words = word_times(stem, language)
     if words is None:
         return None
-    if regions:
-        words = [w for w in words
-                 if any(a - _REGION_SLACK <= (w[1] + w[2]) / 2 <= b + _REGION_SLACK
-                        for a, b in regions)]
-    transcript = [(_norm_word(w), t0, t1) for w, t0, t1 in words if _norm_word(w)]
-    lyric: list[tuple[int, str]] = []  # (line index, normalized word)
-    for i, line in enumerate(lines):
-        lyric.extend((i, _norm_word(w)) for w in line.split() if _norm_word(w))
-    if not transcript or not lyric:
+    ratio, per_line, transcript = _match(lines, words, regions)
+    lyric_n = sum(len(ws) for ws in per_line)
+    if not transcript or lyric_n == 0:
         return None
-
-    matcher = difflib.SequenceMatcher(
-        a=[w for _, w in lyric], b=[w for w, _, _ in transcript], autojunk=False)
     found: dict[int, list[float]] = {}
-    matched = 0
-    for block in matcher.get_matching_blocks():
-        for k in range(block.size):
-            line_idx = lyric[block.a + k][0]
-            t0, t1 = transcript[block.b + k][1], transcript[block.b + k][2]
-            span = found.setdefault(line_idx, [t0, t1])
-            span[0], span[1] = min(span[0], t0), max(span[1], t1)
-            matched += 1
-    ratio = matched / len(lyric)
+    for i, ws in enumerate(per_line):
+        timed = [(a, b) for _, a, b in ws if a is not None]
+        if timed:
+            found[i] = [min(a for a, _ in timed), max(b for _, b in timed)]
     if ratio < _MIN_MATCH:
         logger.info("Lyric alignment matched only %.0f%% of the words — "
                     "keeping the energy-paced estimate", ratio * 100)
