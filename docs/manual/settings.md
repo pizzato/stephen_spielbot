@@ -427,7 +427,9 @@ Per style (see above), or globally as the baseline.
   [AI ideas](ideas.md) screen still offers it
 - **Run the script critic on every automation-written script** — QC for consistency,
   repetition, and engagement before it can render. It may rewrite, delete, add, or reorder
-  scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**
+  scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**. Music videos always
+  skip the script critic to preserve song timing; the separate song critic below
+  remains available
 - **Default format** — set per style in the [Styles tab](#script-content); a style's
   scope here just shows its resolved default and links there. The Global scope keeps a
   picker for the baseline — what a style films unless it sets its own. Choosing

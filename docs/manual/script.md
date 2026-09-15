@@ -380,7 +380,11 @@ In the Scenes view header: pick **1, 2, 3, 5 passes** or **Until stable**, then
 engagement, and may rewrite, delete, add, or reorder scenes. Its verdict appears above the
 scenes when it finishes.
 
-Automation can run the critic on every auto-written script — see
+The script critic is disabled for **Music video** scripts, both manually and in
+automation, to preserve each scene's timing against the song. The separate song
+critic can still review lyrics before the song is generated.
+
+Automation can run the critic on other auto-written scripts — see
 [Settings → Automation](settings.md#automation).
 
 ## Script history

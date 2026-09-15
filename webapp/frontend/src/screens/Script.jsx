@@ -138,6 +138,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // A song film's song (music-video format): caption + tagged lyrics the music
   // model sings. 404 for every other film — the tab simply doesn't appear.
   const [song, setSong] = useState(null)
+  const musicVideo = !!song || job?.create_brief?.format === 'song'
+    || (job?.scenes || []).some((s) => s.singing)
   const [songDraft, setSongDraft] = useState(null)   // {caption, lyrics} while editing
   const [songMsg, setSongMsg] = useState('')
   const [songVoiceSel, setSongVoiceSel] = useState('')  // "Sing this as" voice
@@ -1432,7 +1434,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           )}
           {view === 'scenes' && job && (
             <>
-              <select className="select" value={criticPasses} disabled={criticBusy}
+              <select className="select" value={criticPasses} disabled={criticBusy || musicVideo}
                 onChange={(e) => setCriticPasses(e.target.value)}
                 style={{ width: 130 }} title="How many critic passes to run">
                 <option value="1">1 pass</option>
@@ -1443,7 +1445,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               </select>
               <Button variant="ghost" icon="palette" disabled={!!busy} onClick={openRestyle}
                 title="Keep everything and change only the visual style — prompts are rewritten and the old-look images retired">Restyle</Button>
-              <Button variant="ghost" icon="gavel" disabled={criticBusy || busy === 'generate'}
+              <Button variant="ghost" icon="gavel" disabled={musicVideo || criticBusy || busy === 'generate'}
+                title={musicVideo ? 'The script critic is disabled for music videos to preserve song timing.' : undefined}
                 onClick={runCritic}>{criticBusy ? 'Critiquing…' : 'Run critic'}</Button>
               <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>

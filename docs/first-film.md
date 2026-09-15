@@ -70,7 +70,8 @@ Two whole-script tools are worth knowing on day one:
 
 - **Run critic** — an LLM editor reads the entire script for consistency, repetition, and
   engagement, and may rewrite, delete, add, or reorder scenes. Pick the number of passes,
-  or *Until stable*. Its verdict appears above the scenes.
+  or *Until stable*. Its verdict appears above the scenes. Disabled for music videos
+  to preserve scene timing against the song, including in automation.
 - **Script history** — every critic pass and restore point is a snapshot you can roll back
   to.
 
