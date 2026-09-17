@@ -45,7 +45,7 @@
       "timesignature": "4",
       "language": "en",
       "keyscale": "C minor",
-      "generate_audio_codes": true,
+      "generate_audio_codes": false,
       "cfg_scale": 2.0,
       "temperature": 0.85,
       "top_p": 0.9,
@@ -63,7 +63,7 @@
     "class_type": "KSampler",
     "inputs": {
       "model": ["4", 0],
-      "positive": ["6", 0],
+      "positive": ["13", 0],
       "negative": ["7", 0],
       "latent_image": ["12", 0],
       "seed": "{{SEED}}",
@@ -101,6 +101,13 @@
       "samples": ["11", 0],
       "keep_seconds": "{{KEEP_SECONDS}}",
       "fade_seconds": 0.5
+    }
+  },
+  "13": {
+    "class_type": "ReferenceTimbreAudio",
+    "inputs": {
+      "conditioning": ["6", 0],
+      "latent": ["11", 0]
     }
   }
 }

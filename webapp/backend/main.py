@@ -3428,9 +3428,9 @@ class SongGenerateBody(BaseModel):
     # The catalogue character the story casts as the singer ("" = invent a
     # performer to match the vocalist). None = keep the stored one.
     singer: str | None = None
-    # "Re-generate X seconds longer": added to the song's current length before
-    # it is sung again, so the model has room to land an ending it was cutting
-    # off. 0 = generate at the length it already has.
+    # "Re-generate X seconds longer": added to the song's current length so the
+    # model has room to land an ending it was cutting off. The take in use is
+    # kept and continued, not sung again. 0 = generate at the length it already has.
     add_seconds: float = 0
 
 
@@ -3447,13 +3447,13 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     here is exactly what plays under the film. Each generation is kept in the
     music history for comparison.
 
-    *add_seconds* re-generates the take marked "In use" that much longer — a
-    repaint extend: the current audio survives verbatim and only the added tail
-    is generated, so the song stays the same. That needs the engine's extend
-    graph on the worker (ACE-Step + the AudioLatentExtendMask node); without
+    *add_seconds* continues the take marked "In use" that much longer: the
+    current audio is the model's context and is kept verbatim, and only the
+    added tail is generated. That needs the engine's extend graph on the
+    worker (ACE-Step + AudioLatentExtendMask + ReferenceTimbreAudio); without
     it this falls back to a fresh full-length take, flagged ``extended: False``
     so the UI can say which one happened."""
-    from pipeline.assembler import _get_duration, _resolve_media_tool
+    from pipeline.assembler import _get_duration, _resolve_media_tool, keep_audio_head
     from pipeline.comfyui import generate_music, music_engine_can_extend
     from pipeline.worker_pool import WorkerPool
 
@@ -3512,6 +3512,12 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     finally:
         pool.release(url)
         padded.unlink(missing_ok=True)
+    if extended and keep > 0:
+        # The model decoded a full-length take; put the approved head back
+        # so the song the user heard is not a VAE re-sing.
+        spliced = wd / "background_music.continued.wav"
+        keep_audio_head(final, staged, spliced, keep)
+        spliced.replace(staged)
     staged.replace(final)
     try:
         music_history.record(wd, final, caption)

@@ -249,6 +249,31 @@ def extend_audio_tail(input_path: Path, output_path: Path, extra_seconds: float,
     return output_path
 
 
+def keep_audio_head(original: Path, generated: Path, output_path: Path,
+                    keep_seconds: float) -> Path:
+    """The original take, then the generated audio from *keep_seconds* on.
+
+    Continuation must not re-sing what was already approved: the head is the
+    file the user heard, bit-exact, and only the new tail is taken from the
+    model. A VAE round-trip of the head is not the same song."""
+    keep = max(0.0, float(keep_seconds))
+    logger.info("[ffmpeg] keep_audio_head: %s + tail of %s from %.2fs",
+                original.name, generated.name, keep)
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(original),
+        "-i", str(generated),
+        "-filter_complex",
+        f"[0:a]atrim=duration={keep:.3f},asetpts=PTS-STARTPTS[head];"
+        f"[1:a]atrim=start={keep:.3f},asetpts=PTS-STARTPTS[tail];"
+        f"[head][tail]concat=n=2:v=0:a=1[out]",
+        "-map", "[out]",
+        "-c:a", "pcm_s16le",
+        str(output_path),
+    ])
+    return output_path
+
+
 def fade_video_ending(input_path: Path, output_path: Path, seconds: float = 2.0) -> Path:
     """Dip a video's ending to black: fade the last *seconds* of the picture to
     black and the audio to silence together, in one re-encode.

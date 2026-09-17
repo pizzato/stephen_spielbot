@@ -273,9 +273,9 @@ RUN if [ -d custom_nodes/ComfyUI-H3-Motion-Context ]; then \
 # "Same song, just longer" (this repo's addition, proven 2026-08-19): a noise
 # mask for 1-d audio latents, which stock SetLatentNoiseMask cannot produce.
 # Drives workflows/ace_music_extend.json — the song panel's re-generate-longer
-# keeps the take's audio verbatim and only generates the new tail. The
-# controller probes for this node and falls back to a fresh generation on
-# workers that don't have it yet.
+# uses the take as context and only generates the new tail. The controller
+# probes for this node and falls back to a fresh generation on workers that
+# don't have it yet.
 COPY docker/comfyui/ace_audio_extend/audio_latent_extend_mask.py custom_nodes/audio_latent_extend_mask.py
 
 # seed-vc (GPL-3.0, see THIRD_PARTY_NOTICES.md): singing-voice conversion for

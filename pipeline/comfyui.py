@@ -2278,12 +2278,15 @@ def comfy_node_exists(comfy_url: str, node_class: str) -> bool | None:
 
 
 def music_engine_can_extend(comfy_url: str, music_engine: str | None = None) -> bool:
-    """True if this engine + worker can repaint-extend an existing track (the
-    engine ships an extend workflow AND the worker registers its mask node)."""
+    """True if this engine + worker can continue an existing track (the engine
+    ships an extend workflow AND the worker registers every node it needs)."""
     eng = _engines.resolve_music(music_engine)
     if not eng.get("extend_workflow"):
         return False
-    return bool(comfy_node_exists(comfy_url, eng.get("extend_node") or ""))
+    for node in (eng.get("extend_node"), eng.get("extend_ref_node")):
+        if node and not comfy_node_exists(comfy_url, node):
+            return False
+    return True
 
 
 def generate_music(
@@ -2312,11 +2315,11 @@ def generate_music(
     lyric-free instrumental behaviour — the caption should then say
     "instrumental" explicitly (the models are trained to write songs).
 
-    *extend_from* + *keep_seconds* re-generate the SAME track longer: the given
-    audio (already padded to *duration_seconds* by the caller) is encoded and
-    its first *keep_seconds* survive sampling verbatim — only the tail past
-    them is generated. Check ``music_engine_can_extend`` first; calling this on
-    an engine/worker without the extend graph raises RuntimeError.
+    *extend_from* + *keep_seconds* continue the SAME track: the given audio
+    (already padded to *duration_seconds* by the caller) is the model's
+    context, and only the tail past *keep_seconds* is generated. Check
+    ``music_engine_can_extend`` first; calling this on an engine/worker
+    without the extend graph raises RuntimeError.
     """
     if seed is None:
         seed = random.randint(0, 2**32 - 1)

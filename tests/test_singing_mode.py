@@ -999,25 +999,33 @@ class SongEndingTests(_SongFilmCase):
                          keep_seconds=kw.get("keep_seconds"))
             Path(staged).write_bytes(b"new-take")
 
+        def fake_keep(original, generated, out, keep, **kw):
+            calls["kept_head"] = keep
+            Path(out).write_bytes(Path(generated).read_bytes())
+            return out
+
         with unittest.mock.patch("pipeline.comfyui.generate_music", fake_generate_music), \
              unittest.mock.patch("pipeline.comfyui.music_engine_can_extend",
                                  return_value=can_extend), \
              unittest.mock.patch.object(backend.gapp, "_preview_worker_urls",
                                         return_value=["http://w1:8188"]), \
-             unittest.mock.patch.object(backend.subprocess, "run"):
+             unittest.mock.patch.object(backend.subprocess, "run"), \
+             unittest.mock.patch("pipeline.assembler.keep_audio_head", fake_keep):
             res = backend._do_song_generate(self.wd, add_seconds=add)
         return res, calls
 
     def test_regenerating_longer_extends_the_take_in_use(self):
-        """"5 seconds longer than this" keeps THIS song: the take in use rides
-        along as the repaint source, its real length (not song.json's) is what
-        the seconds land on, and only the tail past it is generated."""
+        """"5 seconds longer than this" keeps THIS song: the take in use is the
+        context, its real length (not song.json's) is what the seconds land on,
+        only the tail past it is generated, and the approved head is spliced
+        back so it is not a VAE re-sing."""
         res, calls = self._generate(add=5)
 
         self.assertTrue(res["extended"])
         self.assertEqual(calls["secs"], 50.0)          # measured 45.0 + 5
         self.assertEqual(calls["keep_seconds"], 45.0)  # the take survives whole
         self.assertIsNotNone(calls["extend_from"])
+        self.assertEqual(calls["kept_head"], 45.0)
         self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 50.0)
 
     def test_a_worker_without_the_extend_node_falls_back_to_a_fresh_take(self):
@@ -1026,6 +1034,7 @@ class SongEndingTests(_SongFilmCase):
         self.assertFalse(res["extended"])
         self.assertEqual(calls["secs"], 50.0)
         self.assertIsNone(calls["extend_from"])
+        self.assertNotIn("kept_head", calls)
 
     def test_a_plain_regeneration_keeps_the_length(self):
         res, calls = self._generate()
@@ -1033,6 +1042,7 @@ class SongEndingTests(_SongFilmCase):
         self.assertFalse(res["extended"])
         self.assertEqual(calls["secs"], 45.0)
         self.assertIsNone(calls["extend_from"])
+        self.assertNotIn("kept_head", calls)
         self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 45.0)
 
 

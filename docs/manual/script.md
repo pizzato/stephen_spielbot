@@ -110,10 +110,11 @@ the format does to the render.
       out and that many seconds of silence padded after them. It runs on the controller,
       so it is instant, and the arrangement is untouched.
     - **Re-generate that much longer** keeps the song and gives it a real ending: the
-      take in use survives verbatim and the model sings only the added tail, finishing
-      the words it cut off (a repaint on the worker — ACE-Step only). On a worker that
-      can't repaint yet, or with the MiniMax engine, it falls back to a fresh longer
-      take, and the message under the button says which one you got.
+      take in use is the context and is kept as it is — it is not sung again — and the
+      model continues only the added tail, finishing the words it cut off (ACE-Step
+      only). On a worker that can't continue a take yet, or with the MiniMax engine, it
+      falls back to a fresh longer take, and the message under the button says which
+      one you got.
     - Either way the previous track stays in the version list and can be put back.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
   **Draft the story →** writes the story from these lyrics. The song's *current* length is
