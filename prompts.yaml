@@ -21,7 +21,7 @@ script_claude_initial:
 
     Output ONLY a JSON object with exactly four keys:
 
-    "style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
+    "style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: lens and framing look, color grade, lighting quality, film stock or rendering style. NEVER describe camera MOVEMENT — no handheld, steadicam, whip-pan, snap zoom, crash zoom, dolly, tracking, push-in or drift: this sentence rides on every scene, including the still image prompts, and each scene states its own move. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
 
     "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
 
@@ -97,7 +97,7 @@ script_local_story:
 
     Output ONLY plain text using this exact format — no JSON, no markdown, no extra commentary:
 
-    STYLE: [15-30 word visual style phrase that will be prepended to every visual prompt. Camera style, color grade, lighting quality, film stock. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, slow motion, photorealistic documentary style"]
+    STYLE: [15-30 word visual style phrase that will be prepended to every visual prompt. Lens and framing look, color grade, lighting quality, film stock. NEVER describe camera MOVEMENT — no handheld, steadicam, whip-pan, snap zoom, crash zoom, dolly, tracking, push-in or drift: each scene states its own move. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"]
     MUSIC: [20-40 word music description: mood, tempo, key instruments, genre, emotional arc]
     CHARACTER_1_NAME: [ONLY if the video follows a recurring MAIN character — their name as used in narration, e.g. Julius Caesar. Omit this and the CHARACTER_* lines entirely for abstract topics with no recurring character.]
     CHARACTER_1_ALIASES: [comma-separated other names/epithets, or leave blank]
@@ -175,7 +175,7 @@ story_outline:
 
     Output ONLY a JSON object with exactly four keys:
 
-    "style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
+    "style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: lens and framing look, color grade, lighting quality, film stock or rendering style. NEVER describe camera MOVEMENT — no handheld, steadicam, whip-pan, snap zoom, crash zoom, dolly, tracking, push-in or drift: this sentence rides on every scene, including the still image prompts, and each scene states its own move. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
 
     "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
 
