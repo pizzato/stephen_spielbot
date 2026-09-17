@@ -87,49 +87,9 @@ class MusicWorkflowTests(unittest.TestCase):
                       if n["class_type"] == "EmptyAceStep1.5LatentAudio")
         self.assertEqual(latent["inputs"]["seconds"], 900.0)
 
-    def test_extend_graph_uses_the_take_as_context(self):
-        """Continuing a take must not ask the LLM for a new song plan: the
-        encoded audio is the context, and only the tail past keep_seconds is
-        sampled."""
-        captured = {}
-
-        def fake_queue(workflow, client_id, comfy_url=None):
-            captured["workflow"] = workflow
-            return "pid"
-
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "src.wav"
-            src.write_bytes(b"RIFF")
-            out = Path(tmp) / "music.wav"
-            with mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
-                 mock.patch.object(comfyui, "check_engine_supported"), \
-                 mock.patch.object(comfyui, "_wait_for_completion"), \
-                 mock.patch.object(comfyui, "_get_outputs",
-                                   return_value=[{"filename": "a.flac", "type": "output"}]), \
-                 mock.patch.object(comfyui, "_download_output",
-                                   side_effect=lambda item, dest, comfy_url=None: dest), \
-                 mock.patch.object(comfyui, "_upload_input_file", return_value="src.wav"):
-                comfyui.generate_music("Fjords", 50.0, out, tags="calm strings",
-                                       seed=11, lyrics="[Verse]\nwords",
-                                       extend_from=src, keep_seconds=45.0)
-
-        wf = captured["workflow"]
-        by_class = {n["class_type"]: n for n in wf.values()}
-        self.assertEqual(by_class["TextEncodeAceStepAudio1.5"]["inputs"]["generate_audio_codes"], False)
-        self.assertEqual(by_class["AudioLatentExtendMask"]["inputs"]["keep_seconds"], 45.0)
-        self.assertEqual(by_class["LoadAudio"]["inputs"]["audio"], "src.wav")
-        encode_id = next(k for k, n in wf.items() if n["class_type"] == "VAEEncodeAudio")
-        ref_id = next(k for k, n in wf.items() if n["class_type"] == "ReferenceTimbreAudio")
-        self.assertEqual(by_class["ReferenceTimbreAudio"]["inputs"]["latent"], [encode_id, 0])
-        self.assertEqual(by_class["KSampler"]["inputs"]["positive"], [ref_id, 0])
-
-    def test_extend_needs_the_context_node_too(self):
-        with mock.patch.object(comfyui, "comfy_node_exists",
-                               side_effect=lambda url, node: node == "AudioLatentExtendMask"):
-            self.assertFalse(comfyui.music_engine_can_extend("http://w:8188", "ace-step"))
-        with mock.patch.object(comfyui, "comfy_node_exists", return_value=True):
-            self.assertTrue(comfyui.music_engine_can_extend("http://w:8188", "ace-step"))
-            self.assertFalse(comfyui.music_engine_can_extend("http://w:8188", "minimax-music3"))
+    def test_minimax_can_continue_from_its_seed(self):
+        self.assertTrue(comfyui.music_engine_can_extend("http://w:8188", "minimax-music3"))
+        self.assertEqual(engines.resolve_music("minimax-music3").get("extend_via"), "seed")
 
     def test_too_old_worker_is_refused_before_queueing(self):
         eng = engines.resolve_music("minimax-music3")

@@ -557,13 +557,11 @@ MUSIC_ENGINES: dict[str, dict] = {
         "label": "ACE-Step 1.5 Turbo",
         "sub": "Fast · 8 steps · instrumental beds · commercial OK",
         "workflow": "ace_music.json",
-        # Continue an existing take: the encoded audio is the model's context
-        # (ReferenceTimbreAudio) and only the added tail is sampled
-        # (AudioLatentExtendMask). The LLM song-plan is off — a new plan is
-        # a different song. Caller probes both nodes and falls back otherwise.
+        # Repaint-extend: keep an existing take's audio verbatim and generate
+        # only the added tail. Needs the AudioLatentExtendMask custom node on
+        # the worker — the caller probes for it and falls back otherwise.
         "extend_workflow": "ace_music_extend.json",
         "extend_node": "AudioLatentExtendMask",
-        "extend_ref_node": "ReferenceTimbreAudio",
         "commercial_ok": True,
         "license": "Apache-2.0",
         # EmptyAceStep15LatentAudio accepts up to 1000 s — far past any film.
@@ -587,6 +585,10 @@ MUSIC_ENGINES: dict[str, dict] = {
         "label": "MiniMax Music 3",
         "sub": "Slow · 30 steps · song-shaped · restricted license",
         "workflow": "minimax_music.json",
+        # Same AR seed + a longer max_duration continues the take: the first
+        # frames are deterministic, so extra seconds land an ending the first
+        # pass cut off. The approved head is spliced back afterwards.
+        "extend_via": "seed",
         "commercial_ok": True,
         "license": "MiniMax-Music3 Community License",
         "license_note": ("Requires a visible “MiniMax-Music3” credit on any commercial "

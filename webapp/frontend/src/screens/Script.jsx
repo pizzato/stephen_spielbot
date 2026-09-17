@@ -218,9 +218,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   // Re-generate the song. `addSeconds` continues the take marked "In use"
-  // that much: where the worker can (ACE-Step), the song is the context and
-  // only the new tail is generated; otherwise it falls back to a fresh longer
-  // take. Either way the current one stays in the version list.
+  // that much: MiniMax Music 3 reuses the same seed at a longer length so
+  // the song stays the same and only the new tail is generated; otherwise
+  // it falls back to a fresh longer take. Either way the current one stays
+  // in the version list.
   const generateSongTrack = async (addSeconds = 0) => {
     setBusy(addSeconds ? 'song-gen-longer' : 'song-gen'); setError(''); setSongMsg('')
     try {
@@ -235,7 +236,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         ? 'Song generated — listen below, re-voice it, or draft the story.'
         : s?.result?.extended
           ? `Same song, about ${addSeconds}s longer — the take you had is the context and is kept as-is; only the new ending is generated.`
-          : `Sung again about ${addSeconds}s longer — this worker can't continue a take in place, so it's a fresh take. Pick whichever ends better below.`)
+            : `Sung again about ${addSeconds}s longer — this take can't be continued in place, so it's a fresh take. Pick whichever ends better below.`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   // The other half of the same problem: keep this take and just give it a

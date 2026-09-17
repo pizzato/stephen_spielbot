@@ -170,12 +170,10 @@ song can end mid-bar or mid-word. The Song tab's **Ending** control cures either
 *Extend the ending* fades the take's last seconds out into a tail of silence (ffmpeg on
 the controller — the approved arrangement is kept and the extended track becomes the
 film's, so the scene division divides the longer length), while *Re-generate that much
-longer* continues the take in use: that audio is the model's context and is kept as it
-is, and only the added tail is generated, so the song stays the same and gains a
-finished ending. Continuation needs ACE-Step plus the `AudioLatentExtendMask` and
-`ReferenceTimbreAudio` nodes on the worker (in the ComfyUI image since 2026-08; older
-workers, and the MiniMax engine, fall back to a fresh longer take — the Song tab says
-which happened). Both keep the previous track as a version.
+longer* continues the take in use: MiniMax Music 3 re-runs the same seed at the longer
+length so the extra seconds finish the words it cut off, and the take you heard is
+kept as it is (not sung again). A take with no saved seed falls back to a fresh longer
+take — the Song tab says which happened. Both keep the previous track as a version.
 
 **Whose voice sings?** Two levels. The music engines can't clone a voice, so at
 generation time the chosen singing voice only *describes* the vocalist (below). But the

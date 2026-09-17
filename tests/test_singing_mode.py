@@ -996,7 +996,7 @@ class SongEndingTests(_SongFilmCase):
 
         def fake_generate_music(title, secs, staged, tags, **kw):
             calls.update(secs=secs, extend_from=kw.get("extend_from"),
-                         keep_seconds=kw.get("keep_seconds"))
+                         keep_seconds=kw.get("keep_seconds"), seed=kw.get("seed"))
             Path(staged).write_bytes(b"new-take")
 
         def fake_keep(original, generated, out, keep, **kw):
@@ -1043,7 +1043,43 @@ class SongEndingTests(_SongFilmCase):
         self.assertEqual(calls["secs"], 45.0)
         self.assertIsNone(calls["extend_from"])
         self.assertNotIn("kept_head", calls)
-        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 45.0)
+        song = json.loads((self.wd / "song.json").read_text())
+        self.assertEqual(song["seconds"], 45.0)
+        self.assertEqual(song["seed"], calls["seed"])
+
+    def _minimax(self, seed=None):
+        self.write_config({"styles": [_style("Hero", music_engine="minimax-music3")],
+                           "default_style": "Hero",
+                           "characters": [], "characters_migrated_v2": True,
+                           "voices": [{"name": "Nora", "path": str(self.voice_ref)}]})
+        song = json.loads((self.wd / "song.json").read_text())
+        if seed is None:
+            song.pop("seed", None)
+        else:
+            song["seed"] = seed
+        (self.wd / "song.json").write_text(json.dumps(song))
+
+    def test_minimax_continues_from_the_saved_seed(self):
+        """Music videos (MiniMax Music 3) must not sing a new song: the same
+        AR seed at a longer duration continues this take, and the approved
+        head is spliced back."""
+        self._minimax(seed=42)
+        res, calls = self._generate(add=5, can_extend=False)
+
+        self.assertTrue(res["extended"])
+        self.assertEqual(calls["seed"], 42)
+        self.assertEqual(calls["secs"], 50.0)
+        self.assertIsNone(calls["extend_from"])
+        self.assertEqual(calls["kept_head"], 45.0)
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seed"], 42)
+
+    def test_minimax_without_a_seed_falls_back_to_a_fresh_take(self):
+        self._minimax(seed=None)
+        res, calls = self._generate(add=5, can_extend=False)
+
+        self.assertFalse(res["extended"])
+        self.assertIsNone(calls["extend_from"])
+        self.assertNotIn("kept_head", calls)
 
 
 class MusicOnlyMixTests(_SongFilmCase):
