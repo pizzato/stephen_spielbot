@@ -70,6 +70,12 @@ lighting"*. Locked to the style's own visual style while a style is active — u
 style leaves it blank, in which case the field stays free and what you write applies to
 this film only.
 
+Describe the **look**, never the camera's movement. This sentence rides on every scene —
+including the still image prompts, which must hold no motion at all, and every
+[acted take](../performance_films.md), where each scene already states its own move. Left
+blank, the LLM writes the sentence and is told the same thing: *"handheld"*, *"steadicam"*,
+*"whip-pans"*, *"crash zooms"* and the rest stay out of it.
+
 ## Narrator voice
 
 The cloned voice that reads the narration. Locked while a style is active. Voices come from

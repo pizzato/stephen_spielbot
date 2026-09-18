@@ -649,9 +649,13 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
         sections.append("[SHOT LIST]\n" + "\n".join(
             f"[{b['t0']:g}s-{b['t1']:g}s] {b['action']}" for b in beats))
 
-    # [CAMERA]
+    # [CAMERA] — the scene's own move, and nothing on top of it. The fallback no
+    # longer invites a "slight handheld drift": the 4-step turbo engines already
+    # swing the frame ~40% of its width off the opening composition in the first
+    # two seconds, measured across 120 sung takes, so a default that asks for
+    # drift is the last thing this block should carry.
     camera = _unterminated(scene_meta.get("camera")) or \
-        "locked off at chest height, slight handheld drift, no push, no zoom"
+        "locked off at chest height, no push, no zoom"
     sections.append(f"[CAMERA]\n{camera}.")
 
     # [PRODUCTION SOUND] — diegetic only; performance films carry no score.

@@ -40,6 +40,17 @@ class PromptAssemblyTests(unittest.TestCase):
         self.assertIn("cicadas throughout", p)
         self.assertIn("Do not add subtitles", p)
 
+    def test_the_camera_fallback_does_not_ask_for_drift(self):
+        # A scene with no camera line of its own falls back to a locked-off
+        # default. Asking for a "slight handheld drift" there fed the very drift
+        # the turbo reference engines already add on their own.
+        p = performance.build_h3_prompt(self._meta(camera=""))
+        self.assertIn("locked off at chest height, no push, no zoom", p)
+        self.assertNotIn("handheld drift", p)
+        # The scene's own move still stands alone, unqualified.
+        moved = performance.build_h3_prompt(self._meta(camera="slow dolly forward"))
+        self.assertIn("[CAMERA]\nslow dolly forward.", moved)
+
     def test_every_line_closes_the_lips(self):
         # Without this the mouth keeps moving through the tail of the clip.
         p = performance.build_h3_prompt(self._meta())
