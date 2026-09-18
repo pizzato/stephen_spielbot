@@ -2278,9 +2278,14 @@ def comfy_node_exists(comfy_url: str, node_class: str) -> bool | None:
 
 
 def music_engine_can_extend(comfy_url: str, music_engine: str | None = None) -> bool:
-    """True if this engine + worker can repaint-extend an existing track (the
-    engine ships an extend workflow AND the worker registers its mask node)."""
+    """True if this engine + worker can continue an existing track in place.
+
+    MiniMax Music 3 continues by re-running the AR at a longer duration with
+    the same seed (no extra worker node). ACE-Step needs its extend workflow
+    and mask node on the worker."""
     eng = _engines.resolve_music(music_engine)
+    if eng.get("extend_via") == "seed":
+        return True
     if not eng.get("extend_workflow"):
         return False
     return bool(comfy_node_exists(comfy_url, eng.get("extend_node") or ""))
@@ -2312,11 +2317,10 @@ def generate_music(
     lyric-free instrumental behaviour — the caption should then say
     "instrumental" explicitly (the models are trained to write songs).
 
-    *extend_from* + *keep_seconds* re-generate the SAME track longer: the given
-    audio (already padded to *duration_seconds* by the caller) is encoded and
-    its first *keep_seconds* survive sampling verbatim — only the tail past
-    them is generated. Check ``music_engine_can_extend`` first; calling this on
-    an engine/worker without the extend graph raises RuntimeError.
+    *extend_from* + *keep_seconds* continue an ACE-Step take: the given audio
+    (already padded to *duration_seconds* by the caller) is encoded and only
+    the tail past *keep_seconds* is sampled. MiniMax Music 3 continues without
+    this — same seed, longer duration. Check ``music_engine_can_extend`` first.
     """
     if seed is None:
         seed = random.randint(0, 2**32 - 1)

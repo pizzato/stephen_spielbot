@@ -3428,9 +3428,9 @@ class SongGenerateBody(BaseModel):
     # The catalogue character the story casts as the singer ("" = invent a
     # performer to match the vocalist). None = keep the stored one.
     singer: str | None = None
-    # "Re-generate X seconds longer": added to the song's current length before
-    # it is sung again, so the model has room to land an ending it was cutting
-    # off. 0 = generate at the length it already has.
+    # "Re-generate X seconds longer": added to the song's current length so the
+    # model has room to land an ending it was cutting off. The take in use is
+    # kept and continued, not sung again. 0 = generate at the length it already has.
     add_seconds: float = 0
 
 
@@ -3447,13 +3447,15 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     here is exactly what plays under the film. Each generation is kept in the
     music history for comparison.
 
-    *add_seconds* re-generates the take marked "In use" that much longer — a
-    repaint extend: the current audio survives verbatim and only the added tail
-    is generated, so the song stays the same. That needs the engine's extend
-    graph on the worker (ACE-Step + the AudioLatentExtendMask node); without
-    it this falls back to a fresh full-length take, flagged ``extended: False``
-    so the UI can say which one happened."""
-    from pipeline.assembler import _get_duration, _resolve_media_tool
+    *add_seconds* continues the take marked "In use" that much longer: the
+    current audio is kept verbatim and only the added tail is generated, so a
+    MiniMax Music 3 song that was cut off can finish. MiniMax re-runs the AR
+    at the longer length with the same seed (the prefix is deterministic);
+    without a saved seed this falls back to a fresh take, flagged
+    ``extended: False`` so the UI can say which one happened."""
+    import random
+    from pipeline import engines as music_engines
+    from pipeline.assembler import _get_duration, _resolve_media_tool, keep_audio_head
     from pipeline.comfyui import generate_music, music_engine_can_extend
     from pipeline.worker_pool import WorkerPool
 
@@ -3488,37 +3490,54 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     title = str(data.get("title") or wd.name)
     url = pool.acquire()
     extended = False
+    continue_seed = None
+    extend_from = None
+    eng = music_engines.resolve_music(engine)
     # Minutes on a GPU — tracked so the Activity screen shows the song being
     # sung, whether it was asked for in the Song tab or by automation.
     try:
-        extend_from = None
-        if keep > 0 and music_engine_can_extend(url, engine):
-            # The extend graph wants the source already at the target length —
-            # the padding is what the model turns into the new tail.
-            subprocess.run(
-                [_resolve_media_tool("ffmpeg"), "-v", "error", "-y", "-i", str(final),
-                 "-af", f"apad=whole_dur={secs}", str(padded)],
-                check=True, capture_output=True, timeout=120)
-            extend_from = padded
-            extended = True
+        if keep > 0:
+            if eng.get("extend_via") == "seed" and data.get("seed") is not None:
+                # MiniMax Music 3: the AR is deterministic in the seed, so a
+                # longer max_duration continues the same song instead of
+                # planning a new one.
+                continue_seed = int(data["seed"])
+                extended = True
+            elif eng.get("extend_workflow") and music_engine_can_extend(url, engine):
+                # The extend graph wants the source already at the target length —
+                # the padding is what the model turns into the new tail.
+                subprocess.run(
+                    [_resolve_media_tool("ffmpeg"), "-v", "error", "-y", "-i", str(final),
+                     "-af", f"apad=whole_dur={secs}", str(padded)],
+                    check=True, capture_output=True, timeout=120)
+                extend_from = padded
+                extended = True
+        used_seed = continue_seed if continue_seed is not None else random.randint(0, 2**32 - 1)
         op = "Singing the song's new ending" if extended else "Singing the song"
         with _track_op(op, f"{int(secs)}s · {engine}",
                        work_dir=str(wd), title=title, category="film"):
             generate_music(title, secs, staged,
-                           caption or None, comfy_url=url, music_engine=engine,
+                           caption or None, seed=used_seed, comfy_url=url,
+                           music_engine=engine,
                            lyrics=data.get("lyrics") or None,
                            extend_from=extend_from,
                            keep_seconds=keep if extend_from else None)
     finally:
         pool.release(url)
         padded.unlink(missing_ok=True)
+    if extended and keep > 0:
+        # Put the approved head back so the song the user heard is not re-sung.
+        spliced = wd / "background_music.continued.wav"
+        keep_audio_head(final, staged, spliced, keep)
+        spliced.replace(staged)
     staged.replace(final)
     try:
         music_history.record(wd, final, caption)
     except Exception:
         gapp.logger.warning("Could not record song into music history", exc_info=True)
     dur = _get_duration(final)
-    data.update({"generated_at": time.time(), "duration": dur, "seconds": secs})
+    data.update({"generated_at": time.time(), "duration": dur, "seconds": secs,
+                 "seed": used_seed})
     (wd / "song.json").write_text(json.dumps(data, indent=2))
     return {"ok": True, "duration": dur, "extended": extended,
             "song_url": f"/api/file?path={final}&t={int(time.time())}"}

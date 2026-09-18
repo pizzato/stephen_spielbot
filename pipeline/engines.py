@@ -558,9 +558,8 @@ MUSIC_ENGINES: dict[str, dict] = {
         "sub": "Fast · 8 steps · instrumental beds · commercial OK",
         "workflow": "ace_music.json",
         # Repaint-extend: keep an existing take's audio verbatim and generate
-        # only the added tail ("re-generate longer" without losing the song).
-        # Needs the AudioLatentExtendMask custom node on the worker — the
-        # caller probes for it and falls back to a fresh generation.
+        # only the added tail. Needs the AudioLatentExtendMask custom node on
+        # the worker — the caller probes for it and falls back otherwise.
         "extend_workflow": "ace_music_extend.json",
         "extend_node": "AudioLatentExtendMask",
         "commercial_ok": True,
@@ -586,6 +585,10 @@ MUSIC_ENGINES: dict[str, dict] = {
         "label": "MiniMax Music 3",
         "sub": "Slow · 30 steps · song-shaped · restricted license",
         "workflow": "minimax_music.json",
+        # Same AR seed + a longer max_duration continues the take: the first
+        # frames are deterministic, so extra seconds land an ending the first
+        # pass cut off. The approved head is spliced back afterwards.
+        "extend_via": "seed",
         "commercial_ok": True,
         "license": "MiniMax-Music3 Community License",
         "license_note": ("Requires a visible “MiniMax-Music3” credit on any commercial "

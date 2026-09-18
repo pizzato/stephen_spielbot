@@ -87,6 +87,10 @@ class MusicWorkflowTests(unittest.TestCase):
                       if n["class_type"] == "EmptyAceStep1.5LatentAudio")
         self.assertEqual(latent["inputs"]["seconds"], 900.0)
 
+    def test_minimax_can_continue_from_its_seed(self):
+        self.assertTrue(comfyui.music_engine_can_extend("http://w:8188", "minimax-music3"))
+        self.assertEqual(engines.resolve_music("minimax-music3").get("extend_via"), "seed")
+
     def test_too_old_worker_is_refused_before_queueing(self):
         eng = engines.resolve_music("minimax-music3")
         with mock.patch.object(comfyui, "comfyui_version", return_value=(0, 32, 0)):

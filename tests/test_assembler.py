@@ -640,5 +640,25 @@ class BlankUpscaleGuardTests(unittest.TestCase):
                 assembler._verify_upscale_not_blank(src, out)
 
 
+class KeepAudioHeadTests(unittest.TestCase):
+    """A continued song keeps the approved take and only takes the new tail."""
+
+    def test_the_original_head_is_spliced_onto_the_generated_tail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp) / "orig.wav"
+            generated = Path(tmp) / "gen.wav"
+            out = Path(tmp) / "out.wav"
+            original.write_bytes(b"x")
+            generated.write_bytes(b"y")
+            with mock.patch.object(assembler, "_run") as run:
+                assembler.keep_audio_head(original, generated, out, 45.0)
+            cmd = run.call_args.args[0]
+            fc = cmd[cmd.index("-filter_complex") + 1]
+            self.assertIn("atrim=duration=45.000", fc)
+            self.assertIn("atrim=start=45.000", fc)
+            self.assertIn("concat=n=2:v=0:a=1", fc)
+            self.assertEqual(cmd[cmd.index("-i") + 1], str(original))
+
+
 if __name__ == "__main__":
     unittest.main()
