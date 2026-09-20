@@ -915,6 +915,7 @@ def generate_video_h3(
         "IMAGE_NAME":      image_name,
         "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
         "LORA_NAME":       engine.get("lora") or "",
+        "LORA_STRENGTH":   _lora_strength(engine),
     })
 
     _video_timeout = _h3_timeout_seconds(gen_w, gen_h, length)
@@ -1090,6 +1091,16 @@ def _add_context_save(workflow: dict, prefix: str, clip_index: int) -> None:
     }
 
 
+def _lora_strength(engine: dict) -> float:
+    """How hard a turbo engine's distill LoRA is applied (1.0 = as published).
+
+    The 4-step distills carry their own motion prior, not just their step
+    count: turning the LoRA down trades some of that prior back for steps.
+    Engines that carry no LoRA never reach a graph with the placeholder.
+    """
+    return float(engine.get("lora_strength", 1.0))
+
+
 def _apply_turbo_to_chain(workflow: dict, engine: dict) -> None:
     """Swap a static chain graph's base sampler for the turbo engine's nodes.
 
@@ -1106,7 +1117,8 @@ def _apply_turbo_to_chain(workflow: dict, engine: dict) -> None:
     workflow[_node_id(workflow, "EasyCache")] = {
         "class_type": "MiniMaxH3TurboLoRA",
         "inputs": {"model": [_node_id(workflow, "UNETLoader"), 0],
-                   "lora_name": engine["lora"], "strength": 1.0,
+                   "lora_name": engine["lora"],
+                   "strength": _lora_strength(engine),
                    "low_vram": False},
     }
     workflow[_node_id(workflow, "KSamplerSelect")] = {
@@ -1219,6 +1231,7 @@ def generate_video_h3_ref(
         "STEPS":           steps,
         "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
         "LORA_NAME":       engine.get("lora") or "",
+        "LORA_STRENGTH":   _lora_strength(engine),
     })
 
     _wire_ref_slots(workflow, image_names, audio_names)
@@ -1296,6 +1309,7 @@ def generate_video_h3_ref_continue(
         "STEPS":           steps,
         "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
         "LORA_NAME":       engine.get("lora") or "",
+        "LORA_STRENGTH":   _lora_strength(engine),
     })
     _wire_ref_slots(workflow, image_names, audio_names)
     _add_motion_context(workflow, context_latent)
@@ -1374,6 +1388,7 @@ def generate_video_h3_ref_chained(
                 "LENGTH": length, "SEED": seed + idx, "STEPS": steps,
                 "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
                 "LORA_NAME": engine.get("lora") or "",
+                "LORA_STRENGTH": _lora_strength(engine),
                 "CONTEXT_PREFIX": token, "CLIP_INDEX": idx,
             }
             if idx == 1:
@@ -1465,6 +1480,7 @@ def generate_video_h3_chained(
                 "IMAGE_NAME": image_name,
                 "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
                 "LORA_NAME": engine.get("lora") or "",
+                "LORA_STRENGTH": _lora_strength(engine),
                 "CONTEXT_PREFIX": token, "CLIP_INDEX": idx,
             }
             if idx == 1:
