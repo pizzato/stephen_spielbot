@@ -7634,16 +7634,16 @@ def list_jobs() -> dict:
     resumable = []
     active_wd = gapp._preferred_work_dir("")
     active_key = _work_dir_title_key(active_wd) if active_wd else ""
-    finished_keys = set()
-    for label, work_dir in finished_rows:
-        finished_keys.add(_title_key(label))
-        finished_keys.add(_work_dir_title_key(Path(work_dir)))
+    # No title-based de-duplication here: the finished and resumable lists are
+    # already disjoint by work dir (one requires combined.mp4, the other requires
+    # its absence), so a shared title only ever means a *second* render of the
+    # same script — a re-render, or the same script at another resolution. Those
+    # are deliberate, and suppressing them stranded a half-finished film with no
+    # way to resume it from the UI.
     for label, work_dir in gapp._list_resumable_jobs():
         wd = Path(work_dir)
         title_key = _work_dir_title_key(wd) or _title_key(label)
         is_active = bool(active_wd and wd == active_wd)
-        if title_key in finished_keys and not is_active:
-            continue
         meta = {}
         try:
             meta = json.loads((wd / "job.json").read_text())
