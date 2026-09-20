@@ -2243,8 +2243,11 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
                     performance_mode.acted_limits(chained)[0])
     cast = ", ".join(n for n in cast_names if n)
     speakers = (
-        f"Speakers are these existing characters ({cast}) and/or the main character(s) "
-        "in the story. Do not invent speakers outside those."
+        f"THE FILM'S PEOPLE ARE EXACTLY THESE: {cast}. Every name in a scene's "
+        "\"cast\" and every \"speaker\" must be one of them. Never invent a "
+        "person who is not on that list — not a bandmate, not a rival, not a "
+        "passer-by, and never a second lead. A beat that seems to need someone "
+        "else is staged on the people you have, or with nobody named at all."
         if cast else
         "The speakers are the story's recurring characters — identify them and use them "
         "consistently; a scene with nobody to speak must be \"narration\" or \"silent\"."
@@ -2280,7 +2283,9 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
             "continuous song is laid over the whole film, so no scene carries a voice of "
             "its own. NEVER use \"narration\" and NEVER give any scene \"lines\": nothing "
             "said on camera survives the mix. Stage the scenes as the song's pictures: "
-            "the lead performer SINGING to camera and performing — put them in \"cast\" in "
+            "the lead performer — ONE of the people named above, the same one in every "
+            "performance shot, never a newly invented singer — SINGING to camera and "
+            "performing, put them in \"cast\" in "
             "most scenes (the face that keeps returning is what makes it a music video) — "
             "with pure story imagery between the performance shots. Write each scene's "
             "\"beats\" as performance action (singing to camera, turning, walking, "
@@ -2927,8 +2932,18 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         if singer_char is not None and singer_char not in requested_chars:
             requested_chars = [*requested_chars, singer_char]
             character_sheet = gapp._character_sheet(requested_chars) or None
+    # The story has already named its own cast by the time it is divided, and
+    # the schema below is what governs a scene's "cast" field. Handed only the
+    # catalogue opt-ins — usually none, since a character reaches the prompts
+    # only when the brief names them — the closed-cast rule had no names to
+    # close over, and the writer staged scenes around people it invented on the
+    # spot, who have no portrait and so render as a different stranger each time.
+    cast_roster = list(dict.fromkeys(
+        [str(c.get("name") or "").strip() for c in requested_chars]
+        + [str(c.get("name") or "").strip()
+           for c in (story.get("characters") or []) if isinstance(c, dict)]))
     dialogue_note = _build_dialogue_note(
-        fmt, [c.get("name", "") for c in requested_chars],
+        fmt, [n for n in cast_roster if n],
         chained=gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")),
         acted_silent=gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")),
         scene_secs=plan.get("scene_secs_target") if isinstance(plan, dict) else None)
