@@ -380,6 +380,12 @@ def _wait_for_completion(
        Detection time: _HEARTBEAT_INITIAL_DELAY + _HEARTBEAT_IDLE_SAMPLES *
        _HEARTBEAT_INTERVAL = 120 + 2*90 = ~5 min (vs old ~15 min).
 
+    Both paths cover the case where /queue itself stops answering. A worker that
+    goes silent over HTTP may just be loading a huge checkpoint, so that alone
+    proves nothing — but a worker that answers neither HTTP nor SSH for
+    _HEARTBEAT_SSH_FAIL_LIMIT heartbeats has lost power or fallen off the
+    network, and raises StuckJobError so the caller can drop it.
+
     Falls back to polling /history if the WebSocket drops.
     """
     ws = websocket.WebSocket()
@@ -411,12 +417,12 @@ def _wait_for_completion(
                     prompt_id[:8], q_status, nodes_done, now - start,
                 )
 
-                # Unreachable worker: no evidence either way, so change nothing
-                # (an absence timer already running keeps its start time). The
-                # overall deadline and the GPU heartbeat still bound this.
-                if q_status == "unknown":
-                    continue
-
+                # Unreachable worker ("unknown"): no evidence the job is gone —
+                # a ComfyUI busy loading H3's ~40 GB stack stops serving HTTP for
+                # minutes — so the absence timer is left alone and the queue-state
+                # branches below are skipped. The heartbeat still runs: SSH is the
+                # only thing that can tell a worker busy loading from one that has
+                # lost power.
                 if q_status == "absent":
                     h_status = _check_history(prompt_id, comfy_url)
                     if h_status == "completed":
@@ -435,7 +441,8 @@ def _wait_for_completion(
                     raise DroppedJobError(
                         f"Job {prompt_id} vanished from queue on {comfy_url} without completing"
                     )
-                queue_absent_since = None
+                elif q_status != "unknown":
+                    queue_absent_since = None
 
                 # Pending timeout: worker's queue is blocked by another job.
                 if q_status == "pending" and now - start > _PENDING_TIMEOUT:
@@ -446,7 +453,7 @@ def _wait_for_completion(
                         f" — worker blocked, will try another"
                     )
 
-                if q_status == "running":
+                if q_status in ("running", "unknown"):
                     # ── GPU heartbeat: sample utilisation every _HEARTBEAT_INTERVAL ──
                     if now - last_heartbeat_at >= _HEARTBEAT_INTERVAL:
                         last_heartbeat_at = now
@@ -483,6 +490,20 @@ def _wait_for_completion(
                         else:
                             # gpu_idle is None → SSH to worker failed
                             consecutive_ssh_failures += 1
+                            if (q_status == "unknown"
+                                    and consecutive_ssh_failures >= _HEARTBEAT_SSH_FAIL_LIMIT):
+                                # Neither HTTP nor SSH has answered for several
+                                # heartbeats running: the machine is gone (power
+                                # loss, network drop), not busy. Nothing will ever
+                                # finish this prompt, so give up now and let the
+                                # caller drop this worker — waiting out the render
+                                # timeout costs an hour or more for nothing.
+                                raise StuckJobError(
+                                    f"Job {prompt_id}: {host} answered neither HTTP nor SSH for "
+                                    f"{consecutive_ssh_failures} consecutive heartbeats "
+                                    f"({_HEARTBEAT_INTERVAL}s apart) after {now - start:.0f}s "
+                                    f"— worker unreachable, will try another"
+                                )
                             if consecutive_ssh_failures >= _HEARTBEAT_SSH_FAIL_LIMIT:
                                 logger.warning(
                                     "[comfy] job %s… heartbeat: SSH to %s failed %d consecutive "
