@@ -266,6 +266,7 @@ VIDEO_ENGINES: dict[str, dict] = {
         "video_vae": "minimax_h3_video_vae_fp16.safetensors",
         "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
         "lora": "minimax_h3_turbo_4step_ckpt500.safetensors",
+        "lora_strength": 1.0,   # as published; see comfyui._lora_strength
         # Video and audio ride different flow schedules; the custom sampler
         # steps each on its own clock (a stock sampler breaks the audio at few
         # steps). Shipped by docker/comfyui (ComfyUI-MiniMax-H3-Turbo).
@@ -354,6 +355,7 @@ VIDEO_ENGINES: dict[str, dict] = {
         "video_vae": "minimax_h3_video_vae_fp16.safetensors",
         "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
         "lora": "minimax_h3_turbo_4step_ckpt500.safetensors",
+        "lora_strength": 1.0,   # as published; see comfyui._lora_strength
         "requires_node": "MiniMaxH3TurboSampler",
         "probe": ("UNETLoader", "unet_name", "minimax_h3_ref2va_int8_convrot.safetensors"),
         "models": [
@@ -412,6 +414,7 @@ VIDEO_ENGINES: dict[str, dict] = {
         # unstripped the node matches nothing and silently renders 4 steps with no
         # LoRA at all, so the installer writes this name only after converting.
         "lora": "minimax_h3_ref2v_turbo_4step_v0.1_h3node.safetensors",
+        "lora_strength": 1.0,   # as published; see comfyui._lora_strength
         "lora_source": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
         "requires_node": "MiniMaxH3TurboSampler",
         "probe": ("UNETLoader", "unet_name", "minimax_h3_ref2va_int8_convrot.safetensors"),

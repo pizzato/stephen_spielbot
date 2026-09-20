@@ -567,6 +567,59 @@ reference wardrobe than w4a8 did — hence opt-in, with w4a8 still the default.
 MiniMax H3 render in the style — narrated-scene I2V and acted-scene Ref2VA alike. 0 keeps
 each engine's own default (Turbo 4, the others 15); LTX ignores it.
 
+### The distilled engines swing the camera
+
+Both turbo engines pan the frame sideways in a shot's opening seconds whatever
+the scene's camera line says, and the distilled LoRA — not the step count — is
+what does it. Measured with `scripts/video_drift.py` across 120 scene clips from
+the 20 most recent song films: mean drift reaches **−37% of frame width at 2 s**
+(negative = frame content travels left, so the camera swung right), recovering to
+−23% by 4 s, with 111 of 120 clips drifting left and none right. Matched 5 s sung
+takes put the blame squarely on the distillation — w4a8 (no LoRA) −2.8%,
+`ref-turbo` −19.3%, `ref-turbo-lx2v` −32.9%. Scenes asking for a "locked-off
+medium shot; no camera movement" swing just the same, so this is the model's own
+motion prior rather than prompt following.
+
+Each turbo engine therefore carries a `lora_strength` (`pipeline/engines.py`),
+applied to the `MiniMaxH3TurboLoRA` node. It defaults to **1.0** — the strength
+the distill was published at — and lowering it trades that baked-in motion prior
+back. One 4.79 s sung scene at one seed, 704×1280, same references and pinned
+track throughout:
+
+| `lora_strength` | Peak excursion (2 s) | Edge energy | Wall clock |
+|---|---|---|---|
+| 1.0 (default) | −45.3% | 3.25 | 270 s |
+| 0.85 | −25.0% | 3.57 | 258 s |
+| 0.7 | −16.1% | 3.63 | 258 s |
+| 0.6 | −10.9% | 3.65 | 256 s |
+| 0.5 | −9.9% | 3.65 | 255 s |
+| 0.25 | −8.9% | 3.74 | 256 s |
+
+The drift floor is about −9%, reached by 0.6; below that the number stops
+moving. Edge energy *rises* slightly as the LoRA is weakened, so the softness
+this engine was criticised for does not come back — every arm sits below w4a8's
+3.40 at the top of the range and well below `ref-turbo`'s 5.16. The knob is free
+in wall clock.
+
+**More steps make the drift worse, not better** — at every strength, and for 77%
+more wall clock:
+
+| | 4 steps | 6 steps | 8 steps |
+|---|---|---|---|
+| strength 1.0 | −45.3% | −50.5% | −55.2% |
+| strength 0.85 | −25.0% | −28.1% | −33.9% |
+| strength 0.7 | −16.1% | −21.4% | −21.4% |
+
+So raising **Sampling steps** is not a way out of it. The sigma schedule is not
+the cause either: `BasicScheduler(simple)` at 4 steps emits
+`[1.0, 0.973, 0.9231, 0.8, 0.0]`, which is exactly the grid LightX2V distilled
+this LoRA against (NFE 4, video shift 12, audio shift 3).
+
+The default is unchanged at 1.0, because this is one sung scene at one seed and
+because dialogue takes — what these engines were chosen for — measured **zero**
+drift on the 14 s A/B above and so have nothing to gain from a weaker LoRA. Set
+it per engine when a film's shots need to hold their framing.
+
 !!! warning "w4a8 needs ComfyUI ≥ 0.31.0 on every worker"
     Below that version the checkpoint does not error — it renders **black
     frames**. The render refuses up front rather than shipping them, but a

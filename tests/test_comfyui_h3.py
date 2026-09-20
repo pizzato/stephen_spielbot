@@ -1,4 +1,5 @@
 """MiniMax H3 I2V — frame/dimension math, workflow parameterization, dispatch."""
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -298,6 +299,28 @@ class H3ReferenceWorkflowTests(unittest.TestCase):
         self.assertTrue(any(n["class_type"] == "MiniMaxH3TurboSampler" for n in wf.values()))
         unet = next(n for n in wf.values() if n["class_type"] == "UNETLoader")
         self.assertEqual(unet["inputs"]["unet_name"], eng["unet"])
+
+    def test_turbo_lora_strength_is_engine_settable(self):
+        # The distill LoRA's own motion prior is what swings a locked-off sung
+        # take sideways, so its strength has to be reachable — a graph that
+        # hard-codes 1.0 leaves nothing to turn down.
+        eng, wf = self._generate(engine_key="minimax-h3-ref-turbo-lx2v")
+        lora = next(n for n in wf.values() if n["class_type"] == "MiniMaxH3TurboLoRA")
+        self.assertEqual(lora["inputs"]["strength"], 1.0)
+
+        with mock.patch.dict(engines.VIDEO_ENGINES["minimax-h3-ref-turbo-lx2v"],
+                             {"lora_strength": 0.7}):
+            _, wf = self._generate(engine_key="minimax-h3-ref-turbo-lx2v")
+        lora = next(n for n in wf.values() if n["class_type"] == "MiniMaxH3TurboLoRA")
+        self.assertEqual(lora["inputs"]["strength"], 0.7)
+
+    def test_non_turbo_graph_tolerates_the_strength_fill(self):
+        # The base Ref2VA graph has no LoRA node at all; the extra replacement
+        # must pass straight through instead of leaving a stray placeholder.
+        _, wf = self._generate(engine_key="minimax-h3-ref")
+        self.assertFalse(any(n["class_type"] == "MiniMaxH3TurboLoRA"
+                             for n in wf.values()))
+        self.assertNotIn("LORA_STRENGTH", json.dumps(wf))
 
     def test_refuses_without_an_image_reference(self):
         # H3 rejects audio-only conditioning; fail before queueing.
