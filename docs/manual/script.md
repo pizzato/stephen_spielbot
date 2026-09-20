@@ -297,7 +297,10 @@ The **video prompt is read-only**: it is assembled from those fields (never writ
 thing twice), with a legend above it saying which reference each `<Picture N>` number is.
 **Edit prompt** pins hand-written text instead — the fields stop rebuilding it until you
 **Rebuild from the fields**. **Re-generate scene** rewrites the whole take with the LLM
-(dialogue, action, setting — same theme, optionally steered). An acted scene's
+(dialogue, action, setting — same theme, optionally steered). It keeps whoever is
+**On screen** unless you ask otherwise, and can only cast people the film already
+has — name a catalogue character in the instruction to bring them in
+(see [casting is opt-in, by name](../characters.md#casting-is-opt-in-by-name)). An acted scene's
 **first frame is optional**: painted from the setting with the cast anchored to their
 portraits, it rides as the take's opening-composition reference — and
 **Remove first frame** drops it again.
