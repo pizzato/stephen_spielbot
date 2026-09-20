@@ -6512,6 +6512,56 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     return {"field": field, "value": text}
 
 
+# ── who a rewrite may cast ───────────────────────────────────────────────────
+# A rewrite used to be handed the style's WHOLE catalogue to choose from, with
+# nothing saying who this film is about — so it cast a stranger: scene 1 of a
+# 17-scene film about Sophia came back starring Mara, a catalogue character the
+# story never mentions. That wrong name is not cosmetic: scene_references sends
+# the cast's portraits as the take's identity references, so the next render
+# would shoot someone else's face.
+#
+# The script LLM learned this lesson already (_requested_characters): a
+# catalogue character reaches the prompt only when asked for by name. A rewrite
+# gets the same rule — this film's own people, plus anyone the user's
+# instruction actually names.
+
+def _film_cast_names(wd: Path | None, rows, scene_cast=()) -> list[str]:
+    """The people THIS film has on screen — the scene's own cast first, then the
+    rest of the film's scenes, then the story's identified characters and the
+    script's own. Deduplicated case-insensitively, first spelling wins."""
+    names = [str(n) for n in (scene_cast or [])]
+    for meta in performance_mode.parse_scene_rows(rows or []):
+        names += [str(n) for n in (meta.get("cast") or [])]
+    if wd is not None:
+        story = _read_story(Path(wd))
+        names += [str(c.get("name") or "") for c in (story.get("characters") or [])
+                  if isinstance(c, dict)]
+        names += [str(c.get("name") or "") for c in gapp._read_script_characters(Path(wd))]
+    seen, out = set(), []
+    for n in names:
+        n = n.strip()
+        if n and n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    return out
+
+
+def _cast_pool(cfg: dict, style_name: str, wd: Path | None, rows,
+               scene_cast=(), instruction: str = "") -> str:
+    """The comma-separated names a rewrite may cast, for the prompt.
+
+    This film's cast, widened by any catalogue character the *instruction* names
+    (so "bring Denis in" still works). Only a film that names nobody — every
+    scene narrated, no story characters — falls back to the style catalogue."""
+    names = _film_cast_names(wd, rows, scene_cast)
+    if names:
+        names += [str(c.get("name") or "")
+                  for c in gapp._requested_characters(cfg, style_name, instruction)]
+    else:
+        names = [str(c.get("name") or "") for c in gapp._style_characters(cfg, style_name)]
+    return ", ".join(dict.fromkeys(n for n in names if n.strip())) or "the story's characters"
+
+
 # ── scene mode conversion (narration ⇄ dialogue ⇄ silent) ────────────────────
 # Switching a scene's type CONVERTS its content (same theme and feel, the other
 # shape) instead of leaving mismatched fields — and every mode's last content is
@@ -6551,6 +6601,7 @@ def convert_scene_mode(job_id: str, scene_id: int, body: ConvertModeBody) -> dic
     store = DurableStore.default()
     try:
         job = store.get_job(job_id)
+        rows = store.scene_rows(job_id)
         current = store.get_scene(job_id, sid) or {}
     finally:
         store.close()
@@ -6637,11 +6688,8 @@ def convert_scene_mode(job_id: str, scene_id: int, body: ConvertModeBody) -> dic
               "between formats WITHOUT changing its content: same beat of the story, same "
               "theme, same feel. Return ONLY a raw JSON object — no markdown, no fences.")
     if target == "dialogue":
-        cast_pool = ", ".join(dict.fromkeys(
-            [c.get("name", "") for c in gapp._style_characters(cfg, style_name)]
-            + [c.get("name", "") for c in gapp._job_characters(cfg, style_name,
-                                                               gapp._job_work_dir(job_id)) or []]
-        )) or "the story's characters"
+        wd = gapp._job_work_dir(job_id)
+        cast_pool = _cast_pool(cfg, style_name, Path(wd) if wd else None, rows)
         user = (
             f"Video title: {video_title}\nScene title: {title}\n"
             f"NARRATED version to stage as an ACTED scene (characters speak on camera, "
@@ -6754,14 +6802,9 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     topic = jc.get("topic") or ""
     style_name = jc.get("style_name", "")
     outline = "; ".join(f"{int(r['id'])}. {r.get('title') or ''}" for r in rows)
-    cast_names = [c.get("name", "") for c in gapp._style_characters(cfg, style_name)]
-    if wd:
-        try:
-            cast_names += [c.get("name", "") for c in
-                           json.loads((Path(wd) / "characters.json").read_text())]
-        except Exception:
-            pass
-    cast_pool = ", ".join(dict.fromkeys(n for n in cast_names if n)) or "the story's characters"
+    cast_now = [str(n) for n in (meta.get("cast") or []) if str(n).strip()]
+    cast_pool = _cast_pool(cfg, style_name, Path(wd) if wd else None, rows,
+                           cast_now, body.instruction)
 
     lines_now = "\n".join(f'  {ln.get("speaker")}: "{ln.get("text")}"'
                           for ln in (meta.get("lines") or []))
@@ -6774,6 +6817,7 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         task = (f"Rewrite SILENT scene {sid} — one continuous ~{round(seconds)} second take, "
                 f"performed on camera, in which NOBODY SPEAKS. Current draft:\n"
                 f'Title: {current.get("title") or ""}\n'
+                f'On screen now: {", ".join(cast_now) or "(nobody)"}\n'
                 f'Setting: {meta.get("setting") or ""}\n')
         if singing:
             # A music-video beat: the film's song plays over this shot, and by
@@ -6797,6 +6841,7 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         task = (f"Rewrite ACTED scene {sid} — one continuous ~10 second take where the "
                 f"characters speak on camera. Current draft:\n"
                 f'Title: {current.get("title") or ""}\n'
+                f'On screen now: {", ".join(cast_now) or "(nobody)"}\n'
                 f'Setting: {meta.get("setting") or ""}\n'
                 f"Dialogue:\n{lines_now or '  (none)'}\n")
         keys = ('  "lines": ordered array of {"speaker": <a cast name>, "delivery": <2-4 words>, '
@@ -6808,7 +6853,8 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         + task + "\n"
         "Return a JSON object with exactly these keys:\n"
         '  "title": 5-10 word scene title\n'
-        f'  "cast": array of names on screen, AT MOST 2, chosen from: {cast_pool}'
+        f'  "cast": array of names on screen, AT MOST 2, ONLY from: {cast_pool} '
+        f'— keep whoever is on screen now unless the instruction asks otherwise'
         + (" (empty for a beat with nobody in it)\n" if silent else "\n") +
         '  "setting": one sentence — where this happens and what is around them\n'
         + keys +

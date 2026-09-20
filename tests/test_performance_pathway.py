@@ -1249,6 +1249,101 @@ class OneModelMixedFilmTests(unittest.TestCase):
         self.assertFalse(perf.mixed_film([silent, narrated], {"h3_silent_scenes": False}))
 
 
+class RegenCastPoolTests(ActedSceneEditingTests):
+    """A rewrite casts THIS film's people, not the style's whole catalogue.
+
+    Regenerating scene 1 of a 17-scene film about Sophia came back starring
+    Mara — a catalogue character the story never mentions. The cast drives the
+    portraits sent as identity references, so the next render would have shot
+    the wrong face.
+    """
+
+    _REPLY = json.dumps({"title": "Alone", "cast": ["Sophia"], "setting": "a loft",
+                         "lines": [{"speaker": "Sophia", "delivery": "soft",
+                                    "text": "You came."}],
+                         "beats": [{"t0": 0, "t1": 4, "action": "she waits"}],
+                         "camera": "locked medium", "soundscape": "city hush"})
+
+    def setUp(self):
+        super().setUp()
+        import yaml
+        import app as gapp
+        gapp.CONFIG_FILE.write_text(yaml.safe_dump({
+            "styles": [{"name": "Music"}],
+            "default_style": "Music",
+            "characters": [
+                {"id": "c1", "name": "Mara", "description": "pale, silver-grey slip",
+                 "enabled": True},
+                {"id": "c2", "name": "Sophia", "description": "green eyes", "enabled": True},
+                {"id": "c3", "name": "Denis", "description": "tall", "enabled": True},
+            ],
+            "characters_migrated_v2": True,
+        }))
+        (self.wd / "characters.json").write_text("[]")   # Sophia is a catalogue name
+        (self.wd / "story.json").write_text(json.dumps(
+            {"characters": [{"name": "Sophia", "description": "green eyes"}]}))
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(self.job_id, self.wd, "Film",
+                                       config={"video_title": "Film",
+                                               "style_name": "Music"}, metadata={})
+            store.upsert_scene(self.job_id, 1, title="Talk", image_prompt="",
+                               video_prompt="a loft", narration="You came.",
+                               metadata={"mode": "dialogue", "cast": ["Sophia"],
+                                         "lines": [{"speaker": "Sophia",
+                                                    "text": "You came."}]})
+        finally:
+            store.close()
+
+    def _regen_prompt(self, instruction: str = "") -> str:
+        seen = {}
+
+        def fake(system, user, cfg, **kw):
+            seen["user"] = user
+            return self._REPLY
+
+        with mock.patch.object(self.backend, "_llm_complete", side_effect=fake):
+            self.backend.regenerate_acted_scene(
+                self.job_id, 1, self.backend.ActedRegenBody(instruction=instruction))
+        return seen["user"]
+
+    def test_the_rewrite_is_never_offered_a_character_the_film_has_no_use_for(self):
+        user = self._regen_prompt()
+        self.assertIn("Sophia", user)
+        self.assertNotIn("Mara", user)
+        self.assertNotIn("Denis", user)
+
+    def test_the_rewrite_is_told_who_is_on_screen_now(self):
+        self.assertIn("On screen now: Sophia", self._regen_prompt())
+
+    def test_an_instruction_can_still_call_in_a_catalogue_character(self):
+        user = self._regen_prompt("bring Denis in from the hall")
+        self.assertIn("Denis", user)
+        self.assertNotIn("Mara", user)
+
+    def test_a_film_that_names_nobody_still_falls_back_to_the_catalogue(self):
+        from pipeline.orchestrator import DurableStore
+        (self.wd / "story.json").write_text(json.dumps({"characters": []}))
+        store = DurableStore.default()
+        try:
+            store.upsert_scene(self.job_id, 1, title="Talk", image_prompt="",
+                               video_prompt="a loft", narration="You came.",
+                               metadata={"mode": "dialogue", "cast": [],
+                                         "lines": [{"speaker": "?", "text": "You came."}]})
+        finally:
+            store.close()
+        user = self._regen_prompt()
+        for name in ("Mara", "Sophia", "Denis"):
+            self.assertIn(name, user)
+
+    def test_the_saved_cast_is_the_one_the_rewrite_returned(self):
+        with mock.patch.object(self.backend, "_llm_complete", return_value=self._REPLY):
+            r = self.backend.regenerate_acted_scene(self.job_id, 1,
+                                                    self.backend.ActedRegenBody())
+        self.assertEqual(r["scene"]["cast"], ["Sophia"])
+
+
 class ActedSceneRegenTests(ActedSceneEditingTests):
     """One button rewrites the whole acted take via the LLM."""
 

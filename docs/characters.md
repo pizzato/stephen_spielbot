@@ -180,6 +180,15 @@ This matters most for [performance films](performance_films.md), where the cast 
 as the speaker roster: handing over the whole library put library characters into every
 acted, silent or music-video script.
 
+Rewriting **one scene** follows the same rule. **Re-generate scene** and converting a
+narrated scene to dialogue may only cast people the film already has — the scene's own
+**On screen** names, the rest of the film's scenes, the story's identified characters and
+the per-script cast — widened by any catalogue character your *tell it how* instruction
+names ("bring Denis in from the hall"). Only a film that names nobody at all falls back to
+offering the catalogue. Getting this wrong is not cosmetic: the cast is what picks the
+portraits sent as the take's identity references, so a rewrite that invented a name would
+shoot the wrong face.
+
 ## Per-script characters
 
 Besides the catalogue, script generation identifies up to 2 recurring **main**
