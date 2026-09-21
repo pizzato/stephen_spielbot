@@ -122,6 +122,19 @@ work directory.
 3. As a last resort, delete the job and its files from the Render screen's **Delete job &
    files**, which clears all three stores for that film.
 
+### A worker died mid-render
+
+If a worker loses power or drops off the network while it is rendering a scene, the render
+notices within a few minutes and moves that scene to another worker — the dead one is
+dropped from the pool for the rest of the film. The [Render](manual/render.md) log names
+it: *"answered neither HTTP nor SSH"*.
+
+A worker that stops answering HTTP but is still reachable over SSH with a busy GPU is
+left alone: that is what loading a large checkpoint looks like, and the render waits.
+
+Bring a rebooted worker back with `bash scripts/worker.sh start s1|s2|s3`, then
+**Continue** the film from [Films](manual/films.md) — scenes already rendered are kept.
+
 ### Failures keep retrying
 
 Failed queue items auto-retry up to three times when their style has auto-start on — the
