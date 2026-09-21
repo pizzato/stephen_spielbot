@@ -62,8 +62,9 @@ What the take is built from depends on what the scene has:
   generated at render time, on the same worker, right before the take (anyone the frame
   names is anchored to their character reference portrait, so the painted opening shows the
   same face the take does) — **unless a location reference applies to the scene**: the location is the place, chosen by hand, and a frame
-  outranks it, so no frame is invented over it. Removing a scene's first frame therefore
-  sticks — the take opens on the location instead.
+  outranks it, so no frame is invented over it — and **unless the scene is set to take
+  no first frame**, which is the explicit way to say the take opens on its references
+  alone (see below).
 - **Portraits, when anyone is on screen.** The writer names a **cast** on each silent scene
   (at most two, from the same characters), alongside the setting, camera and soundscape a
   dialogue scene gets, and those portraits join the frame as references — which is what
@@ -386,11 +387,27 @@ reference**: a `<Picture N>` whose authority is the space, light, framing and wh
 everyone stands, while faces and voices stay bound to their own references. When a scene
 has one, it supersedes the location asset for that scene (the frame IS the place,
 photographed), keeping the reference budget tight — measured, three picture references
-hold; more and the weakest starts dropping. Because of that ranking, the first frame is
-opt-in per scene by default: nothing auto-paints one (the Script screen's
-missing-preview pass skips acted, singing and performed-silent scenes alike), and
-**Remove first frame** is permanent — the location takes over, and neither the screen nor
-the render quietly paints the frame back.
+hold; more and the weakest starts dropping.
+
+Which acted scenes open on a painted frame follows one rule, asked by the renderer and
+both editors alike (`performance.takes_first_frame`):
+
+- A **silent or sung** take opens on a painted frame — with no dialogue driving it, the
+  image is what carries the shot. **Regenerate all scene images** paints these, so a
+  music video is curated on the Script screen like any other film; a scene still without
+  one at render time gets it painted right before the take.
+- A **dialogue** take opens on its cast portraits and takes no frame, unless the style
+  paints every acted opening (`h3_first_frames`, below).
+- A scene carrying a hand-picked **location reference** is left alone by both — the
+  location is the place, chosen by hand, and a frame would supersede it. Re-generating
+  that one scene's image is the deliberate override.
+- A scene set to **No first frame** never gets one, from any path.
+
+**No first frame** is the permanent opt-out, on the scene itself: tick it in either
+editor, or press **Remove first frame**, which sets it. It holds through every re-render
+— and it holds even when an image is still on file, because the flag, not the file,
+decides whether the take opens on one. Re-generating the image, selecting a kept version
+or uploading one clears it again.
 
 For styles where the opening composition is what carries the shot, **Settings → a style →
 Video models → First frames — open every acted scene on a painted image**

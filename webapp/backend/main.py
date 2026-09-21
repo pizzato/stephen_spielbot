@@ -251,6 +251,9 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         # This scene picks up the previous scene's shot without a cut — set by
         # the divide step or the editors; the render chains such scenes.
         "continues_previous": bool(meta.get("continues_previous")),
+        # The user said this scene takes no first frame: the renderer paints
+        # none and any image on disk stays out of the take's references.
+        "no_first_frame": bool(meta.get("no_first_frame")),
         "cast": meta.get("cast", []),
         # Normalized (a prose string becomes one whole-take beat): the editor
         # maps over these, and the renderer normalizes identically.
@@ -5524,6 +5527,11 @@ class SceneUpdate(BaseModel):
     # This scene picks up the PREVIOUS scene's shot without a cut. True is
     # stored; False clears the key — an ordinary cut is the default.
     continues_previous: bool | None = None
+    # This scene opens on its references alone — no first frame is painted for
+    # it, and an image already on disk stops riding as the opening-composition
+    # reference. True is stored; False clears the key, so a frame is the
+    # default wherever the renderer would paint one.
+    no_first_frame: bool | None = None
     # Singing scenes only: the lyric lines this beat mouths, one per line, and
     # when each is heard in the clip's own seconds ([start, end] per line, in
     # order). Editing the times also rewrites ``vocal_ranges`` (their merged
@@ -5638,6 +5646,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["no_wardrobe"] = True
             else:
                 meta.pop("no_wardrobe", None)
+        if body.no_first_frame is not None:
+            if body.no_first_frame:
+                meta["no_first_frame"] = True
+            else:
+                meta.pop("no_first_frame", None)
         if body.continues_previous is not None:
             # Stored as sent — "first scene" is a POSITION, not an id (the film
             # editor reorders without renumbering), so validity is the render's
@@ -5934,6 +5947,35 @@ def reorder_job_scenes(job_id: str, body: SceneReorderBody) -> dict:
 
 # ── scene preview (FLUX first frame) ─────────────────────────────────────────
 
+def _clear_no_first_frame(job_id: str, scene_id: int) -> None:
+    """Undo a sticky removal: this scene takes a first frame again.
+
+    Called wherever the user puts an image back — re-generating one, selecting
+    a kept version, uploading one — so the flag can never outlive the decision
+    that set it and leave a visible image the render quietly ignores."""
+    rows = []
+    store = DurableStore.default()
+    try:
+        row = store.get_scene(job_id, int(scene_id))
+        meta = dict(row.get("metadata") or {}) if isinstance(row, dict) else {}
+        # Nothing to undo — the common case, so it costs one read and no write.
+        if not meta.pop("no_first_frame", None):
+            return
+        store.upsert_scene(job_id, int(scene_id),
+                           title=row.get("title") or "",
+                           image_prompt=row.get("image_prompt") or "",
+                           video_prompt=row.get("video_prompt") or "",
+                           narration=row.get("narration") or "",
+                           preview_path=row.get("preview_path") or "",
+                           metadata=meta)
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    wd = gapp._job_work_dir(job_id)
+    if rows and wd is not None:
+        gapp._persist_script_snapshot(wd, rows)
+
+
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview")
 def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style: str = "",
                         instruction: str = "") -> dict:
@@ -5945,6 +5987,7 @@ def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style:
             )
     except Exception as e:
         raise HTTPException(503, f"Preview failed: {str(e).splitlines()[0][:200]}")
+    _clear_no_first_frame(job_id, int(scene_id))
     wd = gapp._job_work_dir(job_id)
     hist = image_history.history(wd, int(scene_id)) if wd else None
     return {"ok": True, "preview_path": str(out), "history": hist}
@@ -5952,9 +5995,15 @@ def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style:
 
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview-remove")
 def remove_scene_preview(job_id: str, scene_id: int) -> dict:
-    """Delete a scene's current first-frame image. For an acted scene that
-    stops it riding as the take's opening-composition reference; kept history
-    versions survive, so re-selecting one brings it back."""
+    """Delete a scene's current first-frame image, and record that this scene
+    takes none. For an acted scene that stops it riding as the take's
+    opening-composition reference; kept history versions survive, so
+    re-selecting one brings it back.
+
+    The removal is STICKY (``no_first_frame``): without it the next render
+    repaints the frame from scratch (ensure_opening_frame paints whenever a
+    silent scene has no image), so removing one never held. Re-generating the
+    scene's image, or selecting a kept version, clears the flag again."""
     wd = _job_wd_or_404(job_id)
     sid = int(scene_id)
     # Keep the frames being removed as history versions — re-selecting one must
@@ -5972,7 +6021,8 @@ def remove_scene_preview(job_id: str, scene_id: int) -> dict:
                                video_prompt=row.get("video_prompt") or "",
                                narration=row.get("narration") or "",
                                preview_path="",
-                               metadata=dict(row.get("metadata") or {}))
+                               metadata={**dict(row.get("metadata") or {}),
+                                         "no_first_frame": True})
         rows = store.scene_rows(job_id)
     finally:
         store.close()
@@ -5981,6 +6031,19 @@ def remove_scene_preview(job_id: str, scene_id: int) -> dict:
     if rows:
         gapp._persist_script_snapshot(wd, rows)
     return {"ok": True}
+
+
+def _no_frame_reason(rows: list[dict]) -> str:
+    """Why a regenerate-all painted nothing — shown verbatim in the editor, so
+    the button never reports a bare "0" with no reason again."""
+    n = sum(1 for r in rows if (r.get("metadata") or {}).get("no_first_frame"))
+    if n == len(rows):
+        return "every scene is set to take no first frame"
+    if n:
+        return (f"{n} of {len(rows)} scenes take no first frame; the rest open "
+                "on their location reference or their cast portraits")
+    return ("no scene here opens on a painted frame — these takes open on "
+            "their location references or their cast portraits")
 
 
 @api.post("/api/jobs/{job_id}/previews")
@@ -5997,24 +6060,39 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
     if not rows:
         return {"scenes": [], "generated": 0, "failed": []}
     wd = gapp._job_work_dir(job_id)
-    # An acted scene needs no first frame — it is conditioned on the character
-    # portraits — and painting one anyway SUPERSEDES the scene's location
-    # references (resolve_performance_references drops them when a frame
-    # exists), silently resurrecting a frame the user removed. Guarded with the
-    # renderer's own predicate: a singing scene and an acted-silent one carry
-    # mode "silent", which a mode-only check misses. A mixed film still gets
-    # stills for its narrated scenes.
+    # Which scenes open on a painted frame — asked through the RENDERER's own
+    # predicate (performance.takes_first_frame), so what you can regenerate
+    # here is exactly what the take will be rendered with. A dialogue take
+    # opens on the portraits and takes no frame unless the style paints every
+    # acted opening (h3_first_frames); a silent or sung one does take a frame,
+    # which is why a music video regenerates here like any other film.
     ctx = (_acted_scene_ctx(wd) if wd is not None
            else {"acted_cfg": {"h3_silent_scenes": False}, "first_frames": False})
-    # …unless the style opens every acted scene on a painted frame
-    # (h3_first_frames) — then the acted scenes get one here too, composed from
-    # their setting where no image prompt exists.
     needs_frame = [r for r in rows
-                   if ctx["first_frames"] or not performance_mode.renders_acted(
-                       {"metadata": dict(r.get("metadata") or {})}, ctx["acted_cfg"])]
+                   if performance_mode.takes_first_frame(
+                       {"metadata": dict(r.get("metadata") or {})}, ctx["acted_cfg"],
+                       first_frames=ctx["first_frames"])]
+    # A location reference IS the place, chosen by hand, and a frame outranks
+    # it (resolve_performance_references drops the location when a frame
+    # exists) — so the renderer paints none for such a scene, and neither does
+    # a bulk regenerate. Re-generating that ONE scene's image stays available
+    # as the deliberate override.
+    if wd is not None:
+        cfg = gapp.load_config()
+        style_name = style or _job_style_name(job_id) or ""
+        kept = []
+        for r in needs_frame:
+            meta = dict(r.get("metadata") or {})
+            if performance_mode.renders_acted({"metadata": meta}, ctx["acted_cfg"]) and any(
+                    v["kind"] == "location" for v in gapp.scene_visuals(
+                        wd, int(r["id"]), meta.get("cast"), cfg, style_name)):
+                continue
+            kept.append(r)
+        needs_frame = kept
     if not needs_frame:
-        return {"scenes": [], "generated": 0, "failed": [],
-                "skipped": "every scene is acted — none has a first frame"}
+        return {"scenes": [_scene_to_json(r, wd) for r in rows],
+                "generated": 0, "failed": [],
+                "skipped": _no_frame_reason(rows)}
 
     to_generate = needs_frame if force else [
         r for r in needs_frame if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
@@ -6066,6 +6144,7 @@ def select_scene_preview(job_id: str, scene_id: int, body: PreviewSelectBody) ->
         store.update_scene_preview(job_id, int(scene_id), out)
     finally:
         store.close()
+    _clear_no_first_frame(job_id, int(scene_id))
     return {"ok": True, "preview_path": str(out),
             "history": image_history.history(wd, int(scene_id))}
 
@@ -16078,6 +16157,7 @@ def select_film_preview(scene_id: int, body: FilmPreviewSelectBody) -> dict:
         store.update_scene_preview(job_id, int(scene_id), out)
     finally:
         store.close()
+    _clear_no_first_frame(job_id, int(scene_id))
     return {"ok": True, "preview_path": str(out),
             "history": image_history.history(wd, int(scene_id))}
 
@@ -16175,6 +16255,7 @@ def upload_film_preview(scene_id: int, body: FilmPreviewUploadBody) -> dict:
     finally:
         store.close()
     image_history.record(wd, sid, preview)
+    _clear_no_first_frame(job_id, sid)
     return {"ok": True, "preview_path": str(preview),
             "history": image_history.history(wd, sid)}
 

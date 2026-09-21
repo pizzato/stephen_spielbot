@@ -103,6 +103,7 @@ function SceneCard({
     cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
     singing: !!scene.singing, no_wardrobe: !!scene.no_wardrobe,
     continues_previous: !!scene.continues_previous,
+    no_first_frame: !!scene.no_first_frame,
   })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
@@ -139,6 +140,7 @@ function SceneCard({
       setting: s.setting || '', camera: s.camera || '', soundscape: s.soundscape || '',
       no_wardrobe: !!s.no_wardrobe,
       continues_previous: !!s.continues_previous,
+      no_first_frame: !!s.no_first_frame,
       cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
       singing: !!s.singing,
     })
@@ -161,6 +163,7 @@ function SceneCard({
         beats: st.beats ?? null, seconds: st.seconds ?? null,
         no_wardrobe: !!st.no_wardrobe,
         continues_previous: !!st.continues_previous,
+        no_first_frame: !!st.no_first_frame,
       })
     } catch (e) {
       setError(e.message)
@@ -248,6 +251,7 @@ function SceneCard({
     try {
       const r = await api.selectFilmPreview(workDir, scene.id, versionId)
       setHistory(r.history)
+      setSceneType((st) => ({ ...st, no_first_frame: false }))
     } catch (e) {
       setError(e.message)
     } finally {
@@ -302,6 +306,7 @@ function SceneCard({
     try {
       const r = await api.uploadFilmPreview(workDir, scene.id, filename, data)
       setHistory(r.history)
+      setSceneType((st) => ({ ...st, no_first_frame: false }))
       onSaved()
     } catch (e) {
       setError(e.message)
@@ -397,12 +402,23 @@ function SceneCard({
     }
   }
 
+  // Sticky: the server records "no first frame" on the scene, so the next
+  // render no longer repaints one. Re-generating or picking a kept version
+  // clears it again.
   const removeFirstFrame = async () => {
     setError('')
     try {
       await api.removeScenePreview(jobId, scene.id)
+      setSceneType((st) => ({ ...st, no_first_frame: true }))
       await onSaved()
     } catch (e) { setError(e.message) }
+  }
+
+  const setNoFirstFrame = async (on) => {
+    const st = { ...sceneType, no_first_frame: on }
+    setSceneType(st)
+    await persist(st)
+    await onSaved()
   }
 
   const isRendering = !!busy || !!taskId
@@ -703,8 +719,15 @@ function SceneCard({
                 onClick={pasteFrame}>Paste</Button>
               {actedShape && previewUrl && (
                 <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering}
-                  title="Delete the first-frame image — the next shoot renders from portraits and visuals only"
+                  title="Delete the first-frame image — the take renders from portraits and visuals only, and stays that way through a re-shoot"
                   onClick={removeFirstFrame}>Remove first frame</Button>
+              )}
+              {/* The same state as Remove first frame, as a switch — so a
+                  scene that never had an image can be set to take none. */}
+              {actedShape && (
+                <Check checked={!!sceneType.no_first_frame} disabled={isRendering}
+                  label="No first frame"
+                  onChange={setNoFirstFrame} />
               )}
               {actedShape && (
                 <GuidedRegenButton variant="ghost" icon="rotate-right" size="sm"

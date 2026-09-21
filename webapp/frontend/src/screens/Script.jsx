@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, continuationHonoured, ContinuationFrameNote, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect, RestyleForm, NO_STYLE } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, Check, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, continuationHonoured, ContinuationFrameNote, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect, RestyleForm, NO_STYLE } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
@@ -765,9 +765,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       }))
       const generated = r.generated ?? 0
       const failedCount = r.failed?.length ?? 0
-      setRegenStatus(failedCount > 0
-        ? `Regenerated ${generated} scene image${generated !== 1 ? 's' : ''} (${failedCount} failed)`
-        : `Regenerated ${generated} scene image${generated !== 1 ? 's' : ''}`)
+      setRegenStatus(r.skipped
+        ? `Nothing to regenerate — ${r.skipped}.`
+        : failedCount > 0
+          ? `Regenerated ${generated} scene image${generated !== 1 ? 's' : ''} (${failedCount} failed)`
+          : `Regenerated ${generated} scene image${generated !== 1 ? 's' : ''}`)
     } catch (e) { setError(e.message) } finally { setGenAll(false) }
   }
 
@@ -883,6 +885,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         beats: s.beats ?? null, seconds: s.seconds ?? null,
         no_wardrobe: !!s.no_wardrobe,
         continues_previous: !!s.continues_previous,
+        no_first_frame: !!s.no_first_frame,
         // Singing scenes: the sung lines and their in-clip times, edited in
         // the staging panel below the soundtrack slice.
         sings: s.sings ?? null, line_times: s.line_times ?? null,
@@ -984,7 +987,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       await persist(idx)
       const r = await api.regenPreview(job.job_id, scenes[idx].id, resolution, style, instruction)
-      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, no_first_frame: false, cb: Date.now() } : s))
       refreshPerf()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -993,7 +996,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setBusy(`preview:${idx}`); setError('')
     try {
       const r = await api.selectPreview(job.job_id, scenes[idx].id, versionId)
-      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      setScenes((arr) => arr.map((s, i) => i === idx ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, no_first_frame: false, cb: Date.now() } : s))
       refreshPerf()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -1018,15 +1021,27 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
   }
 
-  // Remove an acted scene's painted first frame — the take then renders from
-  // portraits and visuals alone.
+  // Remove a scene's painted first frame — the take then renders from
+  // portraits and visuals alone. The removal STICKS: the server records
+  // "no first frame" on the scene, so the render no longer repaints one.
+  // Regenerating the image (or picking a kept version) clears it again.
   const removeFirstFrame = async (idx) => {
     setError('')
     try {
       await api.removeScenePreview(job.job_id, scenes[idx].id)
-      setScenes((arr) => arr.map((x, j) => (j === idx ? { ...x, has_preview: false, preview_path: '' } : x)))
+      setScenes((arr) => arr.map((x, j) => (j === idx ? { ...x, has_preview: false, preview_path: '', no_first_frame: true } : x)))
       refreshPerf()
     } catch (e) { setError(e.message) }
+  }
+
+  // The same state as Remove first frame, shown as a switch — so a scene that
+  // never had an image can be set to take none, and one that has an image can
+  // keep it on file (and in history) while the take opens on its references.
+  const setNoFirstFrame = async (idx, on) => {
+    const ns = { ...scenes[idx], no_first_frame: on }
+    setScenes((arr) => arr.map((x, j) => (j === idx ? ns : x)))
+    await persist(idx, ns)
+    refreshPerf()
   }
 
   // Re-shot a scene? The published final still holds the old take until the
@@ -1224,9 +1239,23 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 onRegen={(instr) => regen(i, instr)} chips={REGEN_CHIPS.image} />
               <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!s.has_preview || !!busy}
                 onClick={() => { setInpaintErr(''); setInpaint(i) }}>Edit image</Button>
-              {isActedMode(s.mode) && s.has_preview && (
+              {actedShape && s.has_preview && (
                 <Button variant="ghost" block icon="trash-can" disabled={!!busy}
                   onClick={() => removeFirstFrame(i)}>Remove first frame</Button>
+              )}
+              {/* The sticky choice. Removing the image sets it; so does this
+                  switch, which also works on a scene that never had one. */}
+              {actedShape && (
+                <div className="mt-8">
+                  <Check checked={!!s.no_first_frame} disabled={!!busy}
+                    label="No first frame for this scene"
+                    onChange={(on) => setNoFirstFrame(i, on)} />
+                  <div className="muted mt-8" style={{ fontSize: 12, lineHeight: 1.5 }}>
+                    {s.no_first_frame
+                      ? 'This take opens on its references alone — the render will not paint a frame for it, and any image kept here stays out of the take.'
+                      : 'Re-generating the image, or picking a kept version, always turns this back off.'}
+                  </div>
+                </div>
               )}
               <VersionStrip versions={s.history?.versions} selected={s.history?.selected}
                 onSelect={(vid) => selectVersion(i, vid)} onDelete={(vid) => deleteVersion(i, vid)}

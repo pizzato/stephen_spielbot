@@ -306,7 +306,9 @@ has — name a catalogue character in the instruction to bring them in
 (see [casting is opt-in, by name](../characters.md#casting-is-opt-in-by-name)). An acted scene's
 **first frame is optional**: painted from the setting with the cast anchored to their
 portraits, it rides as the take's opening-composition reference — and
-**Remove first frame** drops it again.
+**Remove first frame** drops it again. That removal is permanent for the scene: it
+ticks **No first frame**, so no later render paints one back. Re-generating the
+image, or picking a kept version from the strip, clears it.
 
 ### Acted staging
 
@@ -350,6 +352,10 @@ The scene's still, generated on demand:
 
 - **Regenerate image** — repaint it, optionally with an instruction
 - **Edit image** — mask a region and describe the fix (masked img2img inpaint)
+- **Remove first frame** / **No first frame** — two ways to set one thing: this scene
+  opens on its references alone. The switch also works on a scene that has no image
+  yet, and an image left on file stays out of the take while it is on. Only acted,
+  silent and sung scenes offer it — a narrated scene's image *is* its frame zero.
 - The **version strip** keeps every take; click one to make it the frame that renders
 - Click the image for a full-size lightbox. **←** / **→** step between scenes and take the
   editor with them — close on a frame you dislike and you are already on its scene, no
@@ -406,7 +412,12 @@ isn't a scene:
 - **Title** — max 100 characters, with a regenerate button and *Shorter / Punchier /
   More literal* style chips
 - **Resolution** — changing it here re-targets the render
-- **Regenerate all scene images** — repaint every first frame
+- **Regenerate all scene images** — repaint every first frame the render will
+  actually use. Sung and silent scenes are included: those takes open on a painted
+  frame, so this is where you curate it. Scenes set to **No first frame**, and acted
+  scenes already carrying a hand-picked location reference, are left alone — the
+  button says which when it paints nothing. Re-generating one scene's image
+  overrides a location reference deliberately.
 - **YouTube description** — written automatically when the script was generated;
   **Generate** rewrites it
 - **Cover image** — the thumbnail, with **Edit cover** for a masked inpaint

@@ -4254,12 +4254,16 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
     # opening-composition reference. Ref2VA has no literal first-frame input,
     # but an image reference demonstrably anchors the space and framing (the
     # shot-splitter's continuity frame proved it).
+    # …unless the user said this scene takes no first frame. The image may
+    # still be on disk (the editor's toggle leaves it there, and kept history
+    # versions always survive), so the flag — not the file — decides.
     frame = None
-    for cand in (Path(work_dir) / f"scene_{int(scene_id):02d}_preview.png",
-                 Path(work_dir) / f"scene_{int(scene_id):02d}_first_frame.png"):
-        if scene_id and cand.exists() and cand.stat().st_size > 0:
-            frame = cand
-            break
+    if not meta.get("no_first_frame"):
+        for cand in (Path(work_dir) / f"scene_{int(scene_id):02d}_preview.png",
+                     Path(work_dir) / f"scene_{int(scene_id):02d}_first_frame.png"):
+            if scene_id and cand.exists() and cand.stat().st_size > 0:
+                frame = cand
+                break
     if frame is not None:
         pictures.append({"slot": len(pictures) + 1, "name": "First frame",
                          "kind": "frame", "path": str(frame)})

@@ -1029,6 +1029,46 @@ class ActedSceneEditingTests(unittest.TestCase):
         self.assertFalse((self.wd / "scene_01_final.mp4").exists())
 
 
+class NoFirstFrameStickyTests(ActedSceneEditingTests):
+    """Remove image is STICKY. Before this, removing a frame from a silent or
+    sung scene held only until the next render, which repainted one — the
+    "sometimes that seems overwritten" report."""
+
+    def _meta(self):
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            return dict((store.get_scene(self.job_id, 1) or {}).get("metadata") or {})
+        finally:
+            store.close()
+
+    def test_removing_the_image_records_that_the_scene_takes_none(self):
+        (self.wd / "scene_01_preview.png").write_bytes(b"x")
+        self.backend.remove_scene_preview(self.job_id, 1)
+        self.assertFalse((self.wd / "scene_01_preview.png").exists())
+        self.assertTrue(self._meta().get("no_first_frame"))
+
+    def test_the_toggle_round_trips_through_the_editor(self):
+        self._save(no_first_frame=True)
+        self.assertTrue(self._meta().get("no_first_frame"))
+        self.assertTrue(self.backend.job_scenes(self.job_id)["scenes"][0]["no_first_frame"])
+        # False CLEARS the key — a frame is the default wherever one is painted.
+        self._save(no_first_frame=False)
+        self.assertNotIn("no_first_frame", self._meta())
+
+    def test_selecting_a_kept_version_puts_the_frame_back(self):
+        from pipeline import image_history
+        img = self.wd / "scene_01_preview.png"
+        img.write_bytes(b"x")
+        image_history.record(self.wd, 1, img)
+        self.backend.remove_scene_preview(self.job_id, 1)
+        self.assertTrue(self._meta().get("no_first_frame"))
+        version = image_history.history(self.wd, 1)["versions"][0]["id"]
+        self.backend.select_scene_preview(
+            self.job_id, 1, self.backend.PreviewSelectBody(version_id=version))
+        self.assertNotIn("no_first_frame", self._meta())
+
+
 class MixedPreviewTests(unittest.TestCase):
     """A mixed film paints stills for its narrated scenes only."""
 
@@ -1067,22 +1107,80 @@ class MixedPreviewTests(unittest.TestCase):
         gen.assert_not_called()
         self.assertIn("skipped", out)
 
-    def test_a_singing_scene_is_never_painted(self):
-        # A song film's beat carries mode "silent" + singing — it always
-        # renders as an acted take, so painting a still would resurrect a
-        # first frame the user removed (and supersede the scene's location).
+    def _sung(self, **meta):
+        return [{"id": 1, "title": "verse", "image_prompt": "i", "preview_path": "",
+                 "metadata": {"mode": "silent", "singing": True,
+                              "song_window": [0.0, 8.0], **meta}}]
+
+    def _regen_all(self, rows, work_dir=None, visuals=()):
         import webapp.backend.main as backend
         store = mock.MagicMock()
-        store.scene_rows.return_value = [
-            {"id": 1, "title": "verse", "image_prompt": "i", "preview_path": "",
-             "metadata": {"mode": "silent", "singing": True,
-                          "song_window": [0.0, 8.0]}}]
+        store.scene_rows.return_value = rows
         with mock.patch.object(backend.DurableStore, "default", return_value=store), \
-             mock.patch.object(backend.gapp, "_job_work_dir", return_value=None), \
+             mock.patch.object(backend.gapp, "_preview_worker_urls",
+                               return_value=["http://a:8188"]), \
+             mock.patch.object(backend.gapp, "WorkerPool"), \
+             mock.patch.object(backend.gapp, "_job_work_dir", return_value=work_dir), \
+             mock.patch.object(backend.gapp, "scene_visuals", return_value=list(visuals)), \
+             mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(backend, "_job_style_name", return_value="Hero"), \
              mock.patch.object(backend.gapp, "_generate_active_scene_preview") as gen:
-            out = backend.generate_all_previews("job")
+            return backend.generate_all_previews("job"), gen
+
+    def test_a_singing_scene_is_painted_like_the_renderer_would(self):
+        # A song film's beat carries mode "silent" + singing, and the renderer
+        # PAINTS a frame for it (ensure_opening_frame: a silent take opens on
+        # one). The editor used to refuse — "Regenerated 0 scene images" on a
+        # music video — because it asked renders_acted, the engine-dispatch
+        # predicate, instead of takes_first_frame.
+        out, gen = self._regen_all(self._sung())
+        self.assertEqual([c.args[1] for c in gen.call_args_list], [1])
+        self.assertEqual(out["generated"], 1)
+
+    def test_a_scene_marked_no_first_frame_is_never_painted(self):
+        # The user's own "no first frame" — the sticky form of Remove image.
+        out, gen = self._regen_all(self._sung(no_first_frame=True))
+        gen.assert_not_called()
+        self.assertIn("no first frame", out["skipped"])
+
+    def test_a_sung_scene_keeps_a_location_reference_it_was_given(self):
+        # A frame outranks a location (resolve_performance_references drops the
+        # location when a frame exists), so the renderer paints none for such a
+        # scene — and neither does a bulk regenerate. Re-generating that ONE
+        # scene's image stays available as the deliberate override.
+        out, gen = self._regen_all(self._sung(), work_dir=Path("/tmp/wd"),
+                                   visuals=[{"kind": "location", "name": "the pier"}])
         gen.assert_not_called()
         self.assertIn("skipped", out)
+
+    def test_the_editor_and_the_renderer_agree_on_every_scene(self):
+        # The regression that started all this: two predicates for one
+        # question. Whatever the editor offers to paint is what the renderer
+        # will paint, scene for scene.
+        import resume_generation as rg
+        from pipeline import performance as perf
+        rows = self._rows() + self._sung() + [
+            {"id": 9, "title": "quiet", "image_prompt": "i", "preview_path": "",
+             "metadata": {"mode": "silent", "no_first_frame": True}}]
+        out, gen = self._regen_all(rows)
+        offered = {c.args[1] for c in gen.call_args_list}
+        for r in rows:
+            scene = mock.Mock(id=r["id"], image_prompt=r["image_prompt"])
+            scene.metadata = r["metadata"]
+            cfg = {"h3_silent_scenes": True}
+            with mock.patch.object(rg, "first_frames_flag", return_value=False):
+                renderer_paints = perf.takes_first_frame(
+                    {"metadata": r["metadata"]}, cfg,
+                    first_frames=rg.first_frames_flag(cfg, ""))
+            # The editor's ctx has h3_silent_scenes off, so a plain silent
+            # scene is narrated-shaped there; compare only where both agree on
+            # the engine, which is every scene this film actually has.
+            if r["id"] != 9:
+                self.assertEqual(r["id"] in offered, renderer_paints,
+                                 f"scene {r['id']} disagrees")
+            else:
+                self.assertFalse(renderer_paints)
+                self.assertNotIn(9, offered)
 
 
 class ActedFieldEditingTests(ActedSceneEditingTests):
