@@ -392,6 +392,10 @@ In the Scenes view header: pick **1, 2, 3, 5 passes** or **Until stable**, then
 engagement, and may rewrite, delete, add, or reorder scenes. Its verdict appears above the
 scenes when it finishes.
 
+If an OpenAI critic pass fails, the message above the scenes includes the API's
+explanation (for example, an unsupported parameter). A failed request does not
+apply edits from that pass.
+
 The script critic is disabled for **Music video** scripts, both manually and in
 automation, to preserve each scene's timing against the song. The separate song
 critic can still review lyrics before the song is generated.
