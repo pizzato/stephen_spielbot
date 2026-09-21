@@ -11,6 +11,11 @@ Above the library, films that are rendering or need attention.
 - **Rendering** → **View render** opens [Render](render.md)
 - **Needs attention** → **Continue** resumes it
 
+Every started-but-unfinished film appears here, including ones you stopped yourself and
+ones whose script has already been rendered before — a second render of the same title,
+or the same script at another size, gets its own card. **Continue** picks up from the
+scenes already on disk, so a film stopped one scene short only re-renders that scene.
+
 **Delete** (with a confirm) removes a partial render and its files, cancelling it first if
 it's running.
 
