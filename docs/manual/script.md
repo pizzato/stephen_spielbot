@@ -64,7 +64,10 @@ the format does to the render.
   line in from their card; *An invented performer* leaves the story to invent one
   matching the Vocalist. A song is drafted with a singer already cast — one the brief
   names, else drawn at random from the style's cast, narrowed to the sex of the Singing
-  voice when one was picked at Create.
+  voice when one was picked at Create. Either way the film ends up with ONE performer:
+  whoever the story casts is the singer in every performance shot, and dividing the story
+  into scenes may not introduce a second one
+  ([Casting is opt-in, by name](../characters.md#casting-is-opt-in-by-name)).
 - **Vocalist** — WHO sings, in one editable line: sex, age, background, voice quality
   (e.g. *"adult male vocalist, Australian"*). Filled at draft time from the lead singer,
   or by the songwriter itself when the style has no usable cast (see
