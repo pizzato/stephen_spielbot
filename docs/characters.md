@@ -180,6 +180,15 @@ This matters most for [performance films](performance_films.md), where the cast 
 as the speaker roster: handing over the whole library put library characters into every
 acted, silent or music-video script.
 
+**Dividing a story into scenes** follows the same rule. The story names its cast before
+it is divided, and those names — plus any catalogue character the brief asked for — are
+the film's whole company: every scene's **On screen** cast, and every speaker, must be one
+of them. The writer is told so explicitly and may not introduce anyone new, however
+natural the beat would make it (a bandmate, a rival, a second lead). This matters most for
+a music video, where no one speaks: a rule that bound only *speakers* bound nothing at
+all, and the writer would name a fresh lead singer per scene — each with no portrait, so
+each rendered as a different stranger.
+
 Rewriting **one scene** follows the same rule. **Re-generate scene** and converting a
 narrated scene to dialogue may only cast people the film already has — the scene's own
 **On screen** names, the rest of the film's scenes, the story's identified characters and
