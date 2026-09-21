@@ -550,7 +550,8 @@ def _claude_call(client, model: str, system: str, user_msg: str,
 
 def _openai_compatible_call(url: str, api_key: str, model: str, system: str,
                             user_msg: str, max_tokens: int, label: str,
-                            retries: int = 6, timeout: int = 300) -> str:
+                            retries: int = 6, timeout: int = 300, *,
+                            openai: bool = False) -> str:
     """Chat Completions call (OpenAI, Grok/xAI, or other OpenAI-compatible hosts).
 
     Used by the OpenAI and Grok backends. Retries with exponential backoff.
@@ -560,12 +561,17 @@ def _openai_compatible_call(url: str, api_key: str, model: str, system: str,
     if (system or "").strip():
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": user_msg})
-    payload = json.dumps({
+    params = {
         "model": model,
         "messages": messages,
         "temperature": 0.7,
-        "max_tokens": max_tokens,
-    }).encode()
+        "max_completion_tokens" if openai else "max_tokens": max_tokens,
+    }
+    # Reasoning models reject custom sampling temperatures. Grok and other
+    # compatible providers retain their existing request format.
+    if openai and re.match(r"^(gpt-[56](?:[.-]|$)|o[134](?:-|$))", model):
+        params.pop("temperature")
+    payload = json.dumps(params).encode()
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
@@ -588,6 +594,19 @@ def _openai_compatible_call(url: str, api_key: str, model: str, system: str,
                 raise RuntimeError(f"Empty LLM content for {label} (finish_reason={finish})")
             return content.strip()
         except Exception as exc:
+            if openai and isinstance(exc, urllib.error.HTTPError):
+                detail = exc.reason
+                try:
+                    detail = json.loads(exc.read())["error"]["message"]
+                except (ValueError, KeyError, TypeError):
+                    pass
+                detail = " ".join(str(detail).split())
+                if api_key:
+                    detail = detail.replace(api_key, "[redacted]")
+                error = RuntimeError(f"OpenAI HTTP {exc.code}: {detail[:500]}")
+                if 400 <= exc.code < 500 and exc.code not in (408, 409, 429):
+                    raise error from exc
+                exc = error
             last_exc = exc
             if attempt < retries:
                 delay = min(10 * (2 ** (attempt - 1)), 60)
@@ -666,7 +685,7 @@ def _chat_complete(cfg: dict, system: str, user_msg: str, max_tokens: int,
             cfg.get("openai_api_url") or _OPENAI_CHAT_URL_DEFAULT,
             api_key,
             cfg.get("openai_model") or _OPENAI_MODEL_DEFAULT,
-            system, user_msg, max_tokens, label, retries=retries,
+            system, user_msg, max_tokens, label, retries=retries, openai=True,
         )
     url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -1048,6 +1067,7 @@ def _openai_generate(title: str, n_scenes: int, style_hint: str | None,
     def call_fn(system, user_msg, max_tokens, label, retries=6):
         return _openai_compatible_call(
             url, api_key, model, system, user_msg, max_tokens, label, retries=retries,
+            openai=True,
         )
 
     return _json_script_generate(

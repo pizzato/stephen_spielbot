@@ -49,6 +49,12 @@ Keys can also come from [environment variables](../environment.md#credentials). 
 keys are redacted by the API — the field shows a "saved — leave blank to keep"
 placeholder.
 
+OpenAI supports GPT-5/GPT-6 and o-series reasoning models using their supported
+completion limit and default temperature. Older OpenAI models retain the app's
+sampling temperature; Claude and Grok keep their own request formats. If OpenAI
+rejects a request, the error includes the API's explanation. Invalid requests are
+not retried; temporary server errors and rate limits still are.
+
 ### Image models
 
 The **Hugging Face token** used to auto-download gated engine weights onto the workers,
