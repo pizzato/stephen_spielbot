@@ -2377,13 +2377,12 @@ def _list_resumable_jobs() -> list[tuple[str, str]]:
             reverse=True,
         )
         for d in dirs:
+            # Cancelled renders stay on this list. Stopping a render writes
+            # status "cancelled" (so _reconcile_queue does not auto-retry it),
+            # but the work dir keeps every scene rendered so far — hiding it
+            # left the only "Continue" affordance out of reach for a film that
+            # was one scene short of finishing.
             if (d / "job.json").exists() and not (d / "combined.mp4").exists():
-                try:
-                    meta = _read_json(d / "job.json")
-                    if meta.get("status") == "cancelled":
-                        continue
-                except Exception:
-                    pass
                 results.append((_job_folder_label(d), str(d)))
     except Exception:
         pass
