@@ -11,7 +11,10 @@ only about *publishing*.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import os
 import time
 import uuid
 from pathlib import Path
@@ -28,16 +31,45 @@ PUBLISH_CLOCK_PATH = _CONFIG_DIR / "publish_clock.json"
 #   error        — the upload failed to even start (see "error" field)
 
 
+@contextlib.contextmanager
+def locked():
+    """Hold the queue's write lock across a read-modify-write cycle.
+
+    Every mutation here is load → change → save, and several threads run them at
+    once (the automation tick, plus each request that reconciles). Without this,
+    a reconcile that loaded before an approval landed would save its stale
+    snapshot back over it — which is how approved films silently came back
+    unapproved. Callers outside this module that load-then-save the whole queue
+    must hold it too.
+    """
+    PUBLISH_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = PUBLISH_QUEUE_PATH.with_suffix(".lock")
+    with open(lock_path, "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def load_queue() -> list[dict]:
+    """The queue as stored. A missing file is an empty queue; an *unreadable*
+    one is not — it raises, because a caller that saves after mistaking damage
+    for emptiness writes the whole queue away."""
     try:
-        return json.loads(PUBLISH_QUEUE_PATH.read_text())
-    except Exception:
+        raw = PUBLISH_QUEUE_PATH.read_text()
+    except FileNotFoundError:
         return []
+    data = json.loads(raw)
+    return data if isinstance(data, list) else []
 
 
 def save_queue(queue: list[dict]) -> None:
+    """Write the queue atomically, so a reader never sees a half-written file."""
     PUBLISH_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PUBLISH_QUEUE_PATH.write_text(json.dumps(queue, indent=2))
+    tmp = PUBLISH_QUEUE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(queue, indent=2))
+    os.replace(tmp, PUBLISH_QUEUE_PATH)
 
 
 def item_by_work_dir(work_dir: str) -> dict | None:
@@ -50,6 +82,12 @@ def add_item(work_dir: str, title: str, source: str = "manual",
     """Add a finished video to the publish queue. Returns the new entry, or {} if
     an entry for this work_dir already exists (a removed/skipped one counts — a
     re-scan must not resurrect something the user dropped)."""
+    with locked():
+        return _add_item_locked(work_dir, title, source, queue_item_id, youtube, x)
+
+
+def _add_item_locked(work_dir: str, title: str, source: str, queue_item_id: str,
+                     youtube: dict | None, x: dict | None) -> dict:
     queue = load_queue()
     if any(e.get("work_dir") == str(work_dir) for e in queue):
         return {}
@@ -75,23 +113,25 @@ def add_item(work_dir: str, title: str, source: str = "manual",
 
 
 def update_item(item_id: str, **updates) -> bool:
-    queue = load_queue()
-    for entry in queue:
-        if entry.get("id") == item_id:
-            entry.update(updates)
-            entry["updated_at"] = time.time()
-            save_queue(queue)
-            return True
-    return False
+    with locked():
+        queue = load_queue()
+        for entry in queue:
+            if entry.get("id") == item_id:
+                entry.update(updates)
+                entry["updated_at"] = time.time()
+                save_queue(queue)
+                return True
+        return False
 
 
 def remove_item(item_id: str) -> bool:
-    queue = load_queue()
-    new_q = [e for e in queue if e.get("id") != item_id]
-    if len(new_q) == len(queue):
-        return False
-    save_queue(new_q)
-    return True
+    with locked():
+        queue = load_queue()
+        new_q = [e for e in queue if e.get("id") != item_id]
+        if len(new_q) == len(queue):
+            return False
+        save_queue(new_q)
+        return True
 
 
 def _is_waiting(entry: dict) -> bool:
@@ -105,22 +145,23 @@ def move_item(item_id: str, direction: int) -> bool:
     """Move an entry up (direction=-1) or down (direction=1) among the entries
     still waiting to publish, so the manual publish order can be hand-tuned.
     Mirrors youtube.move_queue_item — the file order *is* the manual order."""
-    queue = load_queue()
-    waiting = [i for i, e in enumerate(queue) if _is_waiting(e)]
-    try:
-        item_idx = next(i for i, e in enumerate(queue) if e.get("id") == item_id)
-    except StopIteration:
-        return False
-    if item_idx not in waiting:
-        return False
-    pos = waiting.index(item_idx)
-    target = pos + direction
-    if target < 0 or target >= len(waiting):
-        return False
-    other_idx = waiting[target]
-    queue[item_idx], queue[other_idx] = queue[other_idx], queue[item_idx]
-    save_queue(queue)
-    return True
+    with locked():
+        queue = load_queue()
+        waiting = [i for i, e in enumerate(queue) if _is_waiting(e)]
+        try:
+            item_idx = next(i for i, e in enumerate(queue) if e.get("id") == item_id)
+        except StopIteration:
+            return False
+        if item_idx not in waiting:
+            return False
+        pos = waiting.index(item_idx)
+        target = pos + direction
+        if target < 0 or target >= len(waiting):
+            return False
+        other_idx = waiting[target]
+        queue[item_idx], queue[other_idx] = queue[other_idx], queue[item_idx]
+        save_queue(queue)
+        return True
 
 
 # ── Publishing clock resets ───────────────────────────────────────────────────
