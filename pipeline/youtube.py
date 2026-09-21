@@ -9,8 +9,11 @@ Handles:
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
+import os
 import re
 import concurrent.futures
 import threading
@@ -955,16 +958,41 @@ def get_pending_community_replies(cache: list[dict] | None = None) -> list[dict]
 
 # ── Video request queue ───────────────────────────────────────────────────────
 
+@contextlib.contextmanager
+def queue_locked():
+    """Hold the render queue's write lock across a read-modify-write cycle.
+
+    Same reason as the publish queue's lock: the automation tick and the request
+    handlers both load-change-save this file, and an unsynchronised pair loses
+    whichever change landed second — an approval, most visibly."""
+    QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = QUEUE_PATH.with_suffix(".lock")
+    with open(lock_path, "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def load_queue() -> list[dict]:
+    """The queue as stored. A missing file is an empty queue; an *unreadable* one
+    raises rather than reading as empty, so no caller can save the queue away
+    after mistaking damage for emptiness."""
     try:
-        return json.loads(QUEUE_PATH.read_text())
-    except Exception:
+        raw = QUEUE_PATH.read_text()
+    except FileNotFoundError:
         return []
+    data = json.loads(raw)
+    return data if isinstance(data, list) else []
 
 
 def save_queue(queue: list[dict]) -> None:
+    """Write the queue atomically, so a reader never sees a half-written file."""
     QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    QUEUE_PATH.write_text(json.dumps(queue, indent=2))
+    tmp = QUEUE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(queue, indent=2))
+    os.replace(tmp, QUEUE_PATH)
 
 
 def add_to_queue(comment: dict, final_title: str, source: str = "",
@@ -977,6 +1005,12 @@ def add_to_queue(comment: dict, final_title: str, source: str = "",
     existing items keep their original shape.
     Comment requests are inserted before suggestions (FIFO within each group).
     """
+    with queue_locked():
+        return _add_to_queue_locked(comment, final_title, source, source_platform)
+
+
+def _add_to_queue_locked(comment: dict, final_title: str, source: str,
+                         source_platform: str) -> dict:
     queue = load_queue()
     existing_ids = {e.get("comment_id") for e in queue if e.get("comment_id")}
     comment_id = comment.get("comment_id", "")
@@ -1030,45 +1064,48 @@ def add_to_queue(comment: dict, final_title: str, source: str = "",
 
 def move_queue_item(item_id: str, direction: int) -> bool:
     """Move a pending queue item up (direction=-1) or down (direction=1) among pending items."""
-    queue = load_queue()
-    pending_indices = [i for i, q in enumerate(queue) if q.get("status") == "pending"]
-    try:
-        item_idx = next(i for i, q in enumerate(queue) if q.get("id") == item_id)
-    except StopIteration:
-        return False
-    pos_in_pending = pending_indices.index(item_idx) if item_idx in pending_indices else -1
-    if pos_in_pending == -1:
-        return False  # item is not pending, cannot reorder
-    target_pos = pos_in_pending + direction
-    if target_pos < 0 or target_pos >= len(pending_indices):
-        return False
-    other_idx = pending_indices[target_pos]
-    queue[item_idx], queue[other_idx] = queue[other_idx], queue[item_idx]
-    save_queue(queue)
-    return True
+    with queue_locked():
+        queue = load_queue()
+        pending_indices = [i for i, q in enumerate(queue) if q.get("status") == "pending"]
+        try:
+            item_idx = next(i for i, q in enumerate(queue) if q.get("id") == item_id)
+        except StopIteration:
+            return False
+        pos_in_pending = pending_indices.index(item_idx) if item_idx in pending_indices else -1
+        if pos_in_pending == -1:
+            return False  # item is not pending, cannot reorder
+        target_pos = pos_in_pending + direction
+        if target_pos < 0 or target_pos >= len(pending_indices):
+            return False
+        other_idx = pending_indices[target_pos]
+        queue[item_idx], queue[other_idx] = queue[other_idx], queue[item_idx]
+        save_queue(queue)
+        return True
 
 
 def update_queue_item(item_id: str, **updates) -> bool:
-    queue = load_queue()
-    for entry in queue:
-        if entry.get("id") == item_id:
-            entry.update(updates)
-            # Staleness checks (_is_job_running, _reconcile_queue) and the
-            # lifecycle sort all read updated_at — keep it honest on every write.
-            if "updated_at" not in updates:
-                entry["updated_at"] = time.time()
-            save_queue(queue)
-            return True
-    return False
+    with queue_locked():
+        queue = load_queue()
+        for entry in queue:
+            if entry.get("id") == item_id:
+                entry.update(updates)
+                # Staleness checks (_is_job_running, _reconcile_queue) and the
+                # lifecycle sort all read updated_at — keep it honest on every write.
+                if "updated_at" not in updates:
+                    entry["updated_at"] = time.time()
+                save_queue(queue)
+                return True
+        return False
 
 
 def remove_queue_item(item_id: str) -> bool:
-    queue = load_queue()
-    new_q = [e for e in queue if e.get("id") != item_id]
-    if len(new_q) == len(queue):
-        return False
-    save_queue(new_q)
-    return True
+    with queue_locked():
+        queue = load_queue()
+        new_q = [e for e in queue if e.get("id") != item_id]
+        if len(new_q) == len(queue):
+            return False
+        save_queue(new_q)
+        return True
 
 
 # ── Suggestions ───────────────────────────────────────────────────────────────

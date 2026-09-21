@@ -7502,10 +7502,13 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
     # automation override that publishes unapproved films.
     if cfg.get("publish_require_approval") and not cfg.get("publish_auto_publish_unapproved") and not dests:
         e = pq.item_by_work_dir(str(wd))
-        source = (e or {}).get("source") or _publish_source_for(_film_job_config(wd))
+        jc = _film_job_config(wd)
+        source = (e or {}).get("source") or _publish_source_for(jc)
         bypass = source == "comment" and cfg.get("publish_schedule_skip_comment_requests", True)
         if not bypass:
-            approved = bool(e and e.get("approved"))
+            # The film's own record counts as well as the queue entry's, so a
+            # film with no entry yet (or a rebuilt one) still reads as approved.
+            approved = bool((e or {}).get("approved") or jc.get("publish_approved"))
             out["approved"] = approved
             out["awaiting_approval"] = not approved
     return out
@@ -13572,6 +13575,7 @@ def publish_approve(body: PublishApproveBody) -> dict:
         raise HTTPException(404, "Nothing to publish for this film.")
     pq.update_item(e["id"], approved=bool(body.approved),
                    approved_at=(time.time() if body.approved else None))
+    _record_publish_approval(p, bool(body.approved))
     return {"ok": True, "approved": bool(body.approved)}
 
 
@@ -17041,11 +17045,41 @@ def _enqueue_finished_for_publish(recent_only: bool = True) -> int:
             continue  # nothing left to publish
         source = _publish_source_for(jc)
         title = jc.get("video_title") or _video_title_for(p)
-        if pq.add_item(str(p), title=title, source=source,
-                       queue_item_id=jc.get("queue_item_id", ""),
-                       youtube=youtube, x=x):
+        entry = pq.add_item(str(p), title=title, source=source,
+                            queue_item_id=jc.get("queue_item_id", ""),
+                            youtube=youtube, x=x)
+        if entry:
+            _restore_publish_approval(p, entry)
             added += 1
     return added
+
+
+def _record_publish_approval(p: Path, approved: bool) -> None:
+    """Mirror an approval onto the film itself. The publish-queue entry is the
+    working copy, but entries come and go — deleting a film drops one, and a
+    re-scan builds a fresh one that knows nothing of an earlier approval. The
+    film's own job_config.json is what makes the decision outlive its entry."""
+    try:
+        jc = _film_job_config(p)
+        jc["publish_approved"] = bool(approved)
+        jc["publish_approved_at"] = time.time() if approved else None
+        _write_film_job_config(p, jc)
+    except Exception:
+        pass
+
+
+def _restore_publish_approval(p: Path, entry: dict | None) -> None:
+    """Carry a film's recorded approval onto a newly created publish-queue entry,
+    so re-enqueuing an already-approved film never quietly un-approves it."""
+    if not entry:
+        return
+    try:
+        jc = _film_job_config(p)
+        if jc.get("publish_approved") and not entry.get("approved"):
+            pq.update_item(entry["id"], approved=True,
+                           approved_at=jc.get("publish_approved_at") or time.time())
+    except Exception:
+        pass
 
 
 def _ensure_publish_entry(p: Path) -> dict | None:
@@ -17071,6 +17105,8 @@ def _ensure_publish_entry(p: Path) -> dict | None:
     pq.add_item(str(p), title=title, source=source,
                 queue_item_id=jc.get("queue_item_id", ""),
                 youtube=youtube, x=x)
+    entry = pq.item_by_work_dir(str(p))
+    _restore_publish_approval(p, entry)
     return pq.item_by_work_dir(str(p))
 
 
@@ -17128,7 +17164,16 @@ def _reconcile_publish_queue() -> None:
     whose work dir vanished (a deleted film isn't news; only real published
     history and releases still holding a cadence slot are kept), and re-pend
     uploads stuck mid-flight so the governor stops waiting on a release that
-    already died."""
+    already died.
+
+    Runs under the queue lock: this is a long load-then-save cycle, and it used
+    to race approvals arriving mid-pass — the saved snapshot predated them, so
+    films came back unapproved."""
+    with pq.locked():
+        _reconcile_publish_queue_locked()
+
+
+def _reconcile_publish_queue_locked() -> None:
     cfg = gapp.load_config()
     q = pq.load_queue()
     keep: list[dict] = []

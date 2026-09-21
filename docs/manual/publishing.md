@@ -141,6 +141,11 @@ There's a deliberate escape hatch: *…but let automation publish them without w
 approval* releases films on cadence while still showing them as unapproved. Turning it back
 off re-holds anything not yet published.
 
+An approval is recorded on the film itself, not just on its publish-queue entry, so it
+sticks: re-scanning the queue, or rebuilding an entry that had gone, brings the film back
+already approved rather than asking you a second time. Only **Approve** and its undo
+change it — nothing else in the app un-approves a film.
+
 ---
 
 ## Published
