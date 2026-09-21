@@ -386,7 +386,9 @@ Each button does only its own part. A narrated scene has:
 An **acted** scene keeps the same image buttons — its Image button reads **Add first
 frame** while it has none — but the frame is a reference the take opens on, not a render
 input (see [acted scenes](../performance_films.md#editing-an-acted-scene)), so it also
-gets **Remove first frame**: the next shoot then renders from portraits and visuals only.
+gets **Remove first frame** and a **No first frame** switch — two ways to set one thing:
+the take renders from portraits and visuals only, and keeps doing so through every later
+shoot. Re-generating the image, picking a kept version or uploading one clears it.
 Its Video button reads **Shoot again**: the whole take re-renders from the references, and
 its instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*)
 rather than the picture. It also
