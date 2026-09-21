@@ -411,10 +411,19 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
     takes then open on a painted frame too (composed from the setting when
     there is no image prompt), for styles where the opening image matters.
 
+    The user's "no first frame" on the scene wins over all of it: the take
+    opens on its references alone and nothing is painted, however many times
+    the film is re-rendered.
+
     Returns the frame, or None when there is nothing to make one from.
     """
-    if not (_performance.is_silent(scene)
-            or first_frames_flag(cfg, style_name)):
+    # Asked before the reuse loop below, so "no first frame" also holds for a
+    # scene whose image is still on disk — resolve_performance_references
+    # leaves that image out of the take's references to match. The Create
+    # screen's regenerate-all asks this SAME predicate, so what you can curate
+    # up front is exactly what the render uses.
+    if not _performance.takes_first_frame(
+            scene, cfg, first_frames=first_frames_flag(cfg, style_name)):
         return None
     # Any existing image will do — unlike the I2V path this is a REFERENCE, not
     # frame zero, so an off-resolution preview from the Create screen is still

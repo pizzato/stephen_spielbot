@@ -938,6 +938,31 @@ def renders_acted(scene, cfg: dict | None = None) -> bool:
     return is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
 
 
+def takes_first_frame(scene, cfg: dict | None = None, *,
+                      first_frames: bool = False) -> bool:
+    """Does this scene open on a PAINTED first frame?
+
+    The one predicate the renderer (ensure_opening_frame) and the Create
+    screen's regenerate-all both ask. They used to ask different questions —
+    the editor reused ``renders_acted``, which is the ENGINE-DISPATCH predicate
+    (acted take vs first-frame I2V), not this one — and so disagreed on exactly
+    the silent and sung scenes: the renderer painted frames the editor refused
+    to let you see or curate ("Regenerated 0 scene images" on a music video).
+
+    - The scene's own "no first frame" always wins: nothing is painted for it.
+    - A narrated scene always takes one — the image IS frame zero for I2V.
+    - A silent or sung acted take opens on a painted frame: it is what carries
+      a shot with no dialogue to drive it.
+    - A dialogue take opens on the portraits, unless the style paints every
+      acted opening (``h3_first_frames``, passed in resolved as *first_frames*).
+    """
+    if scene_meta(scene).get("no_first_frame"):
+        return False
+    if not renders_acted(scene, cfg):
+        return True
+    return is_silent(scene) or bool(first_frames)
+
+
 def mixed_film(scenes, cfg: dict | None = None) -> bool:
     """A film holding BOTH acted takes and narrated scenes.
 

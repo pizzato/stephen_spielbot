@@ -166,6 +166,72 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(perf.opening_frame_prompt({}), "")
 
 
+class NoFirstFrameTests(unittest.TestCase):
+    """The user's "no first frame" on a scene, set by Remove image or the
+    editor's toggle. It must SURVIVE a render: before it existed, removing a
+    frame from a silent or sung scene held only until the next render, which
+    repainted one from scratch."""
+
+    def _silent(self, **meta):
+        md = {"mode": "silent", "cast": ["Ana"], "setting": "a pier at dawn", **meta}
+        return Scene(id=4, title="verse", image_prompt="i", video_prompt="v",
+                     narration="", mode="silent", lines=[], metadata_extra=md)
+
+    def _paint(self, scene, files=()):
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            for name in files:
+                (wd / name).write_bytes(b"x")
+            made = []
+
+            def _fake_gen(engine, prompt, out, **kw):
+                Path(out).write_bytes(b"png")
+                made.append(prompt)
+                return out
+
+            with unittest.mock.patch.object(rg, "generate_with_engine", _fake_gen):
+                got = rg.ensure_opening_frame(scene, wd, {}, comfy_url="http://x",
+                                              vid_width=512, vid_height=256)
+            return got, made
+
+    def test_a_silent_scene_paints_a_frame_by_default(self):
+        got, made = self._paint(self._silent())
+        self.assertIsNotNone(got)
+        self.assertEqual(len(made), 1)
+
+    def test_the_flag_stops_the_render_repainting_it(self):
+        got, made = self._paint(self._silent(no_first_frame=True))
+        self.assertIsNone(got)
+        self.assertEqual(made, [])
+
+    def test_the_flag_holds_even_with_the_style_painting_every_opening(self):
+        import resume_generation as rg
+        scene = self._silent(no_first_frame=True)
+        with unittest.mock.patch.object(rg, "generate_with_engine") as gen:
+            with tempfile.TemporaryDirectory() as td:
+                got = rg.ensure_opening_frame(scene, Path(td), ON, comfy_url="http://x",
+                                              vid_width=512, vid_height=256)
+        self.assertIsNone(got)
+        gen.assert_not_called()
+
+    def test_an_image_left_on_disk_stays_out_of_the_takes_references(self):
+        # The editor's toggle leaves the file there (kept history versions
+        # always survive), so the FLAG decides, not the file — otherwise a
+        # scene set to "no first frame" would still open on its old image.
+        import app as gapp
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            (wd / "scene_04_preview.png").write_bytes(b"x")
+            meta = {"mode": "silent", "cast": [], "no_first_frame": True}
+            refs = gapp.resolve_performance_references(meta, {}, wd, "Hero", scene_id=4)
+            self.assertEqual([p for p in refs["pictures"] if p["kind"] == "frame"], [])
+            # …and without the flag the same image does ride along.
+            refs = gapp.resolve_performance_references(
+                {**meta, "no_first_frame": False}, {}, wd, "Hero", scene_id=4)
+            self.assertEqual(len([p for p in refs["pictures"] if p["kind"] == "frame"]), 1)
+
+
 class UploadEndpointTests(unittest.TestCase):
     """Bring-your-own first frame: the film editor's upload/paste endpoint
     saves the image as the scene's canonical frame files, at the film's render
