@@ -41,7 +41,10 @@ _GROK_MODEL_DEFAULT = "grok-4.5"
 
 # OpenAI ChatGPT — Chat Completions API.
 _OPENAI_CHAT_URL_DEFAULT = "https://api.openai.com/v1/chat/completions"
-_OPENAI_MODEL_DEFAULT = "gpt-4o"
+_OPENAI_MODEL_DEFAULT = "gpt-5.6-luna"
+# Reasoning effort for OpenAI reasoning models ("none", "low", "medium",
+# "high"). Off by default: see _openai_compatible_call.
+_OPENAI_REASONING_EFFORT_DEFAULT = "none"
 
 NEGATIVE_PROMPT = _prompts.value("video_negative")
 
@@ -551,7 +554,8 @@ def _claude_call(client, model: str, system: str, user_msg: str,
 def _openai_compatible_call(url: str, api_key: str, model: str, system: str,
                             user_msg: str, max_tokens: int, label: str,
                             retries: int = 6, timeout: int = 300, *,
-                            openai: bool = False) -> str:
+                            openai: bool = False,
+                            reasoning_effort: str = "") -> str:
     """Chat Completions call (OpenAI, Grok/xAI, or other OpenAI-compatible hosts).
 
     Used by the OpenAI and Grok backends. Retries with exponential backoff.
@@ -571,6 +575,13 @@ def _openai_compatible_call(url: str, api_key: str, model: str, system: str,
     # compatible providers retain their existing request format.
     if openai and re.match(r"^(gpt-[56](?:[.-]|$)|o[134](?:-|$))", model):
         params.pop("temperature")
+        # Reasoning tokens are spent out of max_completion_tokens, so a model
+        # left to think burns a small budget entirely on hidden reasoning and
+        # returns nothing (finish_reason "length"). The short calls here —
+        # filling one narration, writing a description — have no use for it,
+        # so reasoning is off by default and the whole budget is the answer.
+        if (reasoning_effort or "").strip():
+            params["reasoning_effort"] = reasoning_effort.strip()
     payload = json.dumps(params).encode()
     headers = {
         "Content-Type": "application/json",
@@ -644,6 +655,19 @@ def llm_backend_ready(cfg: dict) -> bool:
     return True
 
 
+def _openai_reasoning_effort(cfg: dict) -> str:
+    """The configured reasoning effort for OpenAI reasoning models.
+
+    Empty leaves the parameter off the request entirely (the model's own
+    default). The shipped default is "none": see _openai_compatible_call for
+    why thinking costs this pipeline more than it buys.
+    """
+    value = cfg.get("openai_reasoning_effort")
+    if value is None:
+        return _OPENAI_REASONING_EFFORT_DEFAULT
+    return str(value).strip()
+
+
 def _chat_complete(cfg: dict, system: str, user_msg: str, max_tokens: int,
                    label: str, retries: int = 3) -> str:
     """One-shot chat completion against the configured LLM backend.
@@ -686,6 +710,7 @@ def _chat_complete(cfg: dict, system: str, user_msg: str, max_tokens: int,
             api_key,
             cfg.get("openai_model") or _OPENAI_MODEL_DEFAULT,
             system, user_msg, max_tokens, label, retries=retries, openai=True,
+            reasoning_effort=_openai_reasoning_effort(cfg),
         )
     url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -1060,14 +1085,15 @@ def _openai_generate(title: str, n_scenes: int, style_hint: str | None,
                      dialogue_note: str | None = None,
                      language: str | None = None,
                      api_url: str | None = None,
-                     scene_plan: dict | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                     scene_plan: dict | None = None,
+                     reasoning_effort: str = "") -> tuple[list[Scene], str, str, list[dict]]:
     """OpenAI ChatGPT uses the same JSON batch protocol as Claude/Grok."""
     url = api_url or _OPENAI_CHAT_URL_DEFAULT
 
     def call_fn(system, user_msg, max_tokens, label, retries=6):
         return _openai_compatible_call(
             url, api_key, model, system, user_msg, max_tokens, label, retries=retries,
-            openai=True,
+            openai=True, reasoning_effort=reasoning_effort,
         )
 
     return _json_script_generate(
@@ -1576,7 +1602,8 @@ def generate_script(
                                 character_sheet=character_sheet, avoid_hint=avoid_hint,
                                 dialogue_note=dialogue_note, language=language,
                                 api_url=cfg.get("openai_api_url") or _OPENAI_CHAT_URL_DEFAULT,
-                                scene_plan=scene_plan)
+                                scene_plan=scene_plan,
+                                reasoning_effort=_openai_reasoning_effort(cfg))
 
     if dialogue_note:
         raise RuntimeError(

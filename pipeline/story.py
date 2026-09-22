@@ -406,7 +406,8 @@ def divide_story(story: dict, n_scenes: int | None = None,
                  avoid_hint: str | None = None,
                  language: str | None = None,
                  scene_plan: dict | None = None,
-                 dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                 dialogue_note: str | None = None,
+                 fmt: str = "") -> tuple[list[Scene], str, str, list[dict]]:
     """Divide an approved story into scenes. Same return contract as
     ``pipeline.llm.generate_script``: (scenes, music_description, style,
     characters) — everything downstream of script generation is unchanged.
@@ -417,9 +418,19 @@ def divide_story(story: dict, n_scenes: int | None = None,
     *dialogue_note* asks for ACTED scenes: the story stays the source, but its
     beats are staged as characters speaking on camera instead of (or as well
     as) narrated. Those scenes come back mode "dialogue" with their lines
-    already assembled into an H3 prompt."""
+    already assembled into an H3 prompt.
+
+    *fmt* is the film's format ("song", "silent", "dialogue", "mixed",
+    "narration"). A "song" film has no narrator at all — every scene must be
+    a silent performance take — so a scene the writer left without a "mode"
+    (or that still came back "narration", defying the prompt) defaults to
+    "silent" instead, and never goes through the narration-fill pass below:
+    an empty narration is what a song film's scene is SUPPOSED to have. When
+    the writer still returns not one such scene, that is a divide worth
+    failing loudly over — see the check just before this function returns."""
     cfg = _load_cfg()
     call = _call_fn(cfg)
+    is_song = fmt == "song"
     scene_plan = scene_plan or story.get("scene_plan")
     title = str(story.get("topic") or "")
     video_title = video_title if video_title is not None else (story.get("video_title") or None)
@@ -457,15 +468,18 @@ def divide_story(story: dict, n_scenes: int | None = None,
             video_style_note=video_style_note, avoid_note=avoid_note,
             character_note=character_note, language_note=language_note,
             conclusion_note=conclusion_note, scene_plan=scene_plan,
-            dialogue_note=dialogue_note, style_hint=style_hint,
+            dialogue_note=dialogue_note, style_hint=style_hint, is_song=is_song,
         ))
         batch_start = batch_end + 1
 
     final_scenes = _split_overloaded_acted(
         scenes[:n], chained=bool((scene_plan or {}).get("chained_acted")))
     # Narrated scenes only: a silent scene is meant to be empty, and an acted
-    # scene's "narration" is what its characters say (filled at assembly).
-    narrated = [s for s in final_scenes if s.mode in ("narration", "", None) and not s.lines]
+    # scene's "narration" is what its characters say (filled at assembly). A
+    # song film's scenes are silent by contract (see is_song above) — an empty
+    # narration there is correct, not a defect to fill or fall back on.
+    narrated = ([] if is_song else
+                [s for s in final_scenes if s.mode in ("narration", "", None) and not s.lines])
     _fill_empty_narrations(call, narrated, title, video_title, language=language,
                            scene_plan=scene_plan)
     # Absolute last-resort safety net: no narrated Scene leaves empty.
@@ -486,6 +500,15 @@ def divide_story(story: dict, n_scenes: int | None = None,
     identified = _detect_recurring_characters(call, final_scenes, identified,
                                               style_hint=style)
     music = str(story.get("music") or "cinematic orchestral background music, atmospheric, instrumental")
+    if is_song and not any(s.mode == "silent" for s in final_scenes):
+        # Every scene defied the "silent performance, no narrator" contract —
+        # rather than ship a music video with no singing scenes (the crown-of-
+        # broken-cels failure: 18 narrated scenes, an unheard song, and a
+        # narrator reading scene titles over the track), fail loudly so the
+        # caller can retry the divide instead of publishing a broken film.
+        raise RuntimeError(
+            "Song divide returned no silent (performance) scenes — the model "
+            "ignored the music-video contract. Retry the divide.")
     return final_scenes, music, style, identified
 
 
@@ -525,11 +548,15 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
                   language_note: str, conclusion_note: str,
                   scene_plan: dict | None = None,
                   dialogue_note: str | None = None,
-                  style_hint: str | None = None) -> list[Scene]:
+                  style_hint: str | None = None,
+                  is_song: bool = False) -> list[Scene]:
     """One story→scenes JSON call for scenes start..end. On a parse failure the
     chunk is halved and retried (the _translate_batch defense); a single scene
     that still fails becomes a stub the narration-fill pass completes. Always
-    returns exactly end-start+1 scenes with positional ids."""
+    returns exactly end-start+1 scenes with positional ids.
+
+    *is_song* forces every scene's default (and a stray "narration") mode to
+    "silent" — see divide_story."""
     count = end - start + 1
     try:
         raw = call(
@@ -559,7 +586,7 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
                       video_style_note=video_style_note, avoid_note=avoid_note,
                       character_note=character_note, language_note=language_note,
                       scene_plan=scene_plan, dialogue_note=dialogue_note,
-                      style_hint=style_hint)
+                      style_hint=style_hint, is_song=is_song)
             return (_divide_chunk(call, title, first, start, mid, conclusion_note="", **kw)
                     + _divide_chunk(call, title, second, mid + 1, end,
                                     conclusion_note=conclusion_note, **kw))
@@ -569,20 +596,31 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
     out = []
     for i in range(count):
         item = items[i] if i < len(items) and isinstance(items[i], dict) else {}
-        out.append(_scene_from_item(start + i, item, title, style_hint))
+        out.append(_scene_from_item(start + i, item, title, style_hint, is_song=is_song))
     return out
 
 
 def _scene_from_item(scene_id: int, item: dict, title: str,
-                     style_hint: str | None) -> Scene:
+                     style_hint: str | None, is_song: bool = False) -> Scene:
     """One divide-prompt object → a Scene, in whichever mode it came back as.
 
     An acted scene is assembled here rather than left as loose fields, so the
     editor shows the same H3 prompt the renderer will send (pipeline/
-    performance.py owns that assembly; this is its only other caller)."""
+    performance.py owns that assembly; this is its only other caller).
+
+    *is_song* is the music-video contract: nothing narrates, so a missing
+    "mode" defaults to "silent" instead of "narration", and a "narration" the
+    writer returned anyway (the prompt told it not to) is coerced the same
+    way rather than trusted — see divide_story."""
     from pipeline import performance as _perf
 
-    mode = str(item.get("mode") or "narration").strip().lower()
+    default_mode = "silent" if is_song else "narration"
+    mode = str(item.get("mode") or default_mode).strip().lower()
+    if is_song and mode == "narration":
+        logger.warning("Song scene %d came back mode \"narration\" — the "
+                       "writer defied the music-video contract; treating it "
+                       "as a silent performance scene instead", scene_id)
+        mode = "silent"
     # The writer's explicit continuation mark: this scene picks up the previous
     # scene's shot without a cut. Stored sparsely (only when true), and never
     # on the first scene — there is nothing before it to continue.
