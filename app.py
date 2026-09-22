@@ -3412,6 +3412,10 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
 _REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in their provided reference "
                    "image — identical face, head, materials and colours; only the pose "
                    "and setting differ.")
+# Qwen-Image 2.1 addresses each reference by slot (<image1>, <image2>, …).
+_QWEN_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <image{n}> — "
+                        "identical face, head, materials and colours; only the pose "
+                        "and setting differ.")
 
 
 def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_name: str,
@@ -3421,15 +3425,22 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
 
     Injects each featured character's canonical appearance (_inject_characters),
     gathers their reference images, and — only when the engine actually
-    conditions on references (it has a t2i_ref_workflow, i.e. FLUX.2) — appends
-    a per-character _REF_MATCH_NOTE tying the name to its attached image.
+    conditions on references (it has a t2i_ref_workflow — FLUX.2 or
+    Qwen-Image 2.1) — appends a per-character note tying the name to its
+    attached image. Qwen cites the slot (``<image1>``).
     Engines without reference support get the plain injected prompt."""
     prompt = _inject_characters(base_prompt, scene, cfg, style_name, work_dir)
     pairs = _scene_reference_characters(prompt, scene, cfg, style_name, work_dir)
     refs = [p for _c, p in pairs]
     if pairs and engine is not None and engine.get("t2i_ref_workflow"):
-        notes = " ".join(_REF_MATCH_NOTE.format(name=c.get("name", "").strip())
-                         for c, _p in pairs if (c.get("name") or "").strip())
+        if engine.get("family") == "qwen-image":
+            notes = " ".join(
+                _QWEN_REF_MATCH_NOTE.format(name=c.get("name", "").strip(), n=i)
+                for i, (c, _p) in enumerate(pairs, start=1)
+                if (c.get("name") or "").strip())
+        else:
+            notes = " ".join(_REF_MATCH_NOTE.format(name=c.get("name", "").strip())
+                             for c, _p in pairs if (c.get("name") or "").strip())
         if notes:
             sep = " " if prompt.rstrip().endswith((".", "!", "?")) else ". "
             prompt = f"{prompt.rstrip()}{sep}{notes}"

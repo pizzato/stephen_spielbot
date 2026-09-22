@@ -159,9 +159,9 @@ rsync -az          "$REPO_ROOT/.dockerignore" "$BUILD_DEST/.dockerignore"
 _sh "cat > ~/$REMOTE_BUILD_DIR/docker/.env" <<ENV
 MODELS_DIR=${REMOTE_MODELS}
 COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
-# Pinned ComfyUI release: v0.33.0 = first with the MiniMax Music 3 nodes
-# (v0.30.0 added the MiniMax H3 nodes, v0.31.0 the w4a8 loaders, v0.32.0 LTX 2.5).
-COMFYUI_REF=v0.33.0
+# Pinned ComfyUI release: v0.37.0 includes Qwen-Image 2.1
+# (v0.33.0 Music 3, v0.32.0 LTX 2.5, v0.31.0 the w4a8 loaders, v0.30.0 H3).
+COMFYUI_REF=v0.37.0
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}

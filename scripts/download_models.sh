@@ -158,17 +158,19 @@ PY
 }
 
 # ── Targeted per-engine download (Settings "Download" button) ─────────────────
-# ENGINE_MODELS="repo|remote|dir;repo|remote|dir;…" downloads just those files,
+# ENGINE_MODELS="repo|remote|dir[|revision];…" downloads just those files,
 # reusing the resolved hf CLI + download() (skip-if-present + split_files flatten),
 # then exits — so the webapp can install one engine's weights without the bulk set.
+# The optional revision pins a community quant so a later swap on main is not
+# picked up silently.
 if [[ -n "${ENGINE_MODELS:-}" ]]; then
     echo "=== Downloading engine models to $COMFY_DIR ==="
     [[ -n "$HF_TOKEN" ]] && echo "    (using HuggingFace token)"
     IFS=';' read -ra _ENGINE_SPECS <<< "$ENGINE_MODELS"
     for _spec in "${_ENGINE_SPECS[@]}"; do
         [[ -z "$_spec" ]] && continue
-        IFS='|' read -r _repo _remote _dir <<< "$_spec"
-        download "$_repo" "$_remote" "$_dir"
+        IFS='|' read -r _repo _remote _dir _rev <<< "$_spec"
+        download "$_repo" "$_remote" "$_dir" "${_rev:-}"
     done
     h3_ref2v_lx2v_fixup   # no-op unless that LoRA is one of the files above
     echo "✅ Engine model download complete."

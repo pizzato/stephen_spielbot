@@ -2149,11 +2149,12 @@ def inpaint_scene_image(
     return output_path
 
 
-def _run_and_save(workflow: dict, output_path: Path, comfy_url: str) -> Path:
+def _run_and_save(workflow: dict, output_path: Path, comfy_url: str,
+                  timeout: int = 600) -> Path:
     """Queue a prepared workflow, wait, and save its first image output."""
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=600, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=timeout, comfy_url=comfy_url)
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:
         raise RuntimeError(f"No image output from ComfyUI for prompt {prompt_id} ({comfy_url})")
@@ -2201,6 +2202,63 @@ def _build_flux2_ref_workflow(engine: dict, repl: dict, ref_names: list[str]) ->
     return wf
 
 
+# Qwen-Image 2.1's encoder takes up to 16 reference slots; the model card
+# advertises 10. Scene matching already caps at 2 — this is the graph's ceiling.
+_QWEN_MAX_REFS = 10
+
+
+def _qwen_size(width: int, height: int) -> tuple[int, int]:
+    """Snap to the multiple of 32 Qwen-Image 2.1 samples on.
+
+    Pipeline sizes are already on LTX's multiple-of-64 grid, which satisfies
+    this. A raw size (a cover, a sheet) is floored so the latent stays aligned.
+    """
+    return (max(32, (int(width) // 32) * 32), max(32, (int(height) // 32) * 32))
+
+
+def _build_qwen_workflow(engine: dict, repl: dict, ref_names: list[str] | None = None) -> dict:
+    """Qwen-Image 2.1 text→image graph, with optional character references.
+
+    The base workflow is the ComfyUI day-0 template (UNET + Qwen3-VL CLIP +
+    VAE, ``TextEncodeQwenImage21``, euler/simple KSampler). Each reference is
+    a ``LoadImage`` wired to the encoder's autogrow slot ``images.image_N``
+    — that is the API name, not ``image_N``. The VAE has to be connected or
+    the vision tokens stay in the text stream and the DiT never sees the
+    reference latents."""
+    wf = _fill_template(_load_workflow(engine["t2i_workflow"]), repl)
+    names = list(ref_names or [])[:_QWEN_MAX_REFS]
+    if not names:
+        return wf
+    wf["4"]["inputs"]["vae"] = ["3", 0]
+    for i, name in enumerate(names, start=1):
+        node = str(19 + i)
+        wf[node] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        wf["4"]["inputs"][f"images.image_{i}"] = [node, 0]
+    return wf
+
+
+def _generate_qwen(engine: dict, prompt: str, output_path: Path, *,
+                   width: int, height: int, seed: int | None,
+                   refs: list[Path], comfy_url: str) -> Path:
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+    width, height = _qwen_size(width, height)
+    if len(refs) > _QWEN_MAX_REFS:
+        logger.warning("[comfy] Qwen-Image 2.1: trimmed references to %d (model cap)",
+                       _QWEN_MAX_REFS)
+        refs = refs[:_QWEN_MAX_REFS]
+    repl = {
+        "UNET": engine["model_file"], "CLIP": engine["clip_t5"], "VAE": engine["vae"],
+        "POSITIVE_PROMPT": prompt, "WIDTH": width, "HEIGHT": height,
+        "STEPS": int(engine["steps"]), "CFG": float(engine.get("cfg") or 1.0),
+        "SEED": seed,
+    }
+    ref_names = [_upload_image(p, comfy_url=comfy_url) for p in refs]
+    workflow = _build_qwen_workflow(engine, repl, ref_names)
+    return _run_and_save(workflow, output_path, comfy_url,
+                         timeout=int(engine.get("timeout") or 600))
+
+
 def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
                          width: int, height: int, seed: int | None = None,
                          reference_images: list[Path] | None = None,
@@ -2208,11 +2266,16 @@ def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
     """Text→image for the given engine. Dispatches by engine family.
 
     flux1 reuses :func:`generate_scene_image`; flux2 runs ``flux2_t2i.json``, or
-    ``flux2_t2i_ref.json`` when *reference_images* are given (character reference
-    conditioning — FLUX.2 only; ignored by flux1)."""
+    ``flux2_t2i_ref.json`` when *reference_images* are given. Qwen-Image 2.1
+    runs ``qwen_image_2_1_t2i.json`` and splices references into
+    ``TextEncodeQwenImage21``. flux1 ignores references."""
     if not engine.get("can_generate"):
         raise RuntimeError(f"Engine {engine.get('key')!r} cannot generate images.")
+    check_engine_supported(engine, comfy_url)
     refs = [Path(p) for p in (reference_images or []) if p]
+    if engine.get("family") == "qwen-image":
+        return _generate_qwen(engine, prompt, output_path, width=width, height=height,
+                              seed=seed, refs=refs, comfy_url=comfy_url)
     if engine.get("family") != "flux2":
         if refs:
             logger.debug("Engine %r has no reference conditioning — ignoring %d reference image(s).",

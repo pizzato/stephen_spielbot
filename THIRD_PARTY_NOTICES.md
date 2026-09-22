@@ -17,6 +17,8 @@ a convenience summary, **not** legal advice — always check the linked model ca
 |---|---|---|---|
 | FLUX.2 Klein 4B (**default** generate + edit) | `Comfy-Org/vae-text-encorder-for-flux-klein-4b` (repackaging of `black-forest-labs/FLUX.2-klein-4B`) | Apache-2.0 (per the upstream Black Forest Labs model card — note the **9B** Klein variants are non-commercial; this project uses the 4B) | ✅ Yes |
 | FLUX.1 schnell (legacy, opt-in) | `Comfy-Org/flux1-schnell`, `comfyanonymous/flux_text_encoders`, `black-forest-labs/FLUX.1-schnell` (VAE) | Apache-2.0 | ✅ Yes |
+| Qwen-Image 2.1 (opt-in generate only; INT8 diffusion + INT8 Qwen3-VL 8B encoder + bf16 VAE) | `Comfy-Org/Qwen-Image-2.1` (repackaging of `Qwen/Qwen-Image-2.1`) | **Qwen Research License** (2026-09-20; not an OSI license) | ❌ No — research and evaluation only. Commercial use, including a monetized film, needs a separate grant from Qwen. Masked image edits are not offered on this engine |
+| Qwen-Image 2.1 NVFP4 (opt-in, faster on GB10; FP4 diffusion + official W4A8 encoder + the same bf16 VAE) | Diffusion: `BennyDaBall/Qwen-Image-2.1-NVFP4` (community NVFP4 quant of the official BF16 checkpoint, pinned revision `1a38d44a`). Encoder and VAE: `Comfy-Org/Qwen-Image-2.1` | **Qwen Research License** — the quant inherits it; not an OSI license | ❌ No — same research-only terms as the INT8 weights. Output is still bound by that license |
 
 > The non-commercial FLUX engines (FLUX.1 Fill, FLUX.2 dev) have been removed
 > from this project precisely to keep generated imagery commercially usable.

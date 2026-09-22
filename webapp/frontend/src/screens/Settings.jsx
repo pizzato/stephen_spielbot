@@ -2133,6 +2133,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                           {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
                         </div>
                         <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
+                        {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
                         {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
                         {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
                       </div>
@@ -2145,7 +2146,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   )
                 })}
               </div>
-              <div className="field__hint">Downloads run on every ComfyUI worker over SSH and can take a while (weights are several GB). FLUX.2 is authored from public templates and may need a workflow tweak on first use.</div>
+              <div className="field__hint">Downloads run on every ComfyUI worker over SSH and can take a while (weights are several GB). FLUX.2 is authored from public templates and may need a workflow tweak on first use. Qwen-Image 2.1 is research-license only (the note on each row). INT8 is about 17 GB; NVFP4 is the faster build on these GB10 workers. Masked edits stay on FLUX.</div>
             </div>
           </Card>
 
@@ -2833,6 +2834,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     ))}
                   </select>
                   <ParentVal k="image_engine" />
+                  {(() => {
+                    const sel = (engineInfo.engines || []).find((x) => x.key === (eff.image_engine || engineInfo.default_engine))
+                    return sel?.license_note ? <div className="field__hint" style={{ marginTop: 6 }}>{sel.license_note}</div> : null
+                  })()}
                 </Field>
                 <Field label="Edit (mask + prompt)" hint="Model used for masked 'Edit image' inpaints.">
                   <select className="select" value={eff.edit_engine || 'flux1-schnell'} onChange={(e) => setStyleField('edit_engine', e.target.value)}>
