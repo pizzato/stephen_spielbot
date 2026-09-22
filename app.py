@@ -226,7 +226,7 @@ DEFAULT_CFG = {
     "grok_api_url": "https://api.x.ai/v1/chat/completions",
     # OpenAI ChatGPT — Chat Completions at api.openai.com
     "openai_api_key": "",
-    "openai_model": "gpt-4o",
+    "openai_model": "gpt-5.6-luna",
     "openai_api_url": "https://api.openai.com/v1/chat/completions",
     # Reasoning models spend max_completion_tokens on hidden reasoning before
     # they answer, which starves this pipeline's short calls. Off by default.

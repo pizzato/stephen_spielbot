@@ -41,7 +41,7 @@ _GROK_MODEL_DEFAULT = "grok-4.5"
 
 # OpenAI ChatGPT — Chat Completions API.
 _OPENAI_CHAT_URL_DEFAULT = "https://api.openai.com/v1/chat/completions"
-_OPENAI_MODEL_DEFAULT = "gpt-4o"
+_OPENAI_MODEL_DEFAULT = "gpt-5.6-luna"
 # Reasoning effort for OpenAI reasoning models ("none", "low", "medium",
 # "high"). Off by default: see _openai_compatible_call.
 _OPENAI_REASONING_EFFORT_DEFAULT = "none"
