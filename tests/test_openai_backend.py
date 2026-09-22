@@ -17,29 +17,28 @@ def response():
     return result
 
 
-@pytest.mark.parametrize("backend,model,token_field,temperature", [
-    ("openai", "gpt-5.6-luna", "max_completion_tokens", None),
-    ("openai", "gpt-5-mini", "max_completion_tokens", None),
-    ("openai", "o3", "max_completion_tokens", None),
-    ("openai", "gpt-4o", "max_completion_tokens", 0.7),
-    ("grok", "grok-4.5", "max_tokens", 0.7),
+@pytest.mark.parametrize("backend,model,token_field,temperature,reasoning", [
+    ("openai", "gpt-5.6-luna", "max_completion_tokens", None, "none"),
+    ("openai", "gpt-5-mini", "max_completion_tokens", None, "none"),
+    ("openai", "o3", "max_completion_tokens", None, "none"),
+    ("openai", "gpt-4o", "max_completion_tokens", 0.7, None),
+    ("grok", "grok-4.5", "max_tokens", 0.7, None),
 ])
 @pytest.mark.parametrize("script", [False, True])
-def test_provider_payloads(backend, model, token_field, temperature, script):
+def test_provider_payloads(backend, model, token_field, temperature, reasoning, script):
     # Exercise both one-shot calls (including the critic) and script batches.
     def batch(title, n_scenes, style_hint, call_fn, **kwargs):
         return call_fn("system", "user", 100, "test", retries=1)
 
+    cfg = {"llm_backend": backend, f"{backend}_api_key": "test-key",
+           f"{backend}_model": model}
     with mock.patch.object(llm.urllib.request, "urlopen", return_value=response()) as send, \
+            mock.patch.object(llm, "_load_cfg", return_value=cfg), \
             mock.patch.object(llm, "_json_script_generate", side_effect=batch):
         if script:
-            generate = llm._openai_generate if backend == "openai" else llm._grok_generate
-            result = generate("Topic", 3, None, "test-key", model)
+            result = llm.generate_script("Topic", 3)
         else:
-            result = llm._chat_complete({
-                "llm_backend": backend, f"{backend}_api_key": "test-key",
-                f"{backend}_model": model,
-            }, "system", "user", 100, "test", retries=1)
+            result = llm._chat_complete(cfg, "system", "user", 100, "test", retries=1)
     assert result == "OK"
     payload = json.loads(send.call_args.args[0].data)
     expected = {"model": model, token_field: 100, "messages": [
@@ -48,7 +47,36 @@ def test_provider_payloads(backend, model, token_field, temperature, script):
     ]}
     if temperature is not None:
         expected["temperature"] = temperature
+    if reasoning is not None:
+        expected["reasoning_effort"] = reasoning
     assert payload == expected
+
+
+@pytest.mark.parametrize("configured,expected", [
+    (None, "none"),        # unset — the shipped default turns thinking off
+    ("high", "high"),      # an explicit level is sent through
+    ("", None),            # emptied — the parameter is left off the request
+])
+def test_reasoning_effort_setting(configured, expected):
+    cfg = {"llm_backend": "openai", "openai_api_key": "test-key",
+           "openai_model": "gpt-5.6-luna"}
+    if configured is not None:
+        cfg["openai_reasoning_effort"] = configured
+    with mock.patch.object(llm.urllib.request, "urlopen", return_value=response()):
+        llm._chat_complete(cfg, "system", "user", 100, "test", retries=1)
+        payload = json.loads(llm.urllib.request.urlopen.call_args.args[0].data)
+    assert payload.get("reasoning_effort") == expected
+
+
+def test_reasoning_effort_left_off_non_reasoning_models():
+    """gpt-4o and the Grok path reject the parameter — they never see it."""
+    for backend, model in (("openai", "gpt-4o"), ("grok", "grok-4.5")):
+        cfg = {"llm_backend": backend, f"{backend}_api_key": "test-key",
+               f"{backend}_model": model, "openai_reasoning_effort": "high"}
+        with mock.patch.object(llm.urllib.request, "urlopen", return_value=response()):
+            llm._chat_complete(cfg, "system", "user", 100, "test", retries=1)
+            payload = json.loads(llm.urllib.request.urlopen.call_args.args[0].data)
+        assert "reasoning_effort" not in payload
 
 
 def test_claude_still_streams_with_max_tokens():

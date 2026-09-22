@@ -2084,6 +2084,15 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <Field label="OpenAI model" hint="e.g. gpt-4o, gpt-4.1, gpt-4o-mini">
                     <input className="input" value={cfg.openai_model || 'gpt-4o'} onChange={(e) => set('openai_model', e.target.value)} />
                   </Field>
+                  <Field label="Reasoning effort" hint="Reasoning models only. Thinking is paid for out of the same token budget as the answer, so 'none' keeps short calls (descriptions, tags, narration fixes) from coming back empty. Leave blank to use the model's own default.">
+                    <select className="input" value={cfg.openai_reasoning_effort ?? 'none'} onChange={(e) => set('openai_reasoning_effort', e.target.value)}>
+                      <option value="none">none — no thinking (recommended)</option>
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="">model default</option>
+                    </select>
+                  </Field>
                 </>
               )}
               {llmBackend === 'local' && (

@@ -43,7 +43,7 @@ Pick **Local**, **Claude**, **Grok**, or **OpenAI**, then fill in that backend's
 | Local | Local LLM URL (OpenAI-compatible), model name |
 | Claude | API key, model |
 | Grok | API key, model |
-| OpenAI | API key, model |
+| OpenAI | API key, model, reasoning effort |
 
 Keys can also come from [environment variables](../environment.md#credentials). Stored
 keys are redacted by the API — the field shows a "saved — leave blank to keep"
@@ -54,6 +54,15 @@ completion limit and default temperature. Older OpenAI models retain the app's
 sampling temperature; Claude and Grok keep their own request formats. If OpenAI
 rejects a request, the error includes the API's explanation. Invalid requests are
 not retried; temporary server errors and rate limits still are.
+
+**Reasoning effort** applies to those reasoning models only, and defaults to
+**none**. A reasoning model pays for its thinking out of the same token budget as
+its answer, so on the short calls this app makes — filling one narration, writing
+a description, listing tags — a thinking model can spend the entire budget before
+writing a single word and return nothing at all. Turning reasoning off gives the
+whole budget to the answer. Raise it to `low`/`medium`/`high` if you want the
+model to think; pick **model default** to leave the parameter off the request.
+Non-reasoning models (`gpt-4o`) and the Grok backend never receive it.
 
 ### Image models
 
