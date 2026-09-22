@@ -136,12 +136,10 @@ Qwen-Image 2.1 notes:
   is why this is the one to pick there. It has not been timed on a Spark in
   this project. There is no few-step distill of 2.1 yet, so both engines stay
   at 25 steps — the old Qwen-Image lightning LoRAs are a different model.
-- Its node (`TextEncodeQwenImage21`) ships with **ComfyUI ≥ v0.37.0**. The
-  worker image stays pinned at `COMFYUI_REF=v0.33.0` so the rest of the fleet
-  is unchanged. To use this engine, rebuild that worker with
-  `COMFYUI_REF=v0.37.0` (or newer). Older workers are refused up front.
-  "Not installed" with the weights already downloaded means that rebuild has
-  not happened.
+- The worker image pins **ComfyUI v0.37.0**, which is the release that
+  includes `TextEncodeQwenImage21`. `make install` writes that pin, and
+  `make start` rebuilds a worker whose image is older. A render on an older
+  image is refused up front.
 - Output size follows the style resolution, snapped to a multiple of 32 (scene
   stills are already on LTX's multiple-of-64 grid). The model can generate at
   2K, but a first frame is kept at the film's render size so the video pass
@@ -192,7 +190,7 @@ LTX 2.5 notes:
   automatically. The 2.3 checkpoint stays installed for the keyframed
   establishing shots and the film editor's upscalers.
 - Native support ships with **ComfyUI itself (≥ v0.32.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.33.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.37.0`) if the engine shows
   "not installed" with the weights already downloaded. Older workers refuse the
   render rather than failing mid-graph.
 - Clips render at **24 fps** (2.3 ran at 25) through the same two-pass
@@ -209,7 +207,7 @@ MiniMax H3 notes:
   encoder, video + audio VAEs) from **Settings → Infrastructure → Video models** —
   it is *not* part of the bulk install.
 - Its nodes ship with **ComfyUI itself (≥ v0.30.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.33.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.37.0`) if the engine shows
   "not installed" with the weights already downloaded.
 - Generation is capped at ~1 MP (768×1344-class); larger style resolutions render
   at the cap and are reframed back to the plan size. Clips run 4–15 s at 24 fps.
@@ -382,7 +380,7 @@ per worker from **Settings → Infrastructure → Music models**.
 MiniMax Music 3 notes:
 
 - Its nodes ship with **ComfyUI itself (≥ v0.33.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.33.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.37.0`) if the engine shows
   "not installed" with the weights already downloaded. Renders are refused
   up-front on an older worker rather than failing mid-graph.
 - The film's **music description** becomes the model's *caption*. It reads best

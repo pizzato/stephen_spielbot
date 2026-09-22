@@ -21,7 +21,8 @@ The bundled image engines:
   INT8 weights. Qwen Research License: non-commercial.
 - ``qwen-image-2.1-nvfp4`` — the same graph on Blackwell FP4 weights, the
   faster build for these GB10 workers. Same research license. Masked edits
-  stay on a FLUX engine, and the worker needs ComfyUI ≥ v0.37.0.
+  stay on a FLUX engine. The worker image pins ComfyUI v0.37.0, which
+  includes this model's node.
 """
 from __future__ import annotations
 
@@ -130,8 +131,7 @@ ENGINES: dict[str, dict] = {
             "Research and evaluation only. Commercial use — including a "
             "monetized YouTube or X film — needs a separate license from Qwen. "
             "Masked “Edit image” stays on FLUX; this engine generates stills "
-            "and can condition on character reference images. Workers need "
-            "ComfyUI ≥ v0.37.0 (rebuild with COMFYUI_REF=v0.37.0)."
+            "and can condition on character reference images."
         ),
         # INT8 ConvRot is the template pin (~17 GB with the encoder and VAE).
         # The bf16 diffusion weights are the higher-memory alternative.
@@ -178,8 +178,7 @@ ENGINES: dict[str, dict] = {
             "film, needs a separate license from Qwen. The diffusion weights "
             "are a community NVFP4 quant of the official BF16 checkpoint "
             "(BennyDaBall/Qwen-Image-2.1-NVFP4); the text encoder and VAE are "
-            "the official Comfy-Org files. Masked “Edit image” stays on FLUX. "
-            "Workers need ComfyUI ≥ v0.37.0 (rebuild with COMFYUI_REF=v0.37.0)."
+            "the official Comfy-Org files. Masked “Edit image” stays on FLUX."
         ),
         "model_file": "qwen_image_2.1_nvfp4.safetensors",
         "clip_t5": "qwen3vl_8b_w4a8.safetensors",

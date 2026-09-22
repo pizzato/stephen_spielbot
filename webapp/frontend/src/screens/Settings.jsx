@@ -2146,7 +2146,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   )
                 })}
               </div>
-              <div className="field__hint">Downloads run on every ComfyUI worker over SSH and can take a while (weights are several GB). FLUX.2 is authored from public templates and may need a workflow tweak on first use. Qwen-Image 2.1 is research-license only (the note on each row). INT8 is about 17 GB; NVFP4 is the faster build on these GB10 workers. Both need the worker image rebuilt with COMFYUI_REF=v0.37.0 — “not installed” with the weights already there means that rebuild has not happened. Masked edits stay on FLUX.</div>
+              <div className="field__hint">Downloads run on every ComfyUI worker over SSH and can take a while (weights are several GB). FLUX.2 is authored from public templates and may need a workflow tweak on first use. Qwen-Image 2.1 is research-license only (the note on each row). INT8 is about 17 GB; NVFP4 is the faster build on these GB10 workers. Masked edits stay on FLUX.</div>
             </div>
           </Card>
 
