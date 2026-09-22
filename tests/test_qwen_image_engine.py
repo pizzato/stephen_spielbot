@@ -34,6 +34,28 @@ class QwenEngineRegistryTests(unittest.TestCase):
         self.assertEqual(app._norm_engine("qwen-image-2.1", "generate"), "qwen-image-2.1")
         self.assertEqual(app._norm_engine("qwen-image-2.1", "edit"), "flux2-klein")
 
+    def test_nvfp4_is_the_faster_blackwell_build_under_the_same_license(self):
+        fast = engines.get("qwen-image-2.1-nvfp4")
+        base = engines.get("qwen-image-2.1")
+        self.assertEqual(fast["family"], "qwen-image")
+        self.assertEqual(fast["license"], base["license"])
+        self.assertFalse(fast["commercial_ok"])
+        self.assertFalse(fast["can_edit"])
+        self.assertIn("Research", fast["license_note"])
+        self.assertIn("NVFP4", fast["license_note"])
+        self.assertEqual(fast["model_file"], "qwen_image_2.1_nvfp4.safetensors")
+        self.assertEqual(fast["clip_t5"], "qwen3vl_8b_w4a8.safetensors")
+        self.assertEqual(fast["vae"], base["vae"])
+        self.assertEqual(fast["steps"], base["steps"])
+        dit = next(m for m in fast["models"] if m["file"].endswith("nvfp4.safetensors"))
+        self.assertEqual(dit["revision"], "1a38d44a3a2f35cb0b543a25b04da0a963e7b5e6")
+        self.assertEqual(app._norm_engine("qwen-image-2.1-nvfp4", "generate"),
+                         "qwen-image-2.1-nvfp4")
+        self.assertEqual(app._norm_engine("qwen-image-2.1-nvfp4", "edit"), "flux2-klein")
+        pub = {e["key"]: e for e in engines.public_list()}
+        self.assertFalse(pub["qwen-image-2.1-nvfp4"]["commercial_ok"])
+        self.assertTrue(pub["qwen-image-2.1-nvfp4"]["license_note"])
+
     def test_workflow_file_has_the_template_nodes(self):
         text = (comfyui.WORKFLOWS_DIR / "qwen_image_2_1_t2i.json").read_text()
         for placeholder in ("{{UNET}}", "{{CLIP}}", "{{VAE}}", "{{POSITIVE_PROMPT}}",
@@ -44,7 +66,7 @@ class QwenEngineRegistryTests(unittest.TestCase):
 
 
 class QwenWorkflowTests(unittest.TestCase):
-    def _generate(self, refs=None, width=1024, height=576):
+    def _generate(self, refs=None, width=1024, height=576, key="qwen-image-2.1"):
         captured = {}
 
         def fake_queue(workflow, client_id, comfy_url=None):
@@ -65,7 +87,7 @@ class QwenWorkflowTests(unittest.TestCase):
                  mock.patch.object(comfyui, "_download_output",
                                    side_effect=lambda item, dest, comfy_url=None: dest):
                 comfyui.generate_with_engine(
-                    engines.resolve({}, "qwen-image-2.1"),
+                    engines.resolve({}, key),
                     'a neon sign that reads "QWEN"',
                     out, width=width, height=height, seed=42,
                     reference_images=refs,
@@ -100,6 +122,17 @@ class QwenWorkflowTests(unittest.TestCase):
         self.assertEqual(sampler["inputs"]["negative"], ["4", 1])
         self.assertEqual(cap["timeout"], 1800)
         self.assertNotIn("{{", json.dumps(wf))
+
+    def test_nvfp4_graph_loads_the_fp4_weights(self):
+        cap = self._generate(key="qwen-image-2.1-nvfp4")
+        by_class = {n["class_type"]: n for n in cap["workflow"].values()}
+        self.assertEqual(by_class["UNETLoader"]["inputs"]["unet_name"],
+                         "qwen_image_2.1_nvfp4.safetensors")
+        self.assertEqual(by_class["UNETLoader"]["inputs"]["weight_dtype"], "default")
+        self.assertEqual(by_class["CLIPLoader"]["inputs"]["clip_name"],
+                         "qwen3vl_8b_w4a8.safetensors")
+        self.assertEqual(by_class["CLIPLoader"]["inputs"]["type"], "qwen_image")
+        self.assertEqual(by_class["KSampler"]["inputs"]["steps"], 25)
 
     def test_references_are_spliced_in_slot_order(self):
         cap = self._generate(refs=[Path("bob.png"), Path("ada.png")])

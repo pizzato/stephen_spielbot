@@ -288,9 +288,11 @@ back to Fast rather than failing the film.
 ### Image model
 
 Separate engines for **generation** and for **edit (mask + prompt)** inpainting. Default is
-FLUX.2 Klein for both. **Qwen-Image 2.1** is an opt-in generation engine (research
-license, and the worker needs ComfyUI ≥ v0.37.0). It does not appear in the edit
-picker — masked inpaint stays on FLUX. See [Models → Image engines](../models.md#image-engines-per-style).
+FLUX.2 Klein for both. **Qwen-Image 2.1** and **Qwen-Image 2.1 NVFP4** are opt-in generation engines
+(research license; the worker needs ComfyUI ≥ v0.37.0). NVFP4 is the faster one
+on the GB10 workers. Neither appears in the edit picker — masked inpaint stays
+on FLUX. The licence note under the picker is the same restriction. See
+[Models → Image engines](../models.md#image-engines-per-style).
 
 ### Size presets
 

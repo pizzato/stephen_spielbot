@@ -17,9 +17,11 @@ The bundled image engines:
 - ``flux2-klein`` — the default; fast 4-step FLUX.2 (Apache-2.0, commercial OK).
 - ``flux1-schnell`` — the legacy validated path (text→image + masked img2img),
   opt-in and downloaded on demand.
-- ``qwen-image-2.1`` — opt-in text→image (and character references). Qwen
-  Research License: non-commercial. Masked edits stay on a FLUX engine, and
-  the worker needs ComfyUI ≥ v0.37.0.
+- ``qwen-image-2.1`` — opt-in text→image (and character references), official
+  INT8 weights. Qwen Research License: non-commercial.
+- ``qwen-image-2.1-nvfp4`` — the same graph on Blackwell FP4 weights, the
+  faster build for these GB10 workers. Same research license. Masked edits
+  stay on a FLUX engine, and the worker needs ComfyUI ≥ v0.37.0.
 """
 from __future__ import annotations
 
@@ -29,9 +31,13 @@ _FLUX1_CLIP_L = ("comfyanonymous/flux_text_encoders", "clip_l.safetensors", "mod
 _FLUX1_VAE = ("black-forest-labs/FLUX.1-schnell", "ae.safetensors", "models/vae")
 
 
-def _model(repo: str, remote: str, subdir: str, *, gated: bool = False) -> dict:
-    return {"repo": repo, "remote": remote, "dir": subdir,
-            "file": remote.rsplit("/", 1)[-1], "gated": gated}
+def _model(repo: str, remote: str, subdir: str, *, gated: bool = False,
+           revision: str | None = None) -> dict:
+    out = {"repo": repo, "remote": remote, "dir": subdir,
+           "file": remote.rsplit("/", 1)[-1], "gated": gated}
+    if revision:
+        out["revision"] = revision
+    return out
 
 
 ENGINES: dict[str, dict] = {
@@ -143,6 +149,54 @@ ENGINES: dict[str, dict] = {
                    "models/diffusion_models"),
             _model("Comfy-Org/Qwen-Image-2.1",
                    "text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/Qwen-Image-2.1",
+                   "vae/qwen_image_2.1_vae_bf16.safetensors", "models/vae"),
+        ],
+    },
+    # Faster on GB10 / RTX 50-series: NVFP4 diffusion (Blackwell FP4 kernels)
+    # plus the official W4A8 text encoder. Same graph, same 25 steps, same
+    # research license. There is no few-step distill of 2.1 yet — BF16 is the
+    # slow large file, and the old Qwen-Image lightning LoRAs do not apply.
+    "qwen-image-2.1-nvfp4": {
+        "key": "qwen-image-2.1-nvfp4",
+        "label": "Qwen-Image 2.1 NVFP4",
+        "sub": "Faster on GB10 · FP4 diffusion · W4A8 encoder · research only",
+        "family": "qwen-image",
+        "can_generate": True,
+        "can_edit": False,
+        "t2i_workflow": "qwen_image_2_1_t2i.json",
+        "t2i_ref_workflow": "qwen_image_2_1_t2i.json",
+        "steps": 25,
+        "cfg": 1.0,
+        "timeout": 1800,
+        "commercial_ok": False,
+        "license": "Qwen Research License",
+        "license_note": (
+            "Research and evaluation only — same Qwen Research License as the "
+            "INT8 engine. Commercial use, including a monetized YouTube or X "
+            "film, needs a separate license from Qwen. The diffusion weights "
+            "are a community NVFP4 quant of the official BF16 checkpoint "
+            "(BennyDaBall/Qwen-Image-2.1-NVFP4); the text encoder and VAE are "
+            "the official Comfy-Org files. Masked “Edit image” stays on FLUX. "
+            "Workers need ComfyUI ≥ v0.37.0 (rebuild with COMFYUI_REF=v0.37.0)."
+        ),
+        "model_file": "qwen_image_2.1_nvfp4.safetensors",
+        "clip_t5": "qwen3vl_8b_w4a8.safetensors",
+        "clip_l": None,
+        "vae": "qwen_image_2.1_vae_bf16.safetensors",
+        "requires_node": "TextEncodeQwenImage21",
+        "min_comfyui": (0, 37, 0),
+        "too_old_note": "its Qwen-Image 2.1 nodes are not registered there",
+        "probe": ("UNETLoader", "unet_name", "qwen_image_2.1_nvfp4.safetensors"),
+        "models": [
+            # Pinned: a community quant, so a silent swap on main is a real risk.
+            _model("BennyDaBall/Qwen-Image-2.1-NVFP4",
+                   "diffusion_models/qwen_image_2.1_nvfp4.safetensors",
+                   "models/diffusion_models",
+                   revision="1a38d44a3a2f35cb0b543a25b04da0a963e7b5e6"),
+            _model("Comfy-Org/Qwen-Image-2.1",
+                   "text_encoders/qwen3vl_8b_w4a8.safetensors",
                    "models/text_encoders"),
             _model("Comfy-Org/Qwen-Image-2.1",
                    "vae/qwen_image_2.1_vae_bf16.safetensors", "models/vae"),

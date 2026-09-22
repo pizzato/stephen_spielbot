@@ -6361,7 +6361,11 @@ def _install_engine_worker(task_id: str, engine_key: str, hosts: list[str], hf_t
     import shlex
     from pipeline import engines as eng
     e = eng.get(engine_key) or eng.get_video(engine_key) or eng.get_music(engine_key) or {}
-    spec = ";".join(f'{m["repo"]}|{m["remote"]}|{m["dir"]}' for m in e.get("models", []))
+    # Optional 4th field pins a Hugging Face revision (community quants).
+    spec = ";".join(
+        f'{m["repo"]}|{m["remote"]}|{m["dir"]}'
+        + (f'|{m["revision"]}' if m.get("revision") else "")
+        for m in e.get("models", []))
     try:
         script_text = (REPO_ROOT / "scripts" / "download_models.sh").read_text()
     except Exception as ex:

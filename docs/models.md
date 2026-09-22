@@ -110,18 +110,32 @@ inherit both like every other style field. Download an engine per worker from
 |---|---|---|
 | **FLUX.2 Klein 4B** (default) | 4 steps. Scene first frames, covers, and masked "Edit image" | Apache-2.0 |
 | **FLUX.1 schnell** (opt-in) | The legacy 4-step path, including masked inpaint | Apache-2.0 |
-| **Qwen-Image 2.1** (opt-in) | 25 steps, native 2K, character reference images (up to the scene cap of 2). Not offered for masked "Edit image" — that slot stays on FLUX | Qwen Research License |
+| **Qwen-Image 2.1** (opt-in) | 25 steps, official INT8 weights, character reference images (up to the scene cap of 2). Not offered for masked "Edit image" — that slot stays on FLUX | Qwen Research License |
+| **Qwen-Image 2.1 NVFP4** (opt-in, faster on GB10) | Same graph and 25 steps. FP4 diffusion plus the official W4A8 text encoder — the faster weight set on these Blackwell workers | Qwen Research License |
 
 Qwen-Image 2.1 notes:
 
-- **Not part of the bulk install.** It is a research-and-evaluation model:
-  commercial use, including a monetized YouTube or X film, needs a separate
-  license from Qwen. The picker says the same thing.
-- Download is about **17 GB**: the INT8 ConvRot diffusion weights, the INT8
-  Qwen3-VL 8B text encoder, and the bf16 VAE, from
+- **Not part of the bulk install.** Both builds are research-and-evaluation
+  only: commercial use, including a monetized YouTube or X film, needs a
+  separate license from Qwen. The picker says the same thing on each.
+- **INT8** is the official Comfy-Org pack, about **17 GB** (INT8 ConvRot
+  diffusion, INT8 Qwen3-VL 8B encoder, bf16 VAE) from
   [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1).
-  The bf16 diffusion file is the higher-memory alternative; the engine loads
-  the INT8 one.
+  The bf16 diffusion file is the slow, large alternative and is not offered.
+  Published timing on a DGX Spark (GB10), ComfyUI, this INT8 pack: about
+  **20 s** for 1024×1024 at 25 steps, about **128 s** at 2048×2048. A scene
+  still is the film's render size, not a forced 2K square.
+- **NVFP4** is the faster build for these machines. The diffusion file is a
+  community FP4 quant of that official BF16 checkpoint
+  ([BennyDaBall/Qwen-Image-2.1-NVFP4](https://huggingface.co/BennyDaBall/Qwen-Image-2.1-NVFP4),
+  pinned revision), about 4.2 GB. The text encoder is the official W4A8 file
+  and the VAE is the same official bf16 file, so the extra download on top of
+  INT8 is the FP4 diffusion plus the W4A8 encoder. On an RTX 5090 the FP4
+  diffusion pack was measured at **6.7 s** versus **7.6 s** INT8 and **15.6 s**
+  BF16 (1024×1024, 40 steps). GB10 is the same Blackwell FP4 generation, which
+  is why this is the one to pick there. It has not been timed on a Spark in
+  this project. There is no few-step distill of 2.1 yet, so both engines stay
+  at 25 steps — the old Qwen-Image lightning LoRAs are a different model.
 - Its node (`TextEncodeQwenImage21`) ships with **ComfyUI ≥ v0.37.0**. The
   worker image stays pinned at `COMFYUI_REF=v0.33.0` so the rest of the fleet
   is unchanged. To use this engine, rebuild that worker with
@@ -143,6 +157,11 @@ cd ~/github/ComfyUI
 huggingface-cli download Comfy-Org/Qwen-Image-2.1 diffusion_models/qwen_image_2.1_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/Qwen-Image-2.1 text_encoders/qwen3vl_8b_int8_convrot.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/Qwen-Image-2.1 vae/qwen_image_2.1_vae_bf16.safetensors --local-dir models/vae --local-dir-use-symlinks False
+
+# Faster GB10 build — NVFP4 diffusion (pinned) + official W4A8 encoder.
+# The VAE line above is shared; skip it if INT8 is already installed.
+huggingface-cli download BennyDaBall/Qwen-Image-2.1-NVFP4 diffusion_models/qwen_image_2.1_nvfp4.safetensors --revision 1a38d44a3a2f35cb0b543a25b04da0a963e7b5e6 --local-dir models/diffusion_models --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/Qwen-Image-2.1 text_encoders/qwen3vl_8b_w4a8.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 ```
 
 ## Video engines (per style)
@@ -449,9 +468,10 @@ original at any time.
 
 The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model — are
 commercial-friendly on purpose. The original F5-TTS narration weights are offered only as
-an opt-in **non-commercial** preview. Qwen-Image 2.1 is opt-in under the
+an opt-in **non-commercial** preview. Both Qwen-Image 2.1 builds (INT8 and the faster NVFP4) are opt-in under the
 [Qwen Research License](#image-engines-per-style) — research and evaluation only,
-not for a monetized film without a separate grant from Qwen. MiniMax H3 is opt-in with its own
+not for a monetized film without a separate grant from Qwen. The NVFP4 diffusion
+file is a community quant of the official weights and inherits that license. MiniMax H3 is opt-in with its own
 [community license](#video-engines-per-style) — territory-restricted and
 attribution-bearing; review it before switching a publishing style over. MiniMax
 Music 3 is opt-in under a [separate community license](#music-engines-per-style)
