@@ -210,6 +210,79 @@ class DivideStoryTests(unittest.TestCase):
         self.assertEqual(len(divides), 20)
 
 
+class DivideSongFormatTests(unittest.TestCase):
+    """fmt="song": the crown-of-broken-cels regression (2026-09-21) — the
+    writer returned every scene with no "mode" field at all, and the divide
+    silently treated them as narration, filled the (correctly) empty
+    narration with invented text, then fell back to speaking scene titles
+    over the song. A song film's scenes must default to "silent" instead,
+    skip the narration-fill pass entirely, and the divide must refuse to
+    return a song script with no singing scenes."""
+
+    def _story(self, n_scenes):
+        return DivideStoryTests._story(self, n_scenes)
+
+    def _divide(self, n_scenes, fake, **kw):
+        with mock.patch.object(story, "_chat_complete", fake):
+            return story.divide_story(self._story(n_scenes), fmt="song", **kw)
+
+    def test_missing_mode_defaults_to_silent_not_narration(self):
+        # make_fake's _scene_items is exactly the observed shape: no "mode"
+        # key on any scene.
+        scenes, *_ = self._divide(18, make_fake())
+        self.assertTrue(all(s.mode == "silent" for s in scenes))
+        self.assertTrue(all(not s.narration.strip() for s in scenes))
+
+    def test_narration_fill_and_title_fallback_never_run(self):
+        fake = make_fake()
+        self._divide(18, fake)
+        self.assertFalse([c for c in fake.calls if c.startswith("fill narration")])
+
+    def test_explicit_narration_mode_is_coerced_to_silent(self):
+        # The writer defied the "never narrate" instruction outright.
+        def fake(cfg, system, user_msg, max_tokens, label, retries=3):
+            m = re.match(r"divide scenes (\d+)–(\d+)$", label)
+            if m:
+                start, end = int(m.group(1)), int(m.group(2))
+                return json.dumps([
+                    {"id": i, "title": f"Scene {i}", "image_prompt": f"image {i}",
+                     "video_prompt": f"video {i}", "mode": "narration",
+                     "narration": f"Scene {i} spoken over the song."}
+                    for i in range(start, end + 1)
+                ])
+            if label == "recurring characters":
+                return "[]"
+            raise AssertionError(f"unexpected LLM label: {label}")
+        scenes, *_ = self._divide(6, fake)
+        self.assertTrue(all(s.mode == "silent" for s in scenes))
+        self.assertTrue(all(not s.narration.strip() for s in scenes))
+
+    def test_raises_when_no_scene_ends_up_silent(self):
+        # Even coercion can't save a divide where the writer staged the whole
+        # film as dialogue — that is a divide worth failing loudly over
+        # rather than shipping a song with no performance scenes.
+        def fake(cfg, system, user_msg, max_tokens, label, retries=3):
+            m = re.match(r"divide scenes (\d+)–(\d+)$", label)
+            if m:
+                start, end = int(m.group(1)), int(m.group(2))
+                return json.dumps([
+                    {"id": i, "title": f"Scene {i}", "mode": "dialogue",
+                     "cast": ["Isla"],
+                     "lines": [{"speaker": "Isla", "text": f"Line {i}."}]}
+                    for i in range(start, end + 1)
+                ])
+            raise AssertionError(f"unexpected LLM label: {label}")
+        with self.assertRaises(RuntimeError):
+            self._divide(6, fake)
+
+    def test_narration_format_unaffected(self):
+        # fmt="" (the default, every other format) keeps today's behaviour.
+        with mock.patch.object(story, "_chat_complete", make_fake()):
+            scenes, *_ = story.divide_story(self._story(12))
+        self.assertTrue(all(s.mode == "narration" for s in scenes))
+        self.assertTrue(all(s.narration.strip() for s in scenes))
+
+
 class RedraftStoryTests(unittest.TestCase):
     def _generate_then_redraft(self, n_from, n_to, fake=None):
         fake = fake or make_fake()

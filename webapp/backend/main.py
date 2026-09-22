@@ -2958,6 +2958,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
                 story, style_hint=style_hint, video_title=video_title or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
                 avoid_hint=avoid_hint, language=language, dialogue_note=dialogue_note,
+                fmt=fmt,
             )
     except HTTPException:
         raise
