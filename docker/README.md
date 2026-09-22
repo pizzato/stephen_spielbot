@@ -88,7 +88,7 @@ the value must be an `http://host:8189` URL.
 |---|---|---|
 | `MODELS_DIR` | — (required) | Host path to the ComfyUI `models/` dir, mounted into the ComfyUI container |
 | `COMFYUI_INPUT_DIR` | `./input` | Host path mounted into `/opt/ComfyUI/input`; `make install` sets this to `~/github/ComfyUI/input` |
-| `COMFYUI_REF` | `v0.33.0` | Pin ComfyUI to a tag/branch/commit for reproducible workers. `make install` writes this pin; v0.33.0 is the floor for the MiniMax Music 3 engine |
+| `COMFYUI_REF` | `v0.33.0` | Pin ComfyUI to a tag/branch/commit for reproducible workers. `make install` writes this pin; v0.33.0 is the floor for the MiniMax Music 3 engine. The opt-in Qwen-Image 2.1 engine needs this worker rebuilt with `v0.37.0` or newer; the default pin stays at v0.33.0 |
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
 | `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |

@@ -99,6 +99,52 @@ INSTALL_FLUX1=1 bash scripts/download_models.sh
 make download-flux-cluster     # to the first node, then rsync to all workers
 ```
 
+## Image engines (per style)
+
+Each style picks the model that paints its stills under **Settings → Styles →
+Image model**. Generation and masked edit are separate pickers; child styles
+inherit both like every other style field. Download an engine per worker from
+**Settings → Infrastructure → Image models**.
+
+| Engine | Character | License |
+|---|---|---|
+| **FLUX.2 Klein 4B** (default) | 4 steps. Scene first frames, covers, and masked "Edit image" | Apache-2.0 |
+| **FLUX.1 schnell** (opt-in) | The legacy 4-step path, including masked inpaint | Apache-2.0 |
+| **Qwen-Image 2.1** (opt-in) | 25 steps, native 2K, character reference images (up to the scene cap of 2). Not offered for masked "Edit image" — that slot stays on FLUX | Qwen Research License |
+
+Qwen-Image 2.1 notes:
+
+- **Not part of the bulk install.** It is a research-and-evaluation model:
+  commercial use, including a monetized YouTube or X film, needs a separate
+  license from Qwen. The picker says the same thing.
+- Download is about **17 GB**: the INT8 ConvRot diffusion weights, the INT8
+  Qwen3-VL 8B text encoder, and the bf16 VAE, from
+  [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1).
+  The bf16 diffusion file is the higher-memory alternative; the engine loads
+  the INT8 one.
+- Its node (`TextEncodeQwenImage21`) ships with **ComfyUI ≥ v0.37.0**. The
+  worker image stays pinned at `COMFYUI_REF=v0.33.0` so the rest of the fleet
+  is unchanged. To use this engine, rebuild that worker with
+  `COMFYUI_REF=v0.37.0` (or newer). Older workers are refused up front.
+  "Not installed" with the weights already downloaded means that rebuild has
+  not happened.
+- Output size follows the style resolution, snapped to a multiple of 32 (scene
+  stills are already on LTX's multiple-of-64 grid). The model can generate at
+  2K, but a first frame is kept at the film's render size so the video pass
+  matches it.
+- Character references are spliced into the text encoder in slot order. The
+  prompt cites each one as `<image1>`, `<image2>`. FLUX.1 schnell ignores
+  reference images.
+
+Manual download:
+
+```bash
+cd ~/github/ComfyUI
+huggingface-cli download Comfy-Org/Qwen-Image-2.1 diffusion_models/qwen_image_2.1_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/Qwen-Image-2.1 text_encoders/qwen3vl_8b_int8_convrot.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/Qwen-Image-2.1 vae/qwen_image_2.1_vae_bf16.safetensors --local-dir models/vae --local-dir-use-symlinks False
+```
+
 ## Video engines (per style)
 
 Each style picks the model that animates its scenes under **Settings → Styles →
@@ -403,7 +449,9 @@ original at any time.
 
 The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model — are
 commercial-friendly on purpose. The original F5-TTS narration weights are offered only as
-an opt-in **non-commercial** preview. MiniMax H3 is opt-in with its own
+an opt-in **non-commercial** preview. Qwen-Image 2.1 is opt-in under the
+[Qwen Research License](#image-engines-per-style) — research and evaluation only,
+not for a monetized film without a separate grant from Qwen. MiniMax H3 is opt-in with its own
 [community license](#video-engines-per-style) — territory-restricted and
 attribution-bearing; review it before switching a publishing style over. MiniMax
 Music 3 is opt-in under a [separate community license](#music-engines-per-style)

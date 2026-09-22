@@ -288,7 +288,9 @@ back to Fast rather than failing the film.
 ### Image model
 
 Separate engines for **generation** and for **edit (mask + prompt)** inpainting. Default is
-FLUX.2 Klein for both.
+FLUX.2 Klein for both. **Qwen-Image 2.1** is an opt-in generation engine (research
+license, and the worker needs ComfyUI ≥ v0.37.0). It does not appear in the edit
+picker — masked inpaint stays on FLUX. See [Models → Image engines](../models.md#image-engines-per-style).
 
 ### Size presets
 

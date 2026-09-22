@@ -93,14 +93,21 @@ placeholder with no UI.
   selection: `_characters_for_scene()`. Called from `_generate_active_scene_preview` and
   the dialogue shot-still path.
 
-## Reference-image path (FLUX.2)
+## Reference-image path
 
-- `workflows/flux2_t2i_ref.json` is the single-reference graph (`LoadImage` →
+FLUX.2 Klein and Qwen-Image 2.1 both condition on character reference images.
+FLUX.1 schnell ignores them (logged, no crash).
+
+- `workflows/flux2_t2i_ref.json` is the FLUX.2 single-reference graph (`LoadImage` →
   `VAEEncode` → `ReferenceLatent` feeding the guider). Multi-reference scenes use the
   dynamic builder `_build_flux2_ref_workflow()` in `pipeline/comfyui.py`, which appends
   one LoadImage/VAEEncode/ReferenceLatent chain per extra reference.
-- `generate_with_engine(..., reference_images=[...])` uploads each reference and runs the
-  ref workflow on FLUX.2; non-FLUX.2 engines ignore references (logged, no crash).
+- Qwen-Image 2.1 uses the same text-to-image graph
+  (`workflows/qwen_image_2_1_t2i.json`) with one `LoadImage` per reference wired
+  into `TextEncodeQwenImage21` as `images.image_1`, `images.image_2`, …. The
+  prompt cites each character as `<image1>`, `<image2>`.
+- `generate_with_engine(..., reference_images=[...])` uploads each reference and runs
+  the matching graph. Engines without reference support ignore the images (logged, no crash).
 - `_scene_reference_images()` in `app.py` maps a scene's matched characters to their
   reference files, capped at `_MAX_SCENE_REFERENCES = 2` per scene (drops are logged).
 - Getting a reference image, per character: **upload** a photo, or **generate a

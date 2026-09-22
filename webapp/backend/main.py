@@ -6305,8 +6305,6 @@ def list_engines() -> dict:
     from pipeline.worker_pool import queue_depth
     cfg = gapp.load_config()
     probe_url = next((u for u in (cfg.get("comfy_workers") or []) if queue_depth(u, timeout=3) >= 0), None)
-    availability = {k: (engine_model_present(probe_url, e.get("probe")) if probe_url else None)
-                    for k, e in eng.ENGINES.items()}
 
     def _video_avail(e: dict) -> bool | None:
         """Model file present AND (when the engine needs newer ComfyUI nodes)
@@ -6333,7 +6331,10 @@ def list_engines() -> dict:
 
     return {
         "engines": eng.public_list(),
-        "availability": availability,
+        # Same rule as video: weights present AND, when the engine names a node
+        # (Qwen-Image 2.1), that node registered. Weights on a pre-0.37 worker
+        # would otherwise read "installed" and fail at render time.
+        "availability": {k: _video_avail(e) for k, e in eng.ENGINES.items()},
         "default_engine": eng.DEFAULT_ENGINE,
         "video_engines": eng.public_list_video(),
         "video_availability": {k: _video_avail(e) for k, e in eng.VIDEO_ENGINES.items()},

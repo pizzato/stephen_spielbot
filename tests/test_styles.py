@@ -1523,6 +1523,22 @@ class CharacterReferenceImageTests(TempConfigCase):
         self.assertIn("Bob appears EXACTLY as the character", prompt)
         self.assertEqual(len(refs), 1)
 
+    def test_prompt_and_refs_cites_qwen_image_slots(self):
+        from pipeline import engines
+        cfg = self._hero_with_chars([
+            {"name": "Bob", "description": "a man", "ref_image": "x"},
+            {"name": "Ada", "description": "a woman", "ref_image": "x"},
+        ])
+        for ch in cfg["characters"]:
+            cfg = app.set_character_image(ch["id"], self._png_bytes())
+        scene = {"image_prompt": "Bob and Ada wave.", "narration": ""}
+        prompt, refs = app._characters_prompt_and_refs(
+            scene["image_prompt"], scene, cfg, "Hero",
+            engine=engines.get("qwen-image-2.1"))
+        self.assertIn("Bob appears EXACTLY as the character in <image1>", prompt)
+        self.assertIn("Ada appears EXACTLY as the character in <image2>", prompt)
+        self.assertEqual(len(refs), 2)
+
     def test_prompt_and_refs_no_note_without_reference_support(self):
         cfg = self._hero_with_chars([{"name": "Bob", "description": "a man", "ref_image": "x"}])
         cfg = app.set_character_image(cfg["characters"][0]["id"], self._png_bytes())
