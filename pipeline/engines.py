@@ -521,7 +521,11 @@ VIDEO_ENGINES: dict[str, dict] = {
         # unstripped the node matches nothing and silently renders 4 steps with no
         # LoRA at all, so the installer writes this name only after converting.
         "lora": "minimax_h3_ref2v_turbo_4step_v0.1_h3node.safetensors",
-        "lora_strength": 1.0,   # as published; see comfyui._lora_strength
+        # Below the published 1.0: at full strength this LoRA swings sung takes'
+        # camera right in the opening seconds (-45% to -50% of frame width on the
+        # sweep scene); 0.6 holds the frame (-10.9%), is slightly sharper, and
+        # costs nothing in wall clock. See docs/performance_films.md.
+        "lora_strength": 0.6,
         "lora_source": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
         "requires_node": "MiniMaxH3TurboSampler",
         "probe": ("UNETLoader", "unet_name", "minimax_h3_ref2va_int8_convrot.safetensors"),
