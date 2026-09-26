@@ -1139,7 +1139,7 @@ function ChannelsCard({ onConfigChanged, onError }) {
 // server machine); each account's token is stored separately, and styles pick
 // which account they publish to. Settings are simpler than YouTube's (no
 // category/captions): community-engagement persona + auto-respond + language.
-function XAccountsCard({ onConfigChanged, onError }) {
+function XAccountsCard({ onConfigChanged, onError, children }) {
   const [accounts, setAccounts] = useState(null)
   const [connecting, setConnecting] = useState(false)
   const [busy, setBusy] = useState('')
@@ -1187,7 +1187,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
 
   const disconnect = async (acc) => {
     const label = acc.name || acc.id
-    if (!window.confirm(`Disconnect “${label}”? Styles publishing to it fall back to the first remaining account.`)) return
+    if (!window.confirm(`Disconnect “${label}”? Styles using it will stop publishing to X. If selected for news search, reconnect it or choose another account.`)) return
     setBusy(acc.id); onError('')
     try {
       await api.xDisconnect(acc.id)
@@ -1241,7 +1241,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
   return (
     <Card span={12} className="reveal reveal-d1">
       <div className="row center between">
-        <span className="label-sm">Accounts</span>
+        <span className="label-sm">X</span>
         <div className="row center gap-10">
           <Button variant="ghost" icon="key" onClick={() => setShowImport((v) => !v)}>Paste tokens</Button>
           <Button variant="primary" icon="x-twitter" brand disabled={connecting} onClick={connect}>
@@ -1250,7 +1250,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
         </div>
       </div>
       <div className="field__hint" style={{ marginTop: 6 }}>
-        Each connected X login is one account. Pick the account a style publishes to under <strong>Styles</strong>. Posting needs the X API client ID below; reading mentions and analytics needs a paid X API tier.
+        Connect an X account once for publishing, news search and community features. Save the app credentials below before connecting. Choose where each style publishes under <strong>Styles</strong>.
       </div>
       {connecting && authUrl && (
         <div className="stack gap-10" style={{ marginTop: 12, padding: '12px 14px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }}>
@@ -1371,6 +1371,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
           </div>
         ))}
       </div>
+      {children}
     </Card>
   )
 }
@@ -2744,7 +2745,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <span className="label-sm">News monitoring · {st.name}</span>
             <p className="muted" style={{ fontSize: 13 }}>
               Turn recent X posts into ideas shaped by this style's instructions and default format. A music-video style can write songs about the news.
-              Set the shared X search bearer token in Channels, then save your settings. Checks run while the backend is running.
+              Connect or select an X account under Channels → X, then save your settings. Checks run while the backend is running.
             </p>
             <div className="stack gap-16">
               <Check checked={newsMonitor.enabled} onChange={(v) => setNewsMonitor('enabled', v)} label="Monitor news on X for this style" />
@@ -3318,18 +3319,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         </>)}
 
         {tab === 'channels' && (<>
-          <Card span={12} className="reveal reveal-d1">
-            <span className="label-sm">X news search</span>
-            <div className="mt-16">
-              <Field label="X search bearer token" hint="An X API bearer token with recent-search access. Shared by all style monitors; separate from the accounts used to publish. Leave blank to keep a saved token.">
-                <input className="input" type="password" autoComplete="new-password"
-                  placeholder={cfg.news?.x_bearer_token_set ? '•••••••• (saved — leave blank to keep)' : 'X API bearer token'}
-                  value={cfg.news?.x_bearer_token || ''}
-                  onChange={(e) => set('news', { ...(cfg.news || {}), x_bearer_token: e.target.value })} />
-              </Field>
-              <p className="muted" style={{ fontSize: 12.5 }}>Enable monitoring and choose search topics separately for each style in the Styles tab. Review sources and run a check from AI ideas.</p>
-            </div>
-          </Card>
           {/* ── YouTube channels (issue #22) ── */}
           <ChannelsCard onConfigChanged={reloadChannels} onError={setError} />
           <Card span={12} className="reveal reveal-d2">
@@ -3341,21 +3330,38 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
           {/* ── X (Twitter) accounts (issue #107) ── */}
-          <XAccountsCard onConfigChanged={reloadXAccounts} onError={setError} />
-          <Card span={12} className="reveal reveal-d2">
-            <span className="label-sm">X API</span>
-            <div className="stack gap-22 mt-16">
+          <XAccountsCard onConfigChanged={reloadXAccounts} onError={setError}>
+            <div className="stack gap-22 mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 20 }}>
+              <span className="label-sm">App credentials</span>
               <Field label="Client ID" hint="OAuth 2.0 Client ID from the X developer portal. Register the redirect URI http://127.0.0.1:8723/callback on the app.">
                 <input className="input" value={cfg.x_client_id || ''} onChange={(e) => set('x_client_id', e.target.value)} />
               </Field>
               <Field label="Client secret" hint="Only for confidential X apps. Leave blank for a public (PKCE-only) app.">
                 <input className="input" type="password" placeholder={cfg.x_client_secret_set ? '•••••••• (saved — leave blank to keep)' : ''} value={cfg.x_client_secret || ''} onChange={(e) => set('x_client_secret', e.target.value)} />
               </Field>
+              <span className="label-sm">News search</span>
+              <Field label="News search account" hint="Reuse a connected account and refresh its token automatically. Automatic uses a saved bearer token if present, otherwise your only connected account. Choose an account when you have several.">
+                <select className="select" value={cfg.news?.x_account || ''}
+                  onChange={(e) => set('news', { ...(cfg.news || {}), x_account: e.target.value })}>
+                  <option value="">Automatic</option>
+                  {cfg.news?.x_account && !(cfg.x_accounts || []).some((a) => a.id === cfg.news.x_account) &&
+                    <option value={cfg.news.x_account}>Unavailable account ({cfg.news.x_account})</option>}
+                  {(cfg.x_accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
+                </select>
+              </Field>
+              <Field label="X search bearer token (optional)" hint="An alternative for searching without a connected account. A selected account takes priority. Leave blank to keep a saved token.">
+                <input className="input" type="password" autoComplete="new-password"
+                  placeholder={cfg.news?.x_bearer_token_set ? '•••••••• (saved — leave blank to keep)' : 'Not needed for a connected account'}
+                  value={cfg.news?.x_bearer_token || ''}
+                  onChange={(e) => set('news', { ...(cfg.news || {}), x_bearer_token: e.target.value })} />
+              </Field>
+              <p className="muted" style={{ fontSize: 12.5 }}>Your X app needs recent-search access. Set topics and automation under Styles → News monitoring; review results in AI ideas → News.</p>
+              <span className="label-sm">Publishing</span>
               <Field label="Default post text" hint="Appended to every tweet (like the YouTube description suffix). Optional.">
                 <input className="input" value={cfg.x_post_default_text || ''} onChange={(e) => set('x_post_default_text', e.target.value)} />
               </Field>
             </div>
-          </Card>
+          </XAccountsCard>
         </>)}
 
         {tab === 'automation' && (() => {
