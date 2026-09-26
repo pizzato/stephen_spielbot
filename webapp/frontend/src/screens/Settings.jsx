@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, resolutionTier, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import SettingsAssets from './SettingsAssets.jsx'
+import InstagramAccounts from './InstagramAccounts.jsx'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
   globalAutomation, resolveAutomation, automationSource } from '../styleUtils.js'
 
@@ -3277,6 +3278,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               </Field>
             </div>
           </Card>
+          <InstagramAccounts />
         </>)}
 
         {tab === 'automation' && (() => {

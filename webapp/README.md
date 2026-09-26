@@ -32,6 +32,9 @@ The sidebar screens: **Home**, **Create**, **AI ideas**, **Queue**, **Script**,
 **Channel Analytics** (stats + predictive model), and **Settings**. The deep
 prompt templates (`prompts.yaml`) are editable at `#/prompts`, opened from
 Settings → Infrastructure. YouTube channel OAuth runs from Settings → Channels.
+Instagram accounts also connect in Settings → Channels using a Facebook Page token;
+see [Instagram setup](../docs/instagram_setup.md). Finished films can be published as
+Reels from the Publish form.
 
 ## Run it (development)
 

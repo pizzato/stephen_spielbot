@@ -94,9 +94,38 @@ export default function Publish({ initialWorkDir, go }) {
   const [xStatus, setXStatus] = useState('')
   const [xError, setXError] = useState('')
   const [xUrl, setXUrl] = useState('')
+  const [instagramAccounts, setInstagramAccounts] = useState([])
+  const [instagramAccount, setInstagramAccount] = useState('')
+  const [instagramCaption, setInstagramCaption] = useState('')
+  const [instagramFeed, setInstagramFeed] = useState(true)
+  const [instagramState, setInstagramState] = useState({ status: 'loading' })
+  const [instagramRefresh, setInstagramRefresh] = useState(0)
   // Which destinations to publish to (issue #107). A box is only acted on when
   // that platform also has a connected channel/account (see willYouTube/willX).
-  const [dest, setDest] = useState({ youtube: true, x: true })
+  const [dest, setDest] = useState({ youtube: true, x: true, instagram: false })
+
+  // Poll durable per-film/account state; changing films cancels stale responses.
+  useEffect(() => {
+    if (!workDir || !instagramAccount) return
+    let alive = true
+    let timer
+    setInstagramState({ status: 'loading' })
+    const tick = async () => {
+      try {
+        const s = await api.instagramPostStatus(workDir, instagramAccount)
+        if (!alive) return
+        setInstagramState(s)
+        if (['uploading', 'processing', 'publishing'].includes(s.status)) timer = setTimeout(tick, 4000)
+      } catch (e) {
+        if (alive) {
+          setInstagramState({ status: 'unavailable', error: e.message })
+          timer = setTimeout(tick, 10000)
+        }
+      }
+    }
+    tick()
+    return () => { alive = false; clearTimeout(timer) }
+  }, [workDir, instagramAccount, instagramRefresh])
 
   const refreshChannels = () => api.ytChannels().then((r) => setChannels(r.channels || [])).catch(() => {})
   const refreshXAccounts = () => api.xAccounts().then((r) => {
@@ -128,16 +157,22 @@ export default function Publish({ initialWorkDir, go }) {
     }).catch((e) => setError(e.message))
     refreshChannels()
     refreshXAccounts()
+    api.instagramAccounts().then((r) => {
+      setInstagramAccounts(r.accounts || [])
+      setInstagramAccount((a) => a || r.accounts?.[0]?.id || '')
+    }).catch((e) => setError(e.message))
   }, [initialWorkDir])
 
 
   const selectFilm = async (wd) => {
     setWorkDir(wd); setError(''); setStatus(''); setConfirming(false); setReuploading(false); setYoutubeUrl(''); setYoutubeVideoId('')
     setXStatus(''); setXError(''); setXUrl('')
+    setInstagramState({ status: 'loading' })
     try {
       const p = await api.ytPostPrefill(wd)
       setTitle(p.title || '')
       setDescription(p.description || '')
+      setInstagramCaption(p.description || p.title || '')
       setOrigMeta({ title: p.title || '', description: p.description || '' })
       setVideoHistory(p.video_history || null)
       setOriginalLang(p.original_lang || 'en')
@@ -159,7 +194,7 @@ export default function Publish({ initialWorkDir, go }) {
       setCategory(p.category || '22')   // …and that channel's default video category
       // The style decides the X account too; with none, default the X box off.
       if (p.x_account) setXAccount(p.x_account)
-      setDest({ youtube: true, x: !!p.x_account })
+      setDest({ youtube: true, x: !!p.x_account, instagram: false })
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
       setIsShort(!!p.is_short)
@@ -173,7 +208,7 @@ export default function Publish({ initialWorkDir, go }) {
       const selV = p.video_history?.versions?.find((v) => v.id === p.video_history?.selected)
       if (selV?.lang && selV.lang !== (p.original_lang || 'en')) {
         api.localizeMetadata({ work_dir: wd, language: selV.lang })
-          .then((m) => { if (m.title) setTitle(m.title); if (m.description) setDescription(m.description) })
+          .then((m) => { if (m.title) setTitle(m.title); if (m.description) setDescription(m.description); setInstagramCaption(m.description || m.title || p.description || p.title || '') })
           .catch(() => {})
       }
     } catch (e) { setError(e.message) }
@@ -194,6 +229,7 @@ export default function Publish({ initialWorkDir, go }) {
         const m = await api.localizeMetadata({ work_dir: workDir, language: lang })
         setTitle(m.title || origMeta.title)
         setDescription(m.description || origMeta.description)
+        setInstagramCaption(m.description || m.title || origMeta.description || origMeta.title)
         // The thumbnail preview follows too: same art, re-titled in `lang`
         // (empty when the film predates text-free cover backgrounds).
         setCoverUrl(m.cover_url || origCoverUrl)
@@ -201,6 +237,7 @@ export default function Publish({ initialWorkDir, go }) {
       } else {
         setTitle(origMeta.title)
         setDescription(origMeta.description)
+        setInstagramCaption(origMeta.description || origMeta.title)
         setCoverUrl(origCoverUrl)
         setStatus('Publishing the original version.')
       }
@@ -374,8 +411,15 @@ export default function Publish({ initialWorkDir, go }) {
     try {
       if (willYouTube) await uploadYouTube()
       if (willX) await postToX()
+      if (willInstagram) {
+        await api.instagramPost({ work_dir: workDir, account: instagramAccount, caption: instagramCaption, share_to_feed: instagramFeed })
+        setInstagramState({ status: 'uploading' })
+      }
       setConfirming(false); setReuploading(false)
-    } catch (e) { setError(e.message) } finally { setBusy('') }
+    } catch (e) { setError(e.message) } finally {
+      if (willInstagram) setInstagramRefresh((n) => n + 1)
+      setBusy('')
+    }
   }
 
   // Switching the publish channel pulls in that channel's default category.
@@ -397,7 +441,13 @@ export default function Publish({ initialWorkDir, go }) {
   const xAvailable = !!xacc?.connected
   const willYouTube = dest.youtube && ytAvailable
   const willX = dest.x && xAvailable
-  const canPublish = !!(workDir && title.trim() && finalUrl && (willYouTube || willX))
+  const instagramBusy = ['uploading', 'processing', 'publishing'].includes(instagramState.status)
+  const instagramReady = !!instagramAccount && ['idle', 'error'].includes(instagramState.status)
+  const willInstagram = dest.instagram && instagramReady
+  const canPublish = !!(workDir && title.trim() && finalUrl && !instagramBusy
+    && (willYouTube || willX || willInstagram)
+    && (!dest.instagram || (instagramReady && [...instagramCaption].length <= 2200)))
+  const instagramName = instagramAccounts.find((a) => a.id === instagramAccount)?.name || ''
 
   const postToX = async () => {
     setXBusy(true); setXError(''); setXStatus('Posting to X…'); setXUrl('')
@@ -427,21 +477,21 @@ export default function Publish({ initialWorkDir, go }) {
           <span className="row center gap-10"><span className="label-sm">Publish a finished film</span>{go && <Button variant="ghost" icon="film" disabled={!workDir} onClick={() => go('editfilm', { workDir })}>Edit</Button>}</span>
         </div>
 
-        {channels.length === 0 && xAccounts.length === 0 && (
-          <Banner tone="warn">No channels or accounts connected — add one in Settings → YouTube or Settings → X.</Banner>)}
+        {channels.length === 0 && xAccounts.length === 0 && instagramAccounts.length === 0 && (
+          <Banner tone="warn">No channels or accounts connected — add one in Settings → Channels.</Banner>)}
         <Banner tone="danger">{error}</Banner>
         {status && <Banner tone="ok">{status}</Banner>}
 
         <div className="stack gap-22 mt-16">
           <Field label="Film">
-            <select className="select" value={workDir} onChange={(e) => selectFilm(e.target.value)}>
+            <select className="select" value={workDir} disabled={instagramBusy || busy === 'publish'} onChange={(e) => selectFilm(e.target.value)}>
               {opts.finished.length === 0 && <option value="">No finished films</option>}
               {opts.finished.map((f) => <option key={f.work_dir} value={f.work_dir}>{f.label}</option>)}
             </select>
           </Field>
           {(videoHistory?.versions?.length || 0) > 1 && (
             <Field label="Version" hint="Which final cut to publish — localized versions swap in their translated title & description.">
-              <select className="select" value={videoHistory.selected ?? ''} disabled={busy === 'version'}
+              <select className="select" value={videoHistory.selected ?? ''} disabled={busy === 'version' || busy === 'publish' || instagramBusy}
                 onChange={(e) => selectVersion(Number(e.target.value))}>
                 {videoHistory.versions.map((v) => {
                   const name = v.lang ? (langNames[v.lang] || v.lang.toUpperCase()) : ''
@@ -475,6 +525,16 @@ export default function Publish({ initialWorkDir, go }) {
                 {dest.x && xAccounts.length === 0 && <span className="muted" style={{ fontSize: 12 }}>No account connected (Settings → X)</span>}
               </div>
               {willX && <div className="muted" style={{ fontSize: 11.5 }}>X posts the video description (the part before the style’s sign-off), not the title.</div>}
+              <div className="row center gap-10 row--wrap">
+                <Check checked={dest.instagram} disabled={instagramBusy || busy === 'publish'} onChange={(v) => { setDest((d) => ({ ...d, instagram: v })); setConfirming(false) }} label="Instagram Reels" />
+                {dest.instagram && instagramAccounts.length > 0 && (
+                  <select className="select" aria-label="Instagram account" value={instagramAccount} disabled={instagramBusy || busy === 'publish'}
+                    onChange={(e) => { setInstagramAccount(e.target.value); setInstagramState({ status: 'loading' }); setConfirming(false) }} style={{ maxWidth: 220 }}>
+                    {instagramAccounts.map((a) => <option key={a.id} value={a.id}>@{a.name}</option>)}
+                  </select>
+                )}
+                {dest.instagram && instagramAccounts.length === 0 && <span className="muted" style={{ fontSize: 12 }}>Connect Instagram in Settings → Channels.</span>}
+              </div>
               {willX && !xacc?.premium && (
                 <div className="muted" style={{ fontSize: 11.5 }}>
                   X is non-Premium: videos over 2m20s post the YouTube link instead{(willYouTube || youtubeUrl) ? '' : ' — enable YouTube too, or it won’t post'}.
@@ -508,17 +568,33 @@ export default function Publish({ initialWorkDir, go }) {
             </div>
           )}
 
+          {(dest.instagram || instagramBusy) && (
+            <div className="stack gap-10">
+              <Field label="Instagram caption" hint={`${[...instagramCaption].length.toLocaleString()} / 2,200 characters. Published exactly as written, including hashtags.`}>
+                <textarea className="textarea" aria-label="Instagram caption" rows={5} value={instagramCaption} disabled={instagramBusy || busy === 'publish'}
+                  onChange={(e) => { setInstagramCaption(e.target.value); setConfirming(false) }} />
+              </Field>
+              <Button variant="ghost" disabled={instagramBusy || busy === 'publish'} onClick={() => { setInstagramCaption(description || title); setConfirming(false) }}>Use description as caption</Button>
+              <Check checked={instagramFeed} disabled={instagramBusy || busy === 'publish'} onChange={(v) => { setInstagramFeed(v); setConfirming(false) }} label="Also share the Reel to the Instagram feed" />
+              <p className="muted" style={{ fontSize: 12 }}>Instagram posts are public immediately. Use an MP4 or MOV, 3 seconds–15 minutes, up to 1 GB; portrait 9:16 is recommended. The selected final cut is uploaded without resizing.</p>
+              {instagramBusy && <Banner tone="info">{instagramState.status === 'uploading' ? 'Uploading to Instagram…' : instagramState.status === 'processing' ? 'Instagram is processing the Reel…' : 'Publishing the Reel…'}</Banner>}
+              {instagramState.error && <Banner tone="danger">{instagramState.error}{instagramState.status === 'uncertain' ? ' Automatic retry is blocked to prevent duplicate posts.' : ''}</Banner>}
+              {instagramState.status === 'done' && <Banner tone="ok">Published to Instagram. This film cannot be posted to the same account twice.</Banner>}
+              {instagramState.url && <a className="btn btn--ghost" href={instagramState.url} target="_blank" rel="noreferrer"><Icon name="instagram" brand /> View on Instagram</a>}
+            </div>
+          )}
+
           <div className="row center gap-10" style={{ padding: '10px 12px', background: 'var(--warn-soft)', borderRadius: 'var(--r-md)' }}>
             <Icon name="robot" style={{ color: 'var(--warn)' }} />
-            <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Posts are flagged as <strong>synthetic media</strong> per each platform's automated settings.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>YouTube and X posts use their automated synthetic-media settings.{dest.instagram && ' Instagram uploads do not set an AI label; include an AI disclosure in your caption when needed.'}</span>
           </div>
 
           {confirming ? (
             <div className="row gap-10 center row--wrap">
               <span className="muted" style={{ fontSize: 13 }}>
-                Publish "{title}" to {[willYouTube && `YouTube (${privacy})`, willX && `X (${xacc?.name ? '@' + xacc.name : 'account'})`].filter(Boolean).join(' + ')}?
+                Publish "{title}" to {[willYouTube && `YouTube (${privacy})`, willX && `X (${xacc?.name ? '@' + xacc.name : 'account'})`, willInstagram && `Instagram (@${instagramName}, public)`].filter(Boolean).join(' + ')}?
               </span>
-              <Button variant="primary" icon="upload" disabled={busy === 'publish'} onClick={publishAll}>{busy === 'publish' ? 'Publishing…' : 'Confirm'}</Button>
+              <Button variant="primary" icon="upload" disabled={!canPublish || busy === 'publish'} onClick={publishAll}>{busy === 'publish' ? 'Publishing…' : 'Confirm'}</Button>
               <Button variant="ghost" onClick={() => { setConfirming(false); setReuploading(false) }}>Cancel</Button>
             </div>
           ) : (

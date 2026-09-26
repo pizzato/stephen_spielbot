@@ -49,7 +49,8 @@ black, one-click **restyling** (the same script
 or finished film in another visual style), misspelling-proof cover thumbnails (text-free
 artwork in the style's own engine + real-font typography with per-style fonts,
 colours, and accent words), publishing to **YouTube** (multi-channel, with
-playlists, captions — attached or burned into the picture — and tags) and **X**, a publish scheduler with per-channel
+playlists, captions — attached or burned into the picture — and tags), **X**, and manual
+**Instagram Reels**, a YouTube/X publish scheduler with per-channel
 cadence, comment fetching / AI replies / community engagement, a predictive
 engagement model, and C2PA "AI-generated" content credentials on published
 videos.
@@ -105,6 +106,7 @@ Guides that also read well on GitHub:
 - [`docs/performance_films.md`](docs/performance_films.md) — acted scenes and performance films: portraits + dialogue straight to video, no first frame or TTS
 - [`docs/orchestration.md`](docs/orchestration.md) — the durable SQLite task layer and how renders execute
 - [`docs/youtube_setup.md`](docs/youtube_setup.md) — Google Cloud / OAuth setup for YouTube publishing
+- [`docs/instagram_setup.md`](docs/instagram_setup.md) — Meta account setup and direct Instagram Reels publishing
 - [`docs/x_setup.md`](docs/x_setup.md) — X (Twitter) developer app setup for posting
 - [`docker/README.md`](docker/README.md) — the containerized worker stack in detail
 - [`webapp/README.md`](webapp/README.md) — web UI architecture and development workflow

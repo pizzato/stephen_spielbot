@@ -115,6 +115,7 @@ nav:
       - Acted scenes, performance films & music videos: performance_films.md
       - YouTube setup: youtube_setup.md
       - X setup: x_setup.md
+      - Instagram setup: instagram_setup.md
   - Reference:
       - Configuration: configuration.md
       - Environment variables: environment.md

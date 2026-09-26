@@ -12,6 +12,7 @@ Run it from the repo root:
 """
 
 import base64
+import fcntl
 import hashlib
 import io
 import json
@@ -44,6 +45,7 @@ if str(REPO_ROOT) not in sys.path:
 import app as gapp  # noqa: E402
 import pipeline.youtube as yt  # noqa: E402
 import pipeline.x as xt  # noqa: E402
+import pipeline.instagram as ig  # noqa: E402
 import pipeline.publish_queue as pq  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
@@ -7596,6 +7598,9 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
             "name": _x_account_display_name(cfg, _x_account_for_work_dir(wd)),
             "url": meta.get("x_url") or "",
         })
+    for post in ig.published_posts(wd):
+        dests.append({"platform": "instagram", "name": post.get("name") or "Instagram",
+                      "url": post.get("url") or ""})
     out = {"published": bool(dests), "destinations": dests}
     # Approval gate (publish_require_approval): a still-unpublished film waits for
     # a thumbs-up in the Films tab. Comment-requested videos bypass it, as does the
@@ -13372,6 +13377,144 @@ def x_post_status(task_id: str) -> dict:
     if not task:
         raise HTTPException(404, "X post task not found.")
     return {"ok": True, **task}
+
+
+# ── Instagram Reels (manual publishing) ─────────────────────────────────────
+
+@api.get("/api/instagram/accounts")
+def instagram_accounts() -> dict:
+    return {"accounts": ig.list_accounts()}
+
+
+class InstagramConnectBody(BaseModel):
+    access_token: str
+
+
+@api.post("/api/instagram/connect")
+def instagram_connect(body: InstagramConnectBody) -> dict:
+    try:
+        return {"ok": True, "account": ig.connect_account(body.access_token)}
+    except ig.InstagramError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+class InstagramAccountBody(BaseModel):
+    account: str
+
+
+@api.post("/api/instagram/disconnect")
+def instagram_disconnect(body: InstagramAccountBody) -> dict:
+    try:
+        ig.disconnect_account(body.account)
+    except ig.InstagramError as e:
+        raise HTTPException(400, str(e)) from None
+    return {"ok": True}
+
+
+class InstagramPostBody(InstagramAccountBody):
+    work_dir: str
+    caption: str = ""
+    share_to_feed: bool = True
+
+
+def _instagram_work_dir(work_dir: str) -> Path:
+    wd = Path(work_dir).resolve()
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if not wd.is_dir():
+        raise HTTPException(404, "Film directory not found.")
+    return wd
+
+
+def _instagram_lock(wd: Path, account: str):
+    """Held through publication, including across different server processes."""
+    try:
+        path = ig.state_path(wd, account).with_suffix(".lock")
+    except ig.InstagramError as e:
+        raise HTTPException(400, str(e)) from None
+    lock = path.open("a+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise HTTPException(409, "This film is already being published to that Instagram account.") from None
+    return lock
+
+
+def _run_instagram_post(wd: Path, final: Path, body: InstagramPostBody, state: dict, lock) -> None:
+    def progress(**updates):
+        state.update(updates)
+        ig.write_state(wd, body.account, state)
+
+    try:
+        with _track_op("Posting to Instagram", wd.name):
+            result = ig.publish_reel(final, body.caption, body.account, body.share_to_feed, progress)
+        progress(status="done", **result)
+    except Exception as e:
+        # Once publishing may have happened, keep an uncertain result blocked.
+        # Never downgrade a known success because a later local write failed.
+        if state.get("status") != "done":
+            uncertain = isinstance(e, ig.PublishUncertain) or (
+                state.get("status") == "publishing" and not isinstance(e, ig.InstagramError))
+            message = str(e) if isinstance(e, ig.InstagramError) else "Instagram publishing was interrupted. Check the account's posts."
+            progress(status="uncertain" if uncertain else "error", error=message)
+    finally:
+        lock.close()
+
+
+@api.post("/api/instagram/post")
+def instagram_post(body: InstagramPostBody) -> dict:
+    wd = _instagram_work_dir(body.work_dir)
+    account = next((a for a in ig.list_accounts() if a["id"] == body.account), None)
+    if not account:
+        raise HTTPException(400, "Connect this Instagram account in Settings → Channels first.")
+    if len(body.caption) > ig.MAX_CAPTION_LENGTH:
+        raise HTTPException(400, "Instagram captions can contain at most 2,200 characters.")
+    final = gapp._final_path_for_work_dir(wd).resolve()
+    if not _safe_under(final, gapp.OUTPUT_DIR) or not final.is_file():
+        raise HTTPException(400, "No final video found in the output folder.")
+    lock = _instagram_lock(wd, body.account)
+    try:
+        previous = ig.read_state(wd, body.account)
+        if previous.get("status") in ("done", "publishing", "uncertain"):
+            raise HTTPException(409, "This film was published or its result is uncertain. Check the Instagram account; duplicate posting is blocked.")
+        state = {"status": "uploading", "account": body.account, "name": account["name"]}
+        ig.write_state(wd, body.account, state)
+        threading.Thread(target=_run_instagram_post, args=(wd, final, body, state, lock), daemon=True).start()
+    except (ValueError, ig.InstagramError):
+        lock.close()
+        raise HTTPException(409, "Instagram publishing history is unreadable. Restore it before retrying.") from None
+    except Exception:
+        lock.close()
+        raise
+    return {"ok": True, "status": "uploading"}
+
+
+@api.get("/api/instagram/post/status")
+def instagram_post_status(work_dir: str, account: str) -> dict:
+    wd = _instagram_work_dir(work_dir)
+    try:
+        state = ig.read_state(wd, account)
+    except (ValueError, ig.InstagramError):
+        raise HTTPException(409, "Instagram publishing history is unreadable. Restore it before retrying.") from None
+    if state.get("status") in ("uploading", "processing", "publishing"):
+        try:
+            lock = _instagram_lock(wd, account)
+        except HTTPException as e:
+            if e.status_code != 409:
+                raise
+        else:
+            try:
+                # The lock was released without a terminal record (server restart).
+                # Re-read under the lock in case the worker just finished.
+                state = ig.read_state(wd, account)
+                if state.get("status") == "publishing":
+                    state = {**state, "status": "uncertain", "error": "Publishing was interrupted. Check Instagram; a duplicate upload is blocked."}
+                elif state.get("status") in ("uploading", "processing"):
+                    state = {**state, "status": "error", "error": "Upload was interrupted before publishing. You can retry."}
+            finally:
+                lock.close()
+    return state
 
 
 # ── Publish scheduler queue API (decoupled publishing) ────────────────────────

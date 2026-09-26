@@ -1871,6 +1871,9 @@ def restore_settings_backup(data: bytes) -> dict:
             if target != root and root not in target.parents:
                 raise ValueError(f"Unsafe path in backup: {name}")
             target.parent.mkdir(parents=True, exist_ok=True)
+            if re.fullmatch(r"instagram_token_[0-9]+\.json", target.name):
+                target.touch(mode=0o600)
+                target.chmod(0o600)
             target.write_bytes(zf.read(info))
             restored.append(Path(name).as_posix())
     return {"scope": manifest.get("scope", "full"), "restored": sorted(restored)}

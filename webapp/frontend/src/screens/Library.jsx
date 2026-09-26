@@ -239,7 +239,7 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
               {f.published && f.destinations?.length > 0 && (
                 <div className="row gap-6 mt-8 row--wrap">
                   {f.destinations.map((d, k) => {
-                    const chip = <Chip tone="ok"><Icon name={d.platform === 'x' ? 'x-twitter' : 'youtube'} brand /> {d.name}</Chip>
+                    const chip = <Chip tone="ok"><Icon name={d.platform === 'instagram' ? 'instagram' : d.platform === 'x' ? 'x-twitter' : 'youtube'} brand /> {d.name}</Chip>
                     return d.url
                       ? <a key={k} href={d.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ textDecoration: 'none' }}>{chip}</a>
                       : <span key={k}>{chip}</span>

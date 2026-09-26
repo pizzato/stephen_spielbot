@@ -3,11 +3,11 @@
 `#/publish` — one film: `#/publish/<film>`
 
 Four tabs: **Schedule** (only the videos actually scheduled to release),
-**Approvals** (films held for the approval gate), **Published** (everything
-already released), and **Publish a film** (the upload form).
+**Approvals** (films held for the approval gate), **Published** (YouTube/X queue
+history), and **Publish a film** (the upload form, including Instagram Reels).
 
 Before anything can post, connect a channel — see [YouTube setup](../youtube_setup.md) and
-[X setup](../x_setup.md).
+[X setup](../x_setup.md), or [Instagram setup](../instagram_setup.md).
 
 ---
 
@@ -21,15 +21,19 @@ The manual upload form.
 - **Version** — which final cut. A [localized](edit-film.md#localizations) version swaps in
   its translated title, description, and cover (the same art re-titled in that language);
   an upscale swaps in the upscaled cut
-- **Publish to** — YouTube, X, or both. YouTube uploads go to the channel prefilled from
-  the film's style, overridable here
+- **Publish to** — YouTube, X, Instagram Reels, or a combination. YouTube uploads go to
+  the channel prefilled from the film's style, overridable here. Instagram is opt-in
+  on each film; choose its account explicitly in this form
 
 ### Metadata
 
 - **Title** — max 100 characters, with a regenerate button (*Shorter / Punchier / More
   literal*)
 - **Description** — **Generate** writes one from the script
-- **Category** and **Privacy** — privacy defaults to `private`; raise it deliberately
+- **Category** and **Privacy** — YouTube only; privacy defaults to `private`.
+  Instagram Reels are public immediately
+- **Instagram caption** — separate text, up to 2,200 characters, with a **Use description
+  as caption** button and an **Also share the Reel to the Instagram feed** checkbox
 - **Thumbnail** and **cover phrase** — the phrase is the short text painted on the cover
   and burned into the opening frames. **Upload thumbnail to YouTube** is on for long-form
   films and off for Shorts — square or portrait films no longer than 3 minutes (the same
@@ -39,7 +43,7 @@ The manual upload form.
 - **Opening cover** — the burn hold for this film, same control as
   [Edit film](edit-film.md#opening-cover)
 
-### What happens automatically
+### What happens automatically on YouTube/X
 
 - **Captions** — the film's SRT is attached on upload, in the film's language.
   It covers everything spoken or sung: narration, the dialogue lines acted scenes
@@ -52,6 +56,21 @@ The manual upload form.
   after the style)
 - **Content Credentials** — with `c2patool` installed, the file is signed as AI-generated
   as the last step before upload
+
+### Instagram Reels
+
+Connect in **Settings → Channels → Instagram accounts**. Uploads stream directly
+from the selected final cut, without resizing or needing a public video URL. The
+form shows upload/processing progress and the resulting link. **Films** also shows
+the Instagram publication. Captions must be burned into the video; separate SRT
+tracks, custom covers, AI labels and C2PA signing are not added by the Instagram
+uploader. See [setup, requirements and recovery](../instagram_setup.md).
+
+The same film cannot be sent twice to the same Instagram account. A lost publish
+response is shown as uncertain and blocks retries until checked. Instagram is a
+manual destination: its posts are recorded on the film and Publish form, not in the
+YouTube/X **Published** queue-history tab or scheduler. Publishing only to Instagram
+leaves queued YouTube/X destinations in place.
 
 ### Best time to post
 

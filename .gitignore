@@ -35,6 +35,7 @@ config.yaml
 client_secrets.json
 *_token.json
 x_token_*.json
+instagram_token_*.json
 *.sqlite3
 publish_queue.json
 youtube_queue.json

@@ -25,6 +25,7 @@ SETTINGS_FILES = {
     "client_secrets.json": '{"installed": {"client_id": "x"}}',
     "youtube_token.json": '{"token": "legacy"}',
     "youtube_token_UC123.json": '{"token": "chan"}',
+    "instagram_token_123.json": '{"access_token": "instagram"}',
     "voices/narrator.wav": "RIFFvoice-bytes",
 }
 OPERATIONAL_FILES = {
@@ -125,6 +126,7 @@ class BackupCase(unittest.TestCase):
         # Junk was never backed up, so it does not reappear.
         for rel in JUNK_FILES:
             self.assertFalse((self.cfg_dir / rel).exists())
+        self.assertEqual((self.cfg_dir / "instagram_token_123.json").stat().st_mode & 0o777, 0o600)
 
     def test_operational_restore_leaves_settings_untouched(self):
         self._seed(SETTINGS_FILES, OPERATIONAL_FILES)

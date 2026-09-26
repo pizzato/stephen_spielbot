@@ -435,6 +435,11 @@ export const api = {
 
   // X (Twitter) — mirrors the YouTube account/auth/post methods (issue #107).
   xAccounts: () => req('GET', '/x/accounts'),
+  instagramAccounts: () => req('GET', '/instagram/accounts'),
+  instagramConnect: (accessToken) => req('POST', '/instagram/connect', { access_token: accessToken }),
+  instagramDisconnect: (account) => req('POST', '/instagram/disconnect', { account }),
+  instagramPost: (body) => req('POST', '/instagram/post', body),
+  instagramPostStatus: (workDir, account) => req('GET', `/instagram/post/status?${new URLSearchParams({ work_dir: workDir, account })}`),
   xAuthStart: () => req('POST', '/x/auth/start'),
   xAuthPoll: () => req('POST', '/x/auth/poll'),
   xImportTokens: (accessToken, refreshToken) => req('POST', '/x/auth/import', { access_token: accessToken, refresh_token: refreshToken || '' }),

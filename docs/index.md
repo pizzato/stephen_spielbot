@@ -8,7 +8,7 @@ hide:
 An AI video generator that turns a topic into a fully produced short film — cinematic
 visuals, narration or scenes acted out by its characters, and background music — plus the
 whole channel workflow around it:
-a render queue, AI-suggested ideas, per-scene editing, and publishing to YouTube and X.
+a render queue, AI-suggested ideas, per-scene editing, and publishing to YouTube, X, and Instagram Reels.
 
 It runs on your own hardware. A **controller** (your laptop or desktop) hosts the web
 app; one or more **GPU workers** do the rendering.
@@ -61,7 +61,8 @@ the script, and nothing publishes until you say so.
 
     Multi-channel [YouTube](youtube_setup.md) and [X](x_setup.md) publishing with
     playlists, captions (attached or burned-in), tags, a [cadence scheduler](manual/publishing.md), and C2PA
-    "AI-generated" content credentials.
+    "AI-generated" content credentials. Manual [Instagram Reels](instagram_setup.md)
+    publishing uploads finished videos directly, with a separate caption and account picker.
 
 -   :material-comment-processing: **Community loop**
 

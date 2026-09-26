@@ -133,15 +133,19 @@ Open **Publishing → Publish a film** (or hit **Publish** on the film card).
 
 - Pick the **film** and which **version** — a localized cut swaps in its translated title,
   description, and cover.
-- Choose where: **YouTube**, **X**, or both.
+- Choose where: **YouTube**, **X**, **Instagram Reels**, or a combination.
 - The **title** is editable with its own regenerate button; **Generate** writes the
   description.
-- Set **privacy** — new uploads default to `private`. Raise it deliberately.
+- Set YouTube **privacy** — new uploads default to `private`. Instagram Reels are
+  public immediately; review the separate caption and account before confirming.
 - Check the **thumbnail** and the **cover phrase**.
 
-Press publish. Captions from the script are attached automatically, tags come from the
+Press publish. On YouTube/X, captions from the script are attached automatically, tags come from the
 LLM's topic tags, and — if `c2patool` is installed — the file is signed with C2PA
 credentials declaring it AI-generated.
+
+For Instagram, [connect a professional account](instagram_setup.md) in Settings →
+Channels first. The selected cut uploads directly; use burned-in subtitles if needed.
 
 ## Then what?
 

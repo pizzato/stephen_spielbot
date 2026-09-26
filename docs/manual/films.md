@@ -52,7 +52,7 @@ in the opposite corner, which is how two renders of the same script
 The **star** next to the title marks a favourite — starred films get their own **★
 Starred** filter. Click it again to unstar.
 
-Published films list their destinations as chips (YouTube, X, with the channel name) that
+Published films list their destinations as chips (YouTube, X, or Instagram, with the channel/account name) that
 link straight to the live post.
 
 | Button | Effect |

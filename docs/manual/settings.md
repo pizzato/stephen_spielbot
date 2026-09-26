@@ -371,7 +371,7 @@ a long noisy one.
 
 ## Channels
 
-Where YouTube channels and X accounts are connected.
+Where YouTube channels, X accounts, and Instagram accounts are connected.
 
 ### YouTube
 
@@ -400,6 +400,18 @@ engagement prompt**, and **auto-respond**.
 !!! note "Re-connecting an account"
     Re-connecting maps orphaned styles back to their X account explicitly. It is opt-in —
     there is deliberately no silent fallback to some other account.
+
+### Instagram
+
+Paste a **Facebook Page access token** and click **Connect Instagram**. The Page
+must be linked to an Instagram Business or Creator account. The username and
+publishing access are checked before the token is stored. Connect multiple accounts,
+replace an expired token by reconnecting, or remove a local connection with
+**Disconnect**. See [Instagram setup](../instagram_setup.md) for Meta app permissions
+and token instructions.
+
+Instagram Reels are published manually from **Publishing → Publish a film**. There
+are no Instagram style defaults, scheduled posts, analytics, or comment automation.
 
 ---
 
