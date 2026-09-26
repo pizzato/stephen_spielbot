@@ -64,6 +64,36 @@ fetching, AI-idea top-ups and publishing stay global.
     service wasn't restarted, sparse children can lose their `parent` on the next save.
     Run `make restart-server` after updating.
 
+## News monitoring
+
+Each style can opt into monitoring recent X posts. The whole `news_monitor` object is
+inherited by a child unless the child overrides it. Monitoring and automation are off
+by default; configure them in [Settings → Styles](manual/settings.md#news-monitoring).
+
+```yaml
+news:
+  x_bearer_token: ""            # set privately in Settings → Channels
+styles:
+  - name: News Songs
+    news_monitor:
+      enabled: true
+      query: '(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet'
+      interval_minutes: 60      # minimum 15
+      max_ideas: 1              # 1–5 per check
+      include_people: true     # seek appearance references for the film
+      auto_accept: false       # review new ideas by default
+      auto_queue: false        # queue accepted ideas on a monitor check
+    automation:
+      auto_format: song
+```
+
+The bearer token needs X recent-search access. It is stored privately and redacted in
+API responses. The scheduler runs in the backend; disabled styles are skipped.
+Automatic queueing uses the idea's saved size preset, defaulting to Small. Rendering without intervention also
+needs `automation.auto_start_job` and `automation.auto_approve_script`, plus `auto_song`
+and `auto_song_approve` for music videos. The Styles panel's **Enable unattended news
+videos** action stages these flags together. Publishing uses the existing settings.
+
 ## Worker lists
 
 Worker endpoints are part of the same file — see [Cluster & workers](cluster.md).

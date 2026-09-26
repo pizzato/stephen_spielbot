@@ -115,8 +115,8 @@ through the chain, so "Documentary Shorts" can be "Documentary, but portrait and
 scenes".
 
 A style also carries its own [automation](#automation) — how much of the pipeline runs
-unattended for its films — edited on the Automation tab rather than here, because those
-settings have a global baseline of their own that every style inherits.
+unattended for its films — edited on the Automation tab. Its optional [news
+monitor](#news-monitoring) is configured on the Styles tab.
 
 ### Identity & destination
 
@@ -301,6 +301,40 @@ Three buckets — Small / Medium / Large — each pairing a video **length in mi
 **resolution**. [AI ideas](ideas.md) offers these as a one-tap size, so each style's
 "Small" means what that style wants it to mean.
 
+### News monitoring
+
+**Monitor news on X for this style** is off by default. Enable it to turn recent posts
+matching an **X search query** into video ideas using this style's instructions and
+default format. For example, a Music video style can turn Australian political news
+into songs. The query chooses what is monitored; the style's extra instructions choose
+the angle and tone.
+
+| Control | Effect |
+|---|---|
+| **X search query** | Topics, hashtags, people or accounts to search; for example `(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet` |
+| **Check every (minutes)** | How often the running backend checks; minimum 15, default 60 |
+| **Maximum ideas per check** | 1–5 ideas for this style; default 1 |
+| **Find reference pictures of named people** | Seek appearance references when creating a film from the idea and keep them with that film's characters |
+| **Automatically accept news ideas** | Put new ideas directly into Accepted; otherwise they wait in Ideas |
+| **Automatically queue accepted news ideas** | Add accepted news ideas to the render queue using their saved size from the style's presets; Small by default |
+
+Automatic queueing is independent of automatic acceptance. Leave auto-accept off to
+review ideas yourself; accepted ideas are then queued on the next monitor check.
+
+A child inherits the complete news-monitor settings from its parent. Editing a control
+overrides that settings group; use the parent-value link to inherit it again.
+
+**Enable unattended news videos** stages automatic acceptance and queueing, plus the
+style's existing **Auto-start** and **Auto-approve scripts** flags. For a Music video
+style it also enables **Write and generate the song** and **Auto-approve songs**. These
+pipeline flags affect other queued films in this style too, and descendants inherit
+them. **Save settings** applies the changes. Publishing continues to follow the
+separate publishing settings.
+
+Add the shared search credential under [Channels → X news search](#x-news-search).
+Check status, review source links and use **Check news now** in [AI ideas → News](ideas.md#news-monitor).
+Monitoring runs only while the backend is running. A disabled monitor makes no checks.
+
 ### Characters
 
 A read-only summary of the cast this style inherits: every **global** character, plus
@@ -402,6 +436,13 @@ engagement prompt**, and **auto-respond**.
     there is deliberately no silent fallback to some other account.
 
 ---
+
+### X news search
+
+**X search bearer token** is the shared credential for style news monitors. It needs X
+API recent-search access, independently of the account connection used for publishing.
+Stored tokens are redacted; leave the password box blank to keep the saved value. Save
+settings, then configure each style's [news monitor](#news-monitoring).
 
 ## Automation
 

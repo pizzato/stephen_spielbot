@@ -340,6 +340,9 @@ export const api = {
   markSeen: (section) => req('POST', '/badges/seen', { section }),
 
   getQueue: () => req('GET', '/queue'),
+  newsStatus: (styleName = '') => req('GET', `/news/status?style_name=${encodeURIComponent(styleName)}`),
+  getNewsIdeas: (styleName = '') => req('GET', `/news/ideas?style_name=${encodeURIComponent(styleName)}`),
+  checkNews: (styleName = '') => req('POST', '/news/check', { style_name: styleName }),
   getComments: () => req('GET', '/youtube/comments'),
   getSuggestions: (guidance, refresh, styleName) => {
     const p = new URLSearchParams()
@@ -376,7 +379,7 @@ export const api = {
   queueRemove: (id) => req('POST', '/queue/remove', { id }),
   queueAbandon: (id) => req('POST', '/queue/abandon', { id }),
   queueRetryReply: (id) => req('POST', '/queue/retry-reply', { id }),
-  queueAdd: (title, minutes, prompt, resolution, styleName) => req('POST', '/queue/add', { title, minutes: minutes || 0, prompt: prompt || '', resolution: resolution || '', style_name: styleName || '' }),
+  queueAdd: (title, minutes, prompt, resolution, styleName, ideaId = '') => req('POST', '/queue/add', { title, minutes: minutes || 0, prompt: prompt || '', resolution: resolution || '', style_name: styleName || '', idea_id: ideaId }),
   queueUpdate: (id, fields) => req('POST', '/queue/update', { id, ...fields }),
   queueApprove: (id, approved = true) => req('POST', '/queue/approve', { id, approved }),
   queueStart: (id) => req('POST', '/queue/start', { id }),
