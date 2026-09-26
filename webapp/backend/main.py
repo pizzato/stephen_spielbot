@@ -52,6 +52,7 @@ import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_video_suggestions, Scene  # noqa: E402
 import pipeline.story as story_mode  # noqa: E402
 import pipeline.performance as performance_mode  # noqa: E402
+from webapp.backend import news_monitor  # noqa: E402
 
 # A music video's AUTO split: takes of about this long. Short takes keep a
 # performance tight against the beat, and the song's length divided by this is
@@ -1578,7 +1579,12 @@ def _script_chars_ok(wd: Path) -> dict:
             })
     except Exception:
         pass
-    return {"ok": True, "characters": payload, "catalogue": catalogue}
+    try:
+        news_people = json.loads((wd / "news_people.json").read_text())
+    except (OSError, ValueError):
+        news_people = {}
+    return {"ok": True, "characters": payload, "catalogue": catalogue,
+            "news_people": news_people}
 
 
 @api.get("/api/jobs/{job_id}/characters")
@@ -1982,6 +1988,7 @@ def ui_heartbeat() -> dict:
 # ── script generation ────────────────────────────────────────────────────────
 
 class GenerateScriptBody(BaseModel):
+    idea_id: str = ""
     video_title: str = ""
     topic: str = ""
     # Target video length in minutes — the primary length control. The word
@@ -2677,6 +2684,9 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
 
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, body.style_name)
+    source = news_monitor.source_for(body.idea_id, body.queue_item_id, ss["name"],
+                                     body.work_dir if body.work_dir and _safe_under(Path(body.work_dir), gapp.OUTPUT_DIR) else "")
+    user_topic = news_monitor.topic_with_sources(user_topic, source)
     extra = (ss.get("extra_instructions") or "").strip()
     llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
     style_hint = body.visual_style or ss.get("visual_style", "") or None
@@ -2768,6 +2778,7 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
 
     display_title = (body.video_title or "").strip() or user_topic
     work_dir = song_wd if song_wd is not None else gapp._script_work_dir(display_title)
+    news_monitor.attach_source(work_dir, source)
     job_id = job_id_from_work_dir(work_dir)
     _story_path(work_dir).write_text(json.dumps(story, indent=2))
     create_brief = {
@@ -2853,6 +2864,9 @@ def _copy_script_reference_files(src: Path, dst: Path, *,
     safe widened: it only rides scenes that cast its owner.)"""
     import shutil
     dst.mkdir(parents=True, exist_ok=True)
+    for name in ("news_source.json", "news_people.json"):
+        if (src / name).exists():
+            shutil.copy2(src / name, dst / name)
     if (src / "characters.json").exists():
         shutil.copy2(src / "characters.json", dst / "characters.json")
     src_chars = gapp._script_characters_dir(src)
@@ -2913,6 +2927,8 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     # story's own cast rather than the whole library (gapp._requested_characters).
     requested_chars = gapp._requested_characters(
         cfg, ss["name"], user_topic, video_title, (ss.get("extra_instructions") or ""))
+    if (wd / "news_source.json").exists():
+        requested_chars += gapp._read_script_characters(wd)
     character_sheet = gapp._character_sheet(requested_chars) or None
     language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = video_title or user_topic.splitlines()[0][:80]
@@ -3092,6 +3108,7 @@ def story_divide(body: DivideStoryBody) -> dict:
 
 
 class SongDraftBody(BaseModel):
+    idea_id: str = ""
     video_title: str = ""
     topic: str = ""
     minutes: float = 0
@@ -3269,6 +3286,8 @@ def song_draft(body: SongDraftBody) -> dict:
     secs = max(15.0, minutes * 60.0)
     extra = (ss.get("extra_instructions") or "").strip()
     topic = (body.topic or "").strip() or title
+    source = news_monitor.source_for(body.idea_id, body.queue_item_id, ss["name"])
+    topic = news_monitor.topic_with_sources(topic, source)
     display_topic = title.splitlines()[0][:80]
     # The lead singer is cast BEFORE the song is written: the track is sung
     # from this draft's caption + vocalist and reused verbatim at render, so
@@ -3288,6 +3307,7 @@ def song_draft(body: SongDraftBody) -> dict:
     except Exception as e:
         raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
     wd = gapp._script_work_dir(title)
+    news_monitor.attach_source(wd, source)
     song.update({"voice": (body.voice or "").strip(), "seconds": secs,
                  "title": title, "style_name": ss["name"], "singer": singer,
                  "created_at": time.time()})
@@ -10375,6 +10395,21 @@ def get_queue() -> dict:
 
 # ── youtube ──────────────────────────────────────────────────────────────────
 
+@api.get("/api/news/status")
+def news_status(style_name: str = Query("")) -> dict:
+    return news_monitor.status(gapp.load_config(), style_name)
+
+
+class NewsCheckBody(BaseModel):
+    style_name: str = ""
+
+
+@api.post("/api/news/check")
+def news_check(body: NewsCheckBody) -> dict:
+    with _track_op("Checking X news", body.style_name):
+        return news_monitor.check(gapp.load_config(), body.style_name, force=True)
+
+
 @api.get("/api/youtube/comments")
 def youtube_comments() -> dict:
     # The exact cache-loader name varies; try the known candidates in order.
@@ -10505,6 +10540,8 @@ def _save_dismissed_suggestions(data: dict) -> None:
 
 def _is_suggestion_dismissed(suggestion: dict, dismissed: dict) -> bool:
     sid = str(suggestion.get("id") or "").strip()
+    if suggestion.get("source") == "news":
+        return bool(sid and sid in dismissed)
     title = _suggestion_key(str(suggestion.get("title") or suggestion.get("final_title") or ""))
     return bool((sid and sid in dismissed) or (title and title in dismissed))
 
@@ -10531,6 +10568,8 @@ def _normalize_suggestions(raw: list) -> list[dict]:
             continue
         used = bool(it.get("used") or it.get("dismissed"))
         out.append({
+            **({"news": it["news"]} if it.get("source") == "news" and it.get("news") else {}),
+            "created_at": it.get("created_at", 0),
             "id": str(it.get("id") or title),
             "title": title,
             "reason": str(it.get("reason") or it.get("description") or ""),
@@ -10658,12 +10697,14 @@ def _dismissal_records(cfg: dict, target: str, keep) -> list[dict]:
         reason = str(rec.get("dismissed_reason") or rec.get("reason") or "dismissed")
         if not keep(reason):
             return
-        key = _suggestion_key(title)
+        key = (str(rec.get("id")) if rec.get("source") == "news" and rec.get("id")
+               else _suggestion_key(title))
         prev = by_title.get(key)
         if prev is not None and (prev.get("_rich") or not rich):
             return  # keep the richer / first record
         sc = rec.get("suggested_scene_count") or rec.get("n_scenes") or 12
         by_title[key] = {
+            **({"news": rec["news"], "source": "news"} if rec.get("source") == "news" and rec.get("news") else {}),
             "id": str(rec.get("id") or title),
             "title": title,
             "reason": str(rec.get("reason") or ""),
@@ -10726,7 +10767,7 @@ def _discarded_idea_titles(cfg: dict) -> list[str]:
 def _suggestion_matches(s: dict, key: str, title_key: str) -> bool:
     sid = str(s.get("id") or "").strip()
     stitle = _suggestion_key(str(s.get("title") or s.get("final_title") or ""))
-    return bool((key and sid == key) or (title_key and stitle == title_key))
+    return bool((key and sid == key) or (not key and title_key and stitle == title_key))
 
 
 # AI ideas screen sentinel: generate/show a mix of ideas across every style.
@@ -10774,10 +10815,10 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
     if not g and not refresh:
         try:
             cached = [s for s in _visible_suggestions(yt.load_suggestions())
-                      if _idea_style_key(s, default_name) in eligible]
+                      if _idea_style_key(s, default_name) in eligible or s.get("source") == "news"]
         except Exception:
             cached = []
-        if cached:
+        if cached or news_monitor.enabled(cfg):
             return {"suggestions": cached, "cached": True, "style_name": ALL_STYLES}
 
     discarded = _discarded_idea_titles(cfg)
@@ -10819,10 +10860,12 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
         yt.save_suggestions(others + combined)
     except Exception:
         pass
-    return {"suggestions": _visible_suggestions(combined), "cached": False, "style_name": ALL_STYLES}
+    return {"suggestions": _visible_suggestions(combined + [s for s in others if s.get("source") == "news"]),
+            "cached": False, "style_name": ALL_STYLES}
 
 
 @api.get("/api/youtube/suggestions")
+@yt.suggestions_transaction
 def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
                         style_name: str = Query("")) -> dict:
     """Return AI video ideas for a style profile (issue #66) — ideas belong to
@@ -10846,7 +10889,7 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
             cached = []
         cached_for_style = [s for s in _visible_suggestions(cached)
                             if _idea_style_key(s, default_name) == target]
-        if cached_for_style:
+        if cached_for_style or (ss.get("news_monitor") or {}).get("enabled"):
             return {"suggestions": cached_for_style, "cached": True, "style_name": target}
 
     with _track_op("Generating suggestions", g or target):
@@ -10902,6 +10945,7 @@ class SuggestionDismissBody(BaseModel):
 
 
 @api.post("/api/youtube/suggestions/dismiss")
+@yt.suggestions_transaction
 def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
     """Dismiss an idea (accept / decline / ignore) — also how an idea moves
     between the Accepted and Declined lists: re-dismissing with the other
@@ -10916,6 +10960,10 @@ def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
         "reason": body.reason or "dismissed",
         "dismissed_at": time.time(),
     }
+    original = next((s for s in suggestions if s.get("id") == key), {})
+    if original.get("source") == "news":
+        dismiss_record.update(source="news", news=original.get("news", {}),
+                              style_name=original.get("style_name", ""))
     if body.size:
         dismiss_record["size"] = body.size
     dismiss_keys = [k for k in (key, title) if k]
@@ -10931,7 +10979,7 @@ def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
     for suggestion in suggestions:
         suggestion_id = str(suggestion.get("id") or suggestion.get("title") or "")
         suggestion_title = _suggestion_key(str(suggestion.get("title") or suggestion.get("final_title") or ""))
-        if (key and suggestion_id == key) or (title and suggestion_title == title):
+        if (key and suggestion_id == key) or (not key and title and suggestion_title == title):
             suggestion["used"] = True
             suggestion["dismissed"] = True
             suggestion["dismissed_reason"] = body.reason or "dismissed"
@@ -10968,6 +11016,7 @@ class SuggestionActBody(BaseModel):
 
 
 @api.post("/api/youtube/suggestions/accepted/act")
+@yt.suggestions_transaction
 def act_on_accepted_suggestion(body: SuggestionActBody) -> dict:
     """Mark an accepted idea as acted upon (sent to Queue or the Create tab).
     The idea stays in the Accepted list — the marker just moves it into the
@@ -11017,6 +11066,7 @@ class SuggestionReviveBody(BaseModel):
 
 
 @api.post("/api/youtube/suggestions/revive")
+@yt.suggestions_transaction
 def revive_suggestion(body: SuggestionReviveBody) -> dict:
     """Bring a discarded idea back as an active suggestion: drop it from the
     discard log and clear its dismissed flags so it shows again and is no
@@ -11046,6 +11096,7 @@ def revive_suggestion(body: SuggestionReviveBody) -> dict:
 
 
 @api.post("/api/youtube/suggestions/forget")
+@yt.suggestions_transaction
 def forget_suggestion(body: SuggestionReviveBody) -> dict:
     """Permanently forget a discarded idea — remove it from both the discard log
     and the suggestions store. It no longer appears anywhere and stops being
@@ -11069,6 +11120,7 @@ def forget_suggestion(body: SuggestionReviveBody) -> dict:
 
 
 @api.post("/api/youtube/suggestions/discarded/reset")
+@yt.suggestions_transaction
 def reset_declined_suggestions() -> dict:
     """Empty the declined ('not accepted') ideas list — forget every deliberately
     declined idea so the negative list the LLM steers away from starts fresh
@@ -14267,6 +14319,7 @@ def _queue_item_minutes(item: dict, ss: dict) -> float:
 
 
 class QueueAddBody(BaseModel):
+    idea_id: str = ""
     title: str
     # Target video length in minutes (preferred). 0 falls back to the legacy
     # n_scenes, then the style's own length.
@@ -14284,6 +14337,12 @@ def queue_add(body: QueueAddBody) -> dict:
         raise HTTPException(400, "Title is required.")
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, body.style_name)
+    if body.idea_id:
+        idea = news_monitor.get_idea(body.idea_id, ss["name"])
+        if idea.get("source") == "news":
+            entry = news_monitor.queue_idea(idea, cfg, title=title, prompt=body.prompt,
+                                            minutes=body.minutes, resolution=body.resolution)
+            return {"ok": True, "queue": yt.load_queue(), "id": entry["id"]}
     try:
         minutes = float(body.minutes or 0)
     except (TypeError, ValueError):
@@ -14468,6 +14527,7 @@ def _start_queue_item(item: dict) -> dict:
                     queue_item_id=item.get("id") or "")["work_dir"]
         gen = _do_script_generate(GenerateScriptBody(
             video_title=title, topic=topic, minutes=minutes, resolution=resolution,
+            queue_item_id=item_id or "",
             style_name=style_name, format=fmt, work_dir=song_wd,
             n_scenes=gapp.style_video_scenes(ss) if fmt == "song" else 0,
             auto_critic=auto["auto_critic"]))
@@ -16676,7 +16736,7 @@ def _ordered_pending(cfg: dict) -> list[dict]:
 _MAX_AUTO_RETRIES = 3
 
 
-def _retryable_failed(cfg: dict) -> dict | None:
+def _retryable_failed(cfg: dict, news_startable=None) -> dict | None:
     """Next failed queue item automation should retry. Only consulted when no
     pending item is startable, so retries never delay fresh work. Renders are
     resumable (finished scenes are skipped), so a retry is usually cheap. Each
@@ -16685,7 +16745,8 @@ def _retryable_failed(cfg: dict) -> dict | None:
     otherwise retry forever."""
     failed = [q for q in yt.load_queue()
               if q.get("status") == "failed"
-              and int(q.get("retry_count") or 0) < _MAX_AUTO_RETRIES]
+              and int(q.get("retry_count") or 0) < _MAX_AUTO_RETRIES
+              and (q.get("source") != "news" or news_startable is None or news_startable(q))]
     # Review gate on (for the item's OWN style): only retry items the user
     # approved — the same rule fresh starts follow. (A started render stamps
     # approved=True, so any item that ran and failed already qualifies.)
@@ -16825,6 +16886,8 @@ def _auto_write_scripts(cfg: dict) -> int:
             continue  # its song is waiting in the Song tab to be reviewed
         if not auto["auto_write_scripts"]:
             continue  # this style prepares nothing unattended
+        if q.get("source") == "news" and auto["auto_format"] == "song" and not auto["auto_song"]:
+            continue
         ss = gapp.style_settings(cfg, style_name)
         minutes = _queue_item_minutes(q, ss)
         topic = q.get("video_prompt") or title
@@ -16860,6 +16923,7 @@ def _auto_write_scripts(cfg: dict) -> int:
                     continue
             gen = _do_script_generate(GenerateScriptBody(
                 video_title=title, topic=topic, minutes=minutes, resolution=resolution,
+                queue_item_id=item_id or "",
                 style_name=style_name, format=fmt, work_dir=song_wd,
                 n_scenes=gapp.style_video_scenes(ss) if fmt == "song" else 0,
                 auto_critic=auto["auto_critic"]))
@@ -16899,6 +16963,10 @@ def _auto_start_best() -> dict | None:
         auto = gapp.automation_settings(cfg, (q.get("gen_style_name") or "").strip())
         if not auto["auto_start_job"]:
             return False   # this style's films wait to be started by hand
+        if (q.get("source") == "news" and auto["auto_format"] == "song"
+                and not q.get("script_ready")
+                and not (auto["auto_song"] and auto["auto_song_approve"])):
+            return False
         if (q.get("song_parked") and not q.get("script_ready")
                 and not _song_hold_released(q, auto)):
             # Its song is parked for review: the film waits for the song to be
@@ -16919,7 +16987,7 @@ def _auto_start_best() -> dict | None:
     item = next(({**q} for q in _ordered_pending(cfg) if _startable(q)), None)
     if not item:
         # Nothing fresh to start — retry a failed item before inventing new work.
-        item = _retryable_failed(cfg)
+        item = _retryable_failed(cfg, news_startable=_startable)
     if not item and gapp.automation_enabled_anywhere(cfg, "auto_ai_ideas"):
         # Queue idle — opt-in fallback: invent an AI idea to keep the channel
         # fed. _auto_pick_suggestion picks the best unused idea, marks it used
@@ -17647,6 +17715,8 @@ def _automation_tick() -> dict:
         # flag is off, so the behaviour can't contradict what's ticked.
         out: dict = {}
         with _track_op("Automation tick"):
+            if news_monitor.enabled(cfg):
+                out["news"] = news_monitor.check(cfg)
             # Self-heal queue rows first (e.g. fail items whose render errored)
             # so the steps below see real state. Without this, reconciliation
             # only ran on browser polls — overnight, a failed render left its
@@ -17799,7 +17869,8 @@ def _automation_loop():
                     # Per-style flags: a style overriding one on is enough to
                     # make the tick worth running, whatever the global says.
                     or gapp.automation_enabled_anywhere(cfg, "auto_start_job")
-                    or gapp.automation_enabled_anywhere(cfg, "auto_write_scripts")):
+                    or gapp.automation_enabled_anywhere(cfg, "auto_write_scripts")
+                    or news_monitor.enabled(cfg)):
                 _automation_tick()
         except Exception:
             pass

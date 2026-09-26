@@ -15,6 +15,29 @@ the still is consistent, the motion clip inherits it.
 
 ## One library, scoped by style
 
+### People from news ideas
+
+A style's optional [news monitor](manual/settings.md#news-monitoring) can request
+reference pictures of people named in a selected news story. The request is saved with
+the idea and carried through manual Queue/Create and automatic queueing. References
+are sought when the film is created and kept with its per-script characters, so a
+news subject does not become part of every future film's recurring cast.
+
+Lookup matches the exact named person to a human record in Wikidata and retrieves its
+Wikimedia Commons portrait, keeping the source and license provenance. When several
+people share the name, the person's role in the story helps disambiguate the match;
+weak or tied matches remain unresolved. If a person
+cannot be matched or has no usable portrait, add a reference manually in the film's
+Characters & Artifacts view. It does not infer an identity from a generic news photo.
+The Characters & Artifacts view shows any unresolved names and the lookup failure
+reasons, so missing references can be reviewed before rendering.
+
+This option concerns appearance. It does not clone the person's voice. Review the
+resulting film's characters and references before rendering if you want to verify the
+match yourself; use the style's approval toggles to keep that review step.
+
+### Recurring cast
+
 Characters live in a single top-level `cfg["characters"]` list; each entry carries a
 `style` scope that says who inherits it:
 

@@ -39,6 +39,15 @@ matched explicitly, and a stale mapping stops auto-posting.
 1.0a user keys (API key/secret + Access token/secret). Entering those instead
 also works and uses the classic v1.1 media upload.
 
+## News search
+
+To monitor topics independently of publishing, enter an X API bearer token with
+recent-search access in **Settings → Channels → X news search**, then enable
+**News monitoring** for each chosen style. A connected publishing account by itself
+does not configure news search. See the [monitor settings](manual/settings.md#news-monitoring)
+and [AI ideas](manual/ideas.md#news-monitor) for topic queries, source review and
+unattended creation.
+
 ## Limits
 
 - **Free tier**: posting tweets and media works; mention fetching, reply

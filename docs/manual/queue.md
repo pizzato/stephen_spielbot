@@ -34,6 +34,11 @@ with **View render** to open [Render](render.md).
 
 ## Up next
 
+Ideas from the [news monitor](ideas.md#news-monitor) retain their saved news context and
+optional request for named people's appearance references when queued. Automatic news
+queueing uses the idea's saved size preset, defaulting to Small; writing and rendering follow that style's
+existing script, song and queue automation gates.
+
 The waiting queue, in the order it will run. Each row shows:
 
 - The **title**, with the **source** (`ai_idea`, `comment`, …) and the **style** it will

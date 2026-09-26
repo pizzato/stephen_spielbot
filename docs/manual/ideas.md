@@ -48,6 +48,34 @@ Three verdicts:
 
 All three keep the topic out of future suggestions.
 
+## News monitor
+
+The **News monitor** panel shows the selected style's monitoring state, search query,
+interval, last check, last successful check and any error. **All styles (mix)** shows
+the monitors together. **Check news now** checks enabled monitors immediately;
+scheduled checks continue while the backend is running.
+
+Enable monitoring, set the query and choose automation in
+[Settings → Styles → News monitoring](settings.md#news-monitoring). The shared X search
+bearer token belongs in [Settings → Channels](settings.md#x-news-search).
+
+News ideas carry a **From X news** label, a summary, links to the source posts and
+linked articles, and the named people involved. These links are evidence for the idea;
+an X post alone does not establish that a claim is true. The appearance option records
+whether reference pictures should be sought when the idea becomes a film.
+
+Each check makes one recent-search request for up to 50 recent posts. X recent search
+covers the last seven days; a busy query can miss older matches between polls.
+Linked article URLs are retained for review, but the monitor does not fetch or verify
+the article contents. Its summaries and ideas are based on the retrieved post text.
+
+News follows the same Ideas → Accepted → Queue/Create flow. If automatic acceptance is
+on, ideas arrive in Accepted. If automatic queueing is also on, they are marked Queued.
+You can enable queueing alone and accept ideas manually; the next monitor check queues
+those accepted ideas, using the size saved when accepting the idea (Small by default).
+The source context and appearance setting travel with the idea through both Queue and
+Create. A music-video style uses the news as context for its song.
+
 ## The Accepted list
 
 Split into **Not created yet** and **Acted on**, so you always know what's still waiting.
@@ -84,6 +112,11 @@ A style can also leave the rotation by unticking **Include in auto-picked ideas*
 Invented films render without review, so a style is only fed when its own automation also
 auto-approves scripts and auto-starts the queue — a style in review mode never receives
 invented ideas.
+
+News monitoring has separate acceptance and queueing toggles, so it can supply topics
+without enabling invented AI queue top-ups. To create news videos without review, use
+**Enable unattended news videos** in the style's news-monitor panel, then save settings.
+It enables the required script, queue and (for music videos) song approval steps.
 
 ## How dedup works
 

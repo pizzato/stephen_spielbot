@@ -11,6 +11,7 @@ the config file.
 | `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
 | `XAI_API_KEY` | _(unset)_ | Fallback Grok/xAI API key when `grok_api_key` isn't set in config |
 | `OPENAI_API_KEY` | _(unset)_ | Fallback OpenAI API key when `openai_api_key` isn't set in config |
+| `X_BEARER_TOKEN` | _(unset)_ | Fallback X recent-search bearer token when `news.x_bearer_token` is not set; used by [style news monitors](manual/settings.md#news-monitoring) |
 
 ## Media tools
 

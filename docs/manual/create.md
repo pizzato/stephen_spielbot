@@ -32,6 +32,13 @@ Both labels carry a regenerate button: it rewrites the field with the LLM, and y
 it a free-text instruction or use the chips — *Shorter*, *Punchier*, *More specific* for
 the title; *Sharper angle*, *More detail*, *Simpler* for the direction.
 
+Opening Create from an accepted [news idea](ideas.md#news-monitor) also carries its
+saved sources, news summary and optional appearance-reference request. The backend
+retrieves that context by the idea's ID when drafting the story or writing the song;
+editing the title or direction does not remove it. Source links remain available on
+the original idea. If appearance references are enabled, named people are added to
+this film's characters as references are found.
+
 ## Length, Scenes and Resolution
 
 **Length** is a slider in minutes — for a music video it is how long the *song* runs, and
