@@ -59,6 +59,8 @@ class NewsCreationTests(TempConfigCase):
         self.assertIn("reported claims, not verified facts", actual_topic)
         self.assertIn("https://x.com/reporter/status/123", actual_topic)
         self.assertIn("Anthony Albanese announces", actual_topic)
+        self.assertIn("Do not browse", actual_topic)
+        self.assertIn("linked articles have not been read", actual_topic)
         self.assertNotIn("private-search-token", actual_topic)
         self.assertEqual(result["create_brief"]["topic"], actual_topic.split("\n\nNews instructions")[0])
         self.assertFalse((wd / "news_people.json").exists())
@@ -69,6 +71,37 @@ class NewsCreationTests(TempConfigCase):
         with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)) as generate:
             result = backend._do_story_generate(body)
         self._assert_source(result, generate.call_args.args[0])
+
+    def test_existing_news_idea_gets_complete_visible_directions_without_regeneration(self):
+        with mock.patch.object(backend.news_monitor.news, "generate_news_ideas") as generate:
+            idea = backend.news_ideas("News")["suggestions"][0]
+        self.assertTrue(idea["directions"].startswith(self.idea["reason"]))
+        self.assertIn(self.source["summary"], idea["directions"])
+        self.assertIn(self.source["sources"][0]["text"], idea["directions"])
+        self.assertIn("Reference-photo lookup is disabled", idea["directions"])
+        generate.assert_not_called()
+
+    def test_edited_directions_keep_user_angle_and_restore_source_material_once(self):
+        original = news_monitor.idea_directions(self.idea)
+        edited = original.replace(self.idea["reason"], "Use a hopeful tone.")
+        body = backend.GenerateScriptBody(video_title=self.idea["title"], topic=edited,
+                                          style_name="News", idea_id=self.idea["id"], n_scenes=2)
+        with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)) as generate:
+            result = backend._do_story_generate(body)
+        topic = generate.call_args.args[0]
+        self.assertTrue(topic.startswith("Use a hopeful tone."))
+        self.assertEqual(topic.count("NEWS SOURCE MATERIAL"), 1)
+        self._assert_source(result, topic)
+
+    def test_existing_queue_prompt_gets_source_text_without_changing_ordinary_items(self):
+        queue = [{"id": "legacy-news", "video_prompt": "Keep my angle", "news": self.source},
+                 {"id": "ordinary", "video_prompt": "My unrelated video"}]
+        with mock.patch.object(backend, "_reconcile_queue", return_value=queue), \
+                mock.patch.object(backend, "_attach_render_estimates"):
+            rows = backend.get_queue()["queue"]
+        self.assertTrue(rows[0]["video_prompt"].startswith("Keep my angle"))
+        self.assertIn(self.source["sources"][0]["text"], rows[0]["video_prompt"])
+        self.assertEqual(rows[1]["video_prompt"], "My unrelated video")
 
     def test_story_uses_queue_snapshot_after_idea_is_gone(self):
         entry = news_monitor.queue_idea(self.idea, app.load_config())

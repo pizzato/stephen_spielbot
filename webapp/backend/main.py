@@ -10387,6 +10387,9 @@ def _attach_render_estimates(queue: list[dict]) -> None:
 def get_queue() -> dict:
     try:
         queue = _reconcile_queue()
+        for item in queue:
+            if item.get("news"):
+                item["video_prompt"] = news_monitor.topic_with_sources(item.get("video_prompt", ""), item["news"])
         _attach_render_estimates(queue)
         return {"queue": queue}
     except Exception:
@@ -10580,7 +10583,8 @@ def _normalize_suggestions(raw: list) -> list[dict]:
             continue
         used = bool(it.get("used") or it.get("dismissed"))
         out.append({
-            **({"news": it["news"]} if it.get("source") == "news" and it.get("news") else {}),
+            **({"news": it["news"], "directions": news_monitor.idea_directions(it)}
+               if it.get("source") == "news" and it.get("news") else {}),
             "created_at": it.get("created_at", 0),
             "id": str(it.get("id") or title),
             "title": title,
@@ -10716,7 +10720,8 @@ def _dismissal_records(cfg: dict, target: str, keep) -> list[dict]:
             return  # keep the richer / first record
         sc = rec.get("suggested_scene_count") or rec.get("n_scenes") or 12
         by_title[key] = {
-            **({"news": rec["news"], "source": "news"} if rec.get("source") == "news" and rec.get("news") else {}),
+            **({"news": rec["news"], "source": "news", "directions": news_monitor.idea_directions(rec)}
+               if rec.get("source") == "news" and rec.get("news") else {}),
             "id": str(rec.get("id") or title),
             "title": title,
             "reason": str(rec.get("reason") or ""),

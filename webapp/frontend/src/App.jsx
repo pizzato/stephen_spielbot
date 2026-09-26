@@ -252,6 +252,7 @@ export default function App() {
       resolution: item.gen_resolution || '',
       styleName: item.gen_style_name || '',
       queueItemId: item.id,
+      news: !!item.news,
     })
   }, [go, meta])
 

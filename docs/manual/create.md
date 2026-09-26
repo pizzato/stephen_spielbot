@@ -32,12 +32,18 @@ Both labels carry a regenerate button: it rewrites the field with the LLM, and y
 it a free-text instruction or use the chips — *Shorter*, *Punchier*, *More specific* for
 the title; *Sharper angle*, *More detail*, *Simpler* for the direction.
 
-Opening Create from an accepted [news idea](ideas.md#news-monitor) also carries its
-saved sources, news summary and optional appearance-reference request. The backend
-retrieves that context by the idea's ID when drafting the story or writing the song;
-editing the title or direction does not remove it. Source links remain available on
-the original idea. If appearance references are enabled, named people are added to
-this film's characters as references are found.
+Opening Create from an accepted [news idea](ideas.md#news-monitor) fills **Direction**
+with the complete production brief: the creative treatment, reported event, collected
+post text, attribution, dates, people's roles and appearance-reference setting. The
+same brief travels through the queue. The story and song writers work from this text;
+they do not need to visit websites. Linked articles are labelled unread citations,
+and facts missing from the collected posts remain unknown.
+
+The backend restores saved source context by the idea or queue item's ID when drafting
+the story or writing the song, so editing the angle or title does not lose it. If
+appearance references are enabled, the app adds found photographs to this film's
+characters. Directions require symbolic or non-identifying visuals when photographs
+are unavailable, rather than asking the writer to fetch images or invent likenesses.
 
 ## Length, Scenes and Resolution
 

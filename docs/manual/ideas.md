@@ -86,10 +86,24 @@ linked articles, and the named people involved. These links are evidence for the
 an X post alone does not establish that a claim is true. The appearance option records
 whether reference pictures should be sought when the idea becomes a film.
 
+Expand **Complete directions** on a news idea to read its self-contained production
+brief. It includes the reported event, source attribution, available dates and details,
+people's reported roles, the style's creative treatment and the collected post text.
+Music briefs include a song premise, point of view, hook and verse/chorus progression.
+Create's **Direction** field and queued news prompts carry this complete brief, including
+when ideas are accepted and queued automatically. Existing saved ideas also include
+their saved source text without needing a new search.
+
 Each check makes one recent-search request for up to 50 recent posts. X recent search
 covers the last seven days; a busy query can miss older matches between polls.
+Long posts use the extended text returned by X when available.
 Linked article URLs are retained for review, but the monitor does not fetch or verify
 the article contents. Its summaries and ideas are based on the retrieved post text.
+Directions mark those links as unread citations and tell the writer to work only from
+the included material, with no browsing or research step. Missing details stay unknown;
+the idea generator is instructed to skip posts that lack enough detail to make a video.
+Reference photographs, when enabled and found, are attached by the app as character
+assets; the writer is not asked to find images or invent a missing person's appearance.
 
 Within the News tab, news follows the same Ideas → Accepted → Queue/Create flow.
 These lists stay separate from Topic Ideas when accepting, declining or reviving an
