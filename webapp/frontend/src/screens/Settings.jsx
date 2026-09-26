@@ -142,6 +142,7 @@ function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
+const NEWS_DEFAULTS = { enabled: false, query: '', interval_minutes: 60, include_people: false, auto_accept: false, auto_queue: false, max_ideas: 1 }
 
 // "Fully automated mode" is exactly the sum of these per-step toggles: it shows
 // ticked only when all of them are, and ticking it turns every one on. Keeping it
@@ -1554,6 +1555,25 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   // inherits the rest. All VALUE reads below go through `eff` (the resolved
   // settings); writes still go to the style itself, becoming overrides.
   const eff = useMemo(() => resolveStyle(styles, st.name) || {}, [styles, st.name])
+  const newsMonitor = { ...NEWS_DEFAULTS, ...(eff.news_monitor || {}) }
+  const newsAutomation = resolveAutomation(styles, st.name, cfg)
+  const newsUnattended = newsMonitor.enabled && newsMonitor.auto_accept && newsMonitor.auto_queue
+    && newsAutomation.auto_start_job && newsAutomation.auto_approve_script
+    && (newsAutomation.auto_format !== 'song' || (newsAutomation.auto_song && newsAutomation.auto_song_approve))
+  const setNewsMonitor = (key, value) => setStyleField('news_monitor', {
+    ...newsMonitor, [key]: value,
+  })
+  const enableNewsUnattended = () => editCfg((c) => ({
+    ...c,
+    styles: (c.styles || []).map((s, i) => i !== styleIdx ? s : {
+      ...s,
+      news_monitor: { ...newsMonitor, enabled: true, auto_accept: true, auto_queue: true },
+      automation: {
+        ...(s.automation || {}), auto_start_job: true, auto_approve_script: true,
+        ...(newsAutomation.auto_format === 'song' ? { auto_song: true, auto_song_approve: true } : {}),
+      },
+    }),
+  }))
   const parentMissing = !!st.parent && !styles.some((s) => s.name === st.parent)
   // Transitive descendants of the selected style — excluded from the parent
   // picker so the hierarchy can never loop.
@@ -1656,6 +1676,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           const mins = p.minutes || (p.scenes ? p.scenes * LEGACY_SCENE_SECS / 60 : 0)
           return `${b}: ${mins ? fmtDuration(mins) : '?'} · ${p.resolution || '?'}`
         }).join('  ·  ')
+      case 'news_monitor':
+        return v?.enabled ? `${v.query || '(no query)'} · every ${v.interval_minutes || 60} min` : 'monitoring off'
       default:
         if (typeof v === 'boolean') return v ? 'on' : 'off'
         return v === '' || v == null ? '(blank)' : String(v)
@@ -2718,6 +2740,51 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
 
+          <Card span={12} className="reveal reveal-d2">
+            <span className="label-sm">News monitoring · {st.name}</span>
+            <p className="muted" style={{ fontSize: 13 }}>
+              Turn recent X posts into ideas shaped by this style's instructions and default format. A music-video style can write songs about the news.
+              Set the shared X search bearer token in Channels, then save your settings. Checks run while the backend is running.
+            </p>
+            <div className="stack gap-16">
+              <Check checked={newsMonitor.enabled} onChange={(v) => setNewsMonitor('enabled', v)} label="Monitor news on X for this style" />
+              <ParentVal k="news_monitor" />
+              {newsMonitor.enabled && (<>
+                <Field label="X search query" hint="Choose topics, people, hashtags or trusted accounts. Example: (Australia OR Canberra) (politics OR parliament) lang:en -is:retweet. The style's script instructions shape the resulting video ideas.">
+                  <textarea className="textarea" rows={2} value={newsMonitor.query}
+                    onChange={(e) => setNewsMonitor('query', e.target.value)} placeholder="(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet" />
+                </Field>
+                <div className="row gap-22 row--wrap">
+                  <Field label="Check every (minutes)" hint="15 minutes to 24 hours.">
+                    <input className="input" type="number" min={15} max={1440} step={1} value={newsMonitor.interval_minutes}
+                      onChange={(e) => setNewsMonitor('interval_minutes', e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={(e) => setNewsMonitor('interval_minutes', Math.max(15, Math.min(1440, Math.round(Number(e.target.value) || 15))))} />
+                  </Field>
+                  <Field label="Maximum ideas per check" hint="1–5 ideas for this style.">
+                    <input className="input" type="number" min={1} max={5} step={1} value={newsMonitor.max_ideas}
+                      onChange={(e) => setNewsMonitor('max_ideas', Math.max(1, Math.min(5, Math.round(Number(e.target.value) || 1))))} />
+                  </Field>
+                </div>
+                <Check checked={newsMonitor.include_people} onChange={(v) => setNewsMonitor('include_people', v)}
+                  label="Find reference pictures of named people when creating a film — use their appearance in this film's characters" />
+                <Check checked={newsMonitor.auto_accept} onChange={(v) => setNewsMonitor('auto_accept', v)}
+                  label="Automatically accept news ideas — otherwise they wait in Ideas for review" />
+                <Check checked={newsMonitor.auto_queue} onChange={(v) => setNewsMonitor('auto_queue', v)}
+                  label="Automatically queue accepted news ideas using their saved size — Small by default" />
+                <div className="muted" style={{ fontSize: 12.5 }}>
+                  Unattended creation also needs this style's auto-start and auto-approve scripts settings; music videos need automatic song generation and song approval.
+                  These settings also apply to other queued films in this style. Publishing follows the existing publishing settings.
+                </div>
+                <div className="row gap-10 center row--wrap">
+                  <Button variant="ghost" icon="bolt" disabled={newsUnattended || !newsMonitor.query.trim()} onClick={enableNewsUnattended}>
+                    {newsUnattended ? 'Unattended creation enabled' : 'Enable unattended news videos'}
+                  </Button>
+                  <span className="muted" style={{ fontSize: 12 }}>Applies the required toggles to this draft. Save settings to activate.</span>
+                </div>
+              </>)}
+            </div>
+          </Card>
+
           {/* ── Characters (inherited cast summary — managed on the Characters tab) ── */}
           <Card span={12} className="reveal reveal-d3">
             <div className="row center between">
@@ -3251,6 +3318,18 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         </>)}
 
         {tab === 'channels' && (<>
+          <Card span={12} className="reveal reveal-d1">
+            <span className="label-sm">X news search</span>
+            <div className="mt-16">
+              <Field label="X search bearer token" hint="An X API bearer token with recent-search access. Shared by all style monitors; separate from the accounts used to publish. Leave blank to keep a saved token.">
+                <input className="input" type="password" autoComplete="new-password"
+                  placeholder={cfg.news?.x_bearer_token_set ? '•••••••• (saved — leave blank to keep)' : 'X API bearer token'}
+                  value={cfg.news?.x_bearer_token || ''}
+                  onChange={(e) => set('news', { ...(cfg.news || {}), x_bearer_token: e.target.value })} />
+              </Field>
+              <p className="muted" style={{ fontSize: 12.5 }}>Enable monitoring and choose search topics separately for each style in the Styles tab. Review sources and run a check from AI ideas.</p>
+            </div>
+          </Card>
           {/* ── YouTube channels (issue #22) ── */}
           <ChannelsCard onConfigChanged={reloadChannels} onError={setError} />
           <Card span={12} className="reveal reveal-d2">

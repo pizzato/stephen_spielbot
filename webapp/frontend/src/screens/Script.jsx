@@ -71,6 +71,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Characters tab — per-script cast the LLM identified (lives in the work dir,
   // not the global catalogue). charBusy holds the char id currently mutating.
   const [characters, setCharacters] = useState(job?.characters || [])
+  const [newsPeople, setNewsPeople] = useState(null)
   const [charBusy, setCharBusy] = useState('')
   const [charMsg, setCharMsg] = useState('')
   const [aliasDraft, setAliasDraft] = useState({})
@@ -492,6 +493,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   useEffect(() => {
     setScenes(job?.scenes || [])
     setCharacters(job?.characters || [])
+    setNewsPeople(null)
     setAliasDraft({})
     setCharMsg('')
     setCur(0)
@@ -566,7 +568,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // effect above never re-seeds), and background passes keep adding looks.
   // Re-pull the list from the server whenever the tab is opened.
   const reloadCharacters = () => api.scriptCharacters(job.job_id)
-    .then((r) => { setCharacters(r.characters || []); setCastCatalogue(r.catalogue || []) })
+    .then((r) => { setCharacters(r.characters || []); setCastCatalogue(r.catalogue || []); setNewsPeople(r.news_people || null) })
     .catch(() => { /* keep the snapshot */ })
   useEffect(() => {
     // Not gated on the Characters tab: the Scenes tab's staging needs the
@@ -574,7 +576,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     if (!job?.job_id) return
     let alive = true
     api.scriptCharacters(job.job_id)
-      .then((r) => { if (alive) { setCharacters(r.characters || []); setCastCatalogue(r.catalogue || []) } })
+      .then((r) => { if (alive) { setCharacters(r.characters || []); setCastCatalogue(r.catalogue || []); setNewsPeople(r.news_people || null) } })
       .catch(() => { /* keep the snapshot */ })
     return () => { alive = false }
   }, [view, job?.job_id])
@@ -594,6 +596,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         const r = await api.scriptCharacters(job.job_id)
         if (!alive) return
         setCharacters(r.characters || [])
+        setNewsPeople(r.news_people || null)
         if ((r.characters || []).some((c) => !c.has_image) && tries++ < 12) timer = setTimeout(poll, 4000)
       } catch { /* best-effort */ }
     }
@@ -1355,6 +1358,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       const r = await run()
       setCharacters(r.characters || [])
+      setNewsPeople(r.news_people || null)
       // A look or voice change moves the portrait/audio the takes render from.
       refreshPerf()
     }
@@ -2114,6 +2118,16 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
       {view === 'characters' && job && (
         <div className="bento">
+          {!!newsPeople?.unresolved?.length && (
+            <Card span={12} className="reveal reveal-d1">
+              <Banner tone="warn">
+                Automatic news portrait lookup could not supply every person's reference. Add or find each person's character below and upload a suitable reference before rendering if their likeness is needed.
+              </Banner>
+              <ul style={{ fontSize: 13, marginBottom: 0 }}>
+                {newsPeople.unresolved.map((person, index) => <li key={`${person.name}-${index}`}><strong>{person.name}</strong>: {person.reason}</li>)}
+              </ul>
+            </Card>
+          )}
           <Card span={12} well className="reveal reveal-d1">
             <div className="row center gap-10">
               <Icon name="user-group" style={{ color: 'var(--ink-3)' }} />

@@ -129,6 +129,7 @@ export default function App() {
       visualStyle: payload?.visualStyle ?? '',
       autoApprove: payload?.autoApprove,
       queueItemId: payload?.queueItemId ?? null,
+      ideaId: payload?.ideaId ?? '',
     })
     // Visiting Films marks the new ones as seen (mailbox-style clear).
     if (id === 'library') api.markSeen('films').then(refreshBadges).catch(() => {})

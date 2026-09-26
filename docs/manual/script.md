@@ -169,6 +169,12 @@ The **AI editor verdict** card shows the critique the drafter ran on itself: *pa
 
 ## Characters & Artifacts
 
+Films created from a [news idea](ideas.md#news-monitor) can include downloaded
+appearance references for named people. A notice lists any people whose automatic
+portrait lookup failed, with the reason. Add or find the person's character here and
+upload a suitable reference when their likeness is needed. Acquired portraits retain
+source and license details in the character description; see [news people](../characters.md#people-from-news-ideas).
+
 The same wall for every film, whatever the mix of scene modes. Characters are woven into
 every scene image; location, wardrobe and reference images feed the acted takes, so when
 no scene is acted yet a note says they wait until one switches to **Dialogue** (or a

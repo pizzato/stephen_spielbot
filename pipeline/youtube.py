@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
 import json
 import logging
 import os
 import re
 import concurrent.futures
 import threading
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -1118,9 +1120,32 @@ def load_suggestions() -> list[dict]:
         return []
 
 
+@contextlib.contextmanager
+def suggestions_locked():
+    """Serialize idea reviews and background news additions across processes."""
+    SUGGESTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SUGGESTIONS_PATH.with_suffix(".lock"), "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def save_suggestions(suggestions: list[dict]) -> None:
     SUGGESTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SUGGESTIONS_PATH.write_text(json.dumps(suggestions, indent=2))
+    with tempfile.NamedTemporaryFile(mode="w", dir=SUGGESTIONS_PATH.parent,
+                                     delete=False) as fh:
+        json.dump(suggestions, fh, indent=2)
+    os.replace(fh.name, SUGGESTIONS_PATH)
+
+
+def suggestions_transaction(fn):
+    @functools.wraps(fn)
+    def wrapped(*args, **kwargs):
+        with suggestions_locked():
+            return fn(*args, **kwargs)
+    return wrapped
 
 
 # ── Channel analytics ─────────────────────────────────────────────────────────

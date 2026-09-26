@@ -224,6 +224,7 @@ export default function Create({ seed, meta, onGenerated }) {
     setBusy(true); setError('')
     try {
       const r = await api.songDraft({
+        idea_id: seed?.ideaId || '',
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
         minutes: Number(minutes) || 0,
@@ -264,6 +265,7 @@ export default function Create({ seed, meta, onGenerated }) {
     setBusy(true); setError('')
     try {
       const body = {
+        idea_id: seed?.ideaId || '',
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
         minutes: Number(minutes) || 0,
@@ -300,7 +302,8 @@ export default function Create({ seed, meta, onGenerated }) {
 
       <Banner tone="danger">{error}</Banner>
       {seed?.queueItemId && <Banner tone="info">Editing a queued request — generating a script here will fill its existing queue slot (it keeps its position) and make it render faster.</Banner>}
-      {!seed?.queueItemId && (seed?.title || seed?.description) && (
+      {seed?.ideaId && <Banner tone="info">Creating from an accepted idea. Saved news sources and appearance settings, when present, are carried into the story or song.</Banner>}
+      {!seed?.queueItemId && !seed?.ideaId && (seed?.title || seed?.description) && (
         <Banner tone="info">Previous Create settings restored. Adjust anything, then {songFmt ? 'write the song again' : 'generate a fresh script'} — it starts a new work folder, leaving the existing one untouched.</Banner>
       )}
 
