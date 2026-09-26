@@ -255,6 +255,24 @@ def topic_with_sources(topic, source):
     return "\n\n".join(sections)
 
 
+def singer_candidates(work_dir):
+    """This film's news subjects, in the brief's principal-subject order."""
+    if not work_dir:
+        return []
+    path = Path(work_dir) / "news_source.json"
+    if not path.exists():
+        return []
+    source = json.loads(path.read_text())
+    characters = gapp._read_script_characters(Path(work_dir))
+    candidates = []
+    for person in source.get("people", []):
+        char = next((c for c in characters if c.get("enabled", True)
+                     and gapp._characters_refer_to_same(c, person)), None)
+        if char and char not in candidates:
+            candidates.append(char)
+    return candidates
+
+
 def attach_source(work_dir, source):
     if not source:
         return
