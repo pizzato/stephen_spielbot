@@ -199,6 +199,154 @@ class NewsCreationTests(TempConfigCase):
         self.assertEqual(json.loads((wd / "news_people.json").read_text())["unresolved"][0]["name"],
                          "Anthony Albanese")
 
+    def _news_song_config(self):
+        self.source["include_people"] = True
+        yt.save_suggestions([self.idea])
+        self.write_config({
+            "styles": [_style("News", automation={"auto_format": "song", "auto_song": True,
+                                                  "auto_song_critic_passes": 1})],
+            "default_style": "News", "characters_migrated_v2": True,
+            "characters": [{"id": "luiz", "name": "LuizPizzato", "description": "A male singer",
+                            "gender": "male", "enabled": True}],
+        })
+        photo = io.BytesIO()
+        Image.new("RGB", (128, 128), "navy").save(photo, "PNG")
+        for name, value in [
+            ("_identity", {"id": "Q100"}),
+            ("_reference", {"source_url": "https://commons.wikimedia.org/wiki/File:Person.png",
+                            "image_url": "https://upload.wikimedia.org/person.png",
+                            "license": "CC BY 4.0", "attribution": "Test photographer", "credit": ""}),
+            ("_read_response", photo.getvalue()),
+        ]:
+            patch = mock.patch.object(news_people, name, return_value=value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        return app.load_config()
+
+    @staticmethod
+    def _write_news_song(*args, **kwargs):
+        return {"caption": "Folk song", "lyrics": "[Verse]\nA railway for tomorrow",
+                "vocalist": kwargs.get("singer_note", "")}
+
+    def test_news_subject_fronts_manual_and_automatic_song_through_scene_references(self):
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                cfg = self._news_song_config()
+                with mock.patch.object(backend.story_mode, "write_song", side_effect=self._write_news_song) as write, \
+                        mock.patch.object(app, "pick_song_singer", side_effect=AssertionError("Catalogue fallback")), \
+                        mock.patch.object(backend.story_mode, "critique_song", return_value="Keep the hook"), \
+                        mock.patch.object(backend, "_do_song_generate") as render:
+                    if automatic:
+                        entry = news_monitor.queue_idea(self.idea, cfg)
+                        draft = backend._auto_song_first(
+                            cfg, title=self.idea["title"], topic=entry["video_prompt"], minutes=1,
+                            style_name="News", n_scenes=2, queue_item_id=entry["id"])
+                        render.assert_called_once()
+                        self.assertEqual(write.call_count, 2)  # the lyric critic also keeps the singer
+                    else:
+                        draft = backend.song_draft(backend.SongDraftBody(
+                            video_title=self.idea["title"], style_name="News", idea_id=self.idea["id"], minutes=1))
+                    for call in write.call_args_list:
+                        self.assertIn("Anthony Albanese", call.kwargs["singer_note"])
+                        self.assertNotIn("LuizPizzato", call.kwargs["singer_note"])
+                wd = Path(draft["work_dir"])
+                data = json.loads((wd / "song.json").read_text())
+                self.assertEqual(data["singer"], "Anthony Albanese")
+                photo = wd / "characters" / app._read_script_characters(wd)[0]["ref_image"]
+                self.assertTrue(photo.exists())
+                studio = backend.get_job_song(draft["job_id"])
+                self.assertEqual(studio["singers"][0]["name"], "Anthony Albanese")
+                self.assertIn("Anthony Albanese", studio["singers"][0]["vocalist"])
+
+                with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)) as story:
+                    result = backend._do_story_generate(backend.GenerateScriptBody(
+                        video_title=self.idea["title"], style_name="News", work_dir=str(wd), format="song", n_scenes=2))
+                self.assertIn("THE LEAD SINGER IS Anthony Albanese", story.call_args.kwargs["dialogue_note"])
+                self.assertIn("match this person's face", story.call_args.kwargs["character_sheet"])
+                with mock.patch.object(backend.story_mode, "redraft_story", return_value=_fake_story(2)) as redraft:
+                    backend._do_story_redraft(result["job_id"], backend.StoryRedraftBody(n_scenes=2))
+                self.assertIn("THE LEAD SINGER IS Anthony Albanese", redraft.call_args.kwargs["dialogue_note"])
+                scenes = _fake_scenes(2)
+                scenes[0].image_prompt = "Anthony Albanese sings at a railway station"
+                scenes[0].metadata_extra = {"mode": "silent", "cast": ["Anthony Albanese"]}
+                with mock.patch.object(backend.story_mode, "divide_story",
+                                       return_value=(scenes, "music", "style", [])) as divide:
+                    divided = backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+                self.assertIn("THE LEAD SINGER IS Anthony Albanese", divide.call_args.kwargs["dialogue_note"])
+                refs = app.resolve_performance_references(
+                    {"cast": ["Anthony Albanese"]}, cfg, Path(divided["work_dir"]), "News", 1)
+                self.assertEqual(refs["pictures"][0]["path"], str(photo))
+                self.assertNotIn("Anthony Albanese", [c["name"] for c in app.load_config()["characters"]])
+
+    def test_headless_news_song_casts_subject_before_story_and_keeps_it_when_dividing(self):
+        self._news_song_config()
+        with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)) as story, \
+                mock.patch.object(backend.story_mode, "divide_story",
+                                   return_value=(_fake_scenes(2), "music", "style", [])) as divide, \
+                mock.patch.object(backend.story_mode, "write_song", side_effect=self._write_news_song) as song:
+            result = backend._do_script_generate(backend.GenerateScriptBody(
+                video_title=self.idea["title"], style_name="News", idea_id=self.idea["id"], format="song", n_scenes=2))
+        for call in (story.call_args, divide.call_args):
+            self.assertIn("THE LEAD SINGER IS Anthony Albanese", call.kwargs["dialogue_note"])
+        self.assertIn("Anthony Albanese", song.call_args.kwargs["singer_note"])
+        self.assertEqual(json.loads((Path(result["work_dir"]) / "song.json").read_text())["singer"],
+                         "Anthony Albanese")
+
+    def test_news_cast_order_manual_choice_and_scope(self):
+        cfg = self._news_song_config()
+        wd = self.output_dir / "cast-order"
+        wd.mkdir()
+        self.source["people"] = [{"name": "Main Subject"}, {"name": "Supporting Subject"}]
+        (wd / "news_source.json").write_text(json.dumps(self.source))
+        app._write_script_characters(wd, [
+            {"id": "support", "name": "Supporting Subject", "description": "Supporting news subject"},
+            {"id": "lead", "name": "Main Subject", "description": "Principal news subject", "gender": "female"},
+            {"id": "unrelated", "name": "Unrelated Person", "description": "A singer"},
+        ])
+        ss = app.style_settings(cfg, "News")
+        self.assertEqual(backend._pick_song_singer(cfg, ss, work_dir=wd)[0], "Main Subject")
+        self.assertEqual(backend._pick_song_singer(cfg, ss)[0], "LuizPizzato")
+        other = self.output_dir / "other-film"
+        other.mkdir()
+        self.assertEqual(backend._pick_song_singer(cfg, ss, work_dir=other)[0], "LuizPizzato")
+        for name in ("Main Subject", "Supporting Subject"):
+            char, _ = backend._song_lead_singer(cfg, ss, {"singer": name, "vocalist": "male vocalist"}, wd)
+            self.assertEqual(char["name"], name)  # an audio choice does not erase a news identity
+        char, _ = backend._song_lead_singer(cfg, ss, {"singer": "LuizPizzato"}, wd)
+        self.assertEqual(char["name"], "LuizPizzato")  # an explicit cast change stays selected
+
+    def test_missing_news_reference_keeps_existing_singer_fallback(self):
+        cfg = self._news_song_config()
+        with mock.patch.object(news_people, "_identity", side_effect=ValueError("Ambiguous identity")), \
+                mock.patch.object(backend.story_mode, "write_song", side_effect=self._write_news_song):
+            draft = backend.song_draft(backend.SongDraftBody(
+                video_title=self.idea["title"], style_name="News", idea_id=self.idea["id"]))
+        wd = Path(draft["work_dir"])
+        self.assertEqual(json.loads((wd / "song.json").read_text())["singer"], "LuizPizzato")
+        self.assertEqual(news_monitor.singer_candidates(wd), [])
+        self.assertEqual(cfg["characters"][0]["name"], "LuizPizzato")
+
+    def test_news_vocalist_does_not_guess_gender_from_photo_credit_text(self):
+        char = {"name": "News Subject", "description": "Match this person's face. Photo by Mr. Example."}
+        self.assertEqual(backend._news_singer_descriptor(char, {}),
+                         "Vocalist portraying News Subject in an original song")
+        char.update(gender="female", age="mature")
+        self.assertIn("mature female vocalist", backend._news_singer_descriptor(char, {}))
+
+    def test_headless_news_song_respects_saved_cast_before_lyrics_are_written(self):
+        self._news_song_config()
+        with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)):
+            draft = backend._do_story_generate(backend.GenerateScriptBody(
+                video_title=self.idea["title"], style_name="News", idea_id=self.idea["id"], format="song", n_scenes=2))
+        wd = Path(draft["work_dir"])
+        backend._save_song_text(wd, "Folk", "", singer="LuizPizzato", vocalist="male vocalist")
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(2), "music", "style", [])) as divide, \
+                mock.patch.object(backend.story_mode, "write_song", side_effect=self._write_news_song):
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+        self.assertIn("THE LEAD SINGER IS LuizPizzato", divide.call_args.kwargs["dialogue_note"])
+        self.assertEqual(json.loads((wd / "song.json").read_text())["singer"], "LuizPizzato")
+
     def test_config_redaction_and_blank_token_preservation(self):
         cfg = app.load_config()
         safe = app.public_config(cfg)

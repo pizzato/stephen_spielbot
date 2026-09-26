@@ -59,8 +59,8 @@ the format does to the render.
 - **Sound** — what the music model is told about the song (genre, tempo, mood,
   arrangement). The Vocalist below is appended to this automatically when the track is
   sung, so leave the vocalist out of the Sound itself.
-- **Lead singer** — the catalogue character the story shows singing, cast by name
-  (shown only when the style has a usable cast). Picking a character fills the Vocalist
+- **Lead singer** — the news or catalogue character the story shows singing, cast by name
+  (shown when the film has news characters or the style has a usable cast). Picking a character fills the Vocalist
   line in from their card; *An invented performer* leaves the story to invent one
   matching the Vocalist. A song is drafted with a singer already cast — one the brief
   names, else drawn at random from the style's cast, narrowed to the sex of the Singing
@@ -68,14 +68,20 @@ the format does to the render.
   whoever the story casts is the singer in every performance shot, and dividing the story
   into scenes may not introduce a second one
   ([Casting is opt-in, by name](../characters.md#casting-is-opt-in-by-name)).
+  News music videos first choose the main available news character and retain that
+  film-local identity and photograph through story drafting, redrafts and scene
+  division. Other news subjects remain selectable here. Without an available news
+  character, the normal catalogue fallback applies.
 - **Vocalist** — WHO sings, in one editable line: sex, age, background, voice quality
   (e.g. *"adult male vocalist, Australian"*). Filled at draft time from the lead singer,
   or by the songwriter itself when the style has no usable cast (see
   [Singing films](../performance_films.md#singing-films-the-music-video-format)). Edit it
   and generate again to change who sings — and the story follows: it casts a performer of
   the sex and age this line says. Describing (or picking, below) a voice of the other sex
-  to the lead singer drops that character, so the story invents a performer to match the
-  voice rather than casting the character against it.
+  to a catalogue lead singer drops that character, so the story invents a performer to match the
+  voice rather than casting the character against it. A selected news subject keeps
+  their identity when the audio voice changes; choose a different Lead singer to
+  change the person shown on screen.
 - **Lyrics** — sung exactly as written, section tags (`[Verse]`, `[Chorus]`, …) on their
   own lines.
 - The Sound and Lyrics boxes have a **Re-generate** button with a *tell it how* caret:
