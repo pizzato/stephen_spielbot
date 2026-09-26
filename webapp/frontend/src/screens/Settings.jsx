@@ -2745,7 +2745,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <span className="label-sm">News monitoring · {st.name}</span>
             <p className="muted" style={{ fontSize: 13 }}>
               Turn recent X posts into ideas shaped by this style's instructions and default format. A music-video style can write songs about the news.
-              Connect or select an X account under Channels → X, then save your settings. Checks run while the backend is running.
+              Every style uses the shared X search account selected under Channels → X. Checks run while the backend is running.
             </p>
             <div className="stack gap-16">
               <Check checked={newsMonitor.enabled} onChange={(v) => setNewsMonitor('enabled', v)} label="Monitor news on X for this style" />
@@ -3340,7 +3340,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <input className="input" type="password" placeholder={cfg.x_client_secret_set ? '•••••••• (saved — leave blank to keep)' : ''} value={cfg.x_client_secret || ''} onChange={(e) => set('x_client_secret', e.target.value)} />
               </Field>
               <span className="label-sm">News search</span>
-              <Field label="News search account" hint="Reuse a connected account and refresh its token automatically. Automatic uses a saved bearer token if present, otherwise your only connected account. Choose an account when you have several.">
+              <Field label="X account for all news searches" hint="Shared by every style, including styles without an X publishing account. Automatic uses a saved bearer token if present, otherwise your only connected account. Choose an account here once when you have several.">
                 <select className="select" value={cfg.news?.x_account || ''}
                   onChange={(e) => set('news', { ...(cfg.news || {}), x_account: e.target.value })}>
                   <option value="">Automatic</option>

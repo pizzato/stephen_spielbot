@@ -47,7 +47,8 @@ accounts. OAuth 2.0 tokens refresh automatically using the saved refresh token;
 OAuth 1.0a accounts use their existing keys. Client ID and Client Secret alone are not
 enough: complete **Connect X account** before searching.
 
-Select an account under **News search account** to use it for search. With
+Select an account under **X account for all news searches**. Every style uses this
+global selection, including styles without an X publishing account. With
 **Automatic** selected, a saved standalone **X search bearer token (optional)**
 (or `X_BEARER_TOKEN`) is used first; otherwise, the sole connected account is used
 automatically. If several accounts are connected,

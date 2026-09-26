@@ -1,6 +1,7 @@
 """Durable per-style news polling, queue handoff, and script reference flow."""
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
@@ -8,7 +9,7 @@ from unittest import mock
 from fastapi import HTTPException
 
 import app
-from pipeline import news, youtube as yt
+from pipeline import news, x as xt, youtube as yt
 from pipeline.llm import Scene
 from test_styles import TempConfigCase, _style
 from scriptstub import stub_script
@@ -68,6 +69,36 @@ class NewsIntegrationTests(TempConfigCase):
         self.assertFalse(news_monitor.enabled(cfg))
         fetch.assert_not_called()
         generate.assert_not_called()
+
+    def test_all_styles_search_with_global_account_regardless_of_publishing_account(self):
+        self.write_config({
+            "x_accounts": [{"id": "shared"}, {"id": "publisher"}],
+            "x_client_id": "client-id", "news": {"x_account": "shared"},
+            "styles": [
+                _style(name, x_account=publisher, news_monitor={"enabled": True, "query": name})
+                for name, publisher in (("First", "publisher"), ("Second", ""), ("Third", "shared"))
+            ], "default_style": "First",
+        })
+        cfg = app.load_config()
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status_code = 200
+        response.iter_content.return_value = [b'{"data": []}']
+        token = {"access_token": "shared-secret", "expires_at": time.time() + 3600}
+        with mock.patch.object(xt, "_load_token", return_value=token) as load, \
+                mock.patch.object(xt.requests, "request", return_value=response) as send:
+            for name in ("First", "Second", "Third"):
+                result = news_monitor.check(cfg, name, force=True)
+                self.assertEqual(result["account"], "shared")
+                self.assertTrue(result["configured"])
+                self.assertEqual(result["styles"][0]["last_outcome"], "no_posts")
+        self.assertEqual(send.call_count, 3)
+        self.assertEqual([call.kwargs["params"]["query"] for call in send.call_args_list],
+                         ["First", "Second", "Third"])
+        for call in send.call_args_list:
+            self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer shared-secret")
+        self.assertTrue(all(call.args == ("shared",) for call in load.call_args_list))
+        self.assertEqual([s["x_account"] for s in cfg["styles"]], ["publisher", "", "shared"])
 
     def test_child_inherits_monitor_but_unrelated_root_stays_disabled(self):
         self.write_config({"styles": [

@@ -89,7 +89,8 @@ styles:
 ```
 
 Configure search alongside publishing in [Settings → Channels → X](manual/settings.md#x).
-An explicit `news.x_account` selects that connected account for search. Otherwise, a
+An explicit `news.x_account` selects one connected account for every style's news
+searches, independently of each style's publishing account. Otherwise, a
 saved `news.x_bearer_token` (or `X_BEARER_TOKEN`) takes precedence; with neither set,
 the sole connected X account is used automatically. With multiple accounts, select
 one for search. This selection does not change any style's publishing account.

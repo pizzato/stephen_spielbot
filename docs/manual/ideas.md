@@ -73,7 +73,10 @@ error instead of reporting zero ideas as a successful check.
 Enable monitoring, set the query and choose automation in
 [Settings → Styles → News monitoring](settings.md#news-monitoring). Choose a connected
 X account for search, or provide an optional standalone bearer token, in
-[Settings → Channels → X](settings.md#x-news-search). A sole connected account is used
+[Settings → Channels → X → X account for all news searches](settings.md#x-news-search).
+This global account is shared by every style, regardless of its publishing account.
+Switching styles changes the displayed ideas and monitor query; the search account
+stays the same. A sole connected account is used
 automatically when no bearer token is saved. Connecting with your Client ID and
 Client Secret supplies renewable account credentials; the X app still needs access
 to recent search.

@@ -492,8 +492,9 @@ function IdeasArea({ area, go, meta }) {
           {newsStatus && !newsStatus.configured && <div className="mt-16"><Banner tone="warn">{newsStatus.connection_error || 'Connect an X account in Settings → Channels → X to search for news.'}</Banner></div>}
           {newsStatus?.configured && <p className="muted" style={{ fontSize: 13 }}>
             {newsStatus.auth_source === 'account'
-              ? `Searching with ${newsStatus.account_name ? `@${newsStatus.account_name}` : newsStatus.account}.`
-              : 'Searching with the configured X bearer token.'}
+              ? `All styles search with ${newsStatus.account_name ? `@${newsStatus.account_name}` : newsStatus.account}.`
+              : 'All styles search with the configured X bearer token.'}
+            {' '}Choose the shared account in Settings → Channels → X. Each style keeps its own query and monitoring settings.
           </p>}
           {newsStatus?.background_enabled === false && <p className="muted" style={{ fontSize: 13 }}>Manual checks only on this server. Scheduled monitoring is disabled.</p>}
           {newsStatus?.styles?.map((monitor) => (
