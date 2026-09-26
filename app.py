@@ -70,6 +70,7 @@ from pipeline import engines
 from pipeline.cover_typography import DEFAULT_COVER_TYPOGRAPHY
 from pipeline.subtitle_style import DEFAULT_SUBTITLE_STYLE
 from pipeline import tts_engines
+from pipeline.news import normalize_monitor
 
 MAX_SCENES    = 200
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
@@ -499,12 +500,15 @@ DEFAULT_CFG = {
     # mirror the default style back onto the flat keys (see _ensure_styles).
     "styles": [],
     "default_style": "",
+    "news": {"x_bearer_token": ""},
+    "default_news_monitor": {},
 }
 
 # Per-style field → the legacy flat config key it replaces. The flat keys stay
 # in the config as a mirror of the DEFAULT style, so job_config.json and every
 # old fallback path keep working; the styles list is the source of truth.
 STYLE_FIELD_TO_FLAT = {
+    "news_monitor":         "default_news_monitor",
     # Script & content
     "visual_style":         "default_visual_style",
     "video_style":          "default_video_style",
@@ -1205,6 +1209,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
             row[field] = fn(row.get(field))
 
     for row in normalized:
+        _coerce(row, "news_monitor", normalize_monitor)
         _coerce(row, "size_presets", _norm_size_presets)
         _coerce(row, "image_engine", lambda v: _norm_engine(v, "generate"))
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
@@ -1502,6 +1507,8 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     out = {field: cfg.get(flat, DEFAULT_CFG.get(flat))
            for field, flat in STYLE_FIELD_TO_FLAT.items()}
     out["description"] = ""
+    # Monitoring never falls back to another root style's flat mirror.
+    out["news_monitor"] = {}
     requested = (name or "").strip()
     styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
     target = None
@@ -1533,6 +1540,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
                     str(s.get("description") or ""),
                     out.get("description") if i else "", "description")
     if requested == NO_STYLE:
+        out["news_monitor"] = {}
         out.update(visual_style="", video_style="", video_negative_prompt="",
                    extra_instructions="", script_avoid="", description_suffix="",
                    attribution_description="", attribution_hashtags="",
@@ -1725,6 +1733,10 @@ def public_config(cfg: dict) -> dict:
     blanked and a ``<key>_set`` boolean is added so the UI can show a
     'saved — leave blank to keep' placeholder without ever exposing the secret."""
     safe = dict(cfg)
+    news = dict(cfg.get("news") or {})
+    news["x_bearer_token_set"] = bool(news.get("x_bearer_token") or os.environ.get("X_BEARER_TOKEN"))
+    news["x_bearer_token"] = ""
+    safe["news"] = news
     for key in _SECRET_VALUE_KEYS:
         val = safe.get(key)
         safe[f"{key}_set"] = bool(isinstance(val, str) and val.strip())
@@ -1746,6 +1758,13 @@ def merge_config_update(current: dict, update: dict) -> dict:
     sends it blank (the 'leave blank to keep' contract of :func:`public_config`)."""
     merged = dict(current)
     for key, val in update.items():
+        if key == "news" and isinstance(val, dict):
+            news = dict(current.get("news") or {})
+            token = val.get("x_bearer_token")
+            if isinstance(token, str) and token.strip():
+                news["x_bearer_token"] = token.strip()
+            merged["news"] = news
+            continue
         if key.endswith("_set"):
             continue
         if key in _SECRET_VALUE_KEYS and not (isinstance(val, str) and val.strip()):
@@ -1770,6 +1789,7 @@ _OPERATIONAL_FILE_NAMES = {
     "youtube_comments.json",
     "youtube_analytics.json",
     "youtube_suggestions.json",
+    "news_monitor.json",
     "youtube_dismissed_suggestions.json",
     "youtube_daily_uploads.json",
     "last_session.json",
@@ -2067,6 +2087,7 @@ def _job_config_snapshot(cfg: dict) -> dict:
     # style_name); carrying the whole style list would just go stale.
     job_cfg.pop("styles", None)
     job_cfg.pop("default_style", None)
+    job_cfg.pop("news", None)  # Search credentials are never needed by render workers.
     for key in list(job_cfg):
         lowered = key.lower()
         if "api_key" in lowered or "token" in lowered or "secret" in lowered:
@@ -3837,7 +3858,12 @@ def generate_all_script_portraits(work_dir, style_name: str) -> int:
     work_dir = Path(work_dir)
     cfg = load_config()
     chars = _read_script_characters(work_dir)
-    todo = [c for c in chars if c.get("description") and not c.get("ref_image")]
+    try:
+        unresolved = json.loads((work_dir / "news_people.json").read_text()).get("unresolved", [])
+    except (OSError, ValueError):
+        unresolved = []
+    todo = [c for c in chars if c.get("description") and not c.get("ref_image")
+            and not any(_characters_refer_to_same(c, person) for person in unresolved)]
     if not todo:
         return 0
     urls = _preview_worker_urls()
@@ -4838,6 +4864,7 @@ def _rotate_pick(unused: list[dict], eligible: list[str], last_style: str,
     return unused[0]
 
 
+@yt.suggestions_transaction
 def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict | None:
     """Pick an unused suggestion and add it to the queue, rotating through the
     eligible styles so successive top-ups mix styles instead of always using the
@@ -4859,7 +4886,8 @@ def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict
 
     suggestions = yt.load_suggestions()
     unused = [s for s in suggestions
-              if not s.get("used") and _auto_pick_style_of(s, default_name) in eligible]
+              if not s.get("used") and s.get("source") != "news"
+              and _auto_pick_style_of(s, default_name) in eligible]
 
     if not unused:
         # No eligible idea waiting — invent a fresh mixed batch across the styles
@@ -4871,7 +4899,7 @@ def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict
             return None
         # Keep any other still-unused ideas (e.g. from the AI ideas screen); drop
         # used ones so the pool doesn't grow without bound.
-        kept = [s for s in suggestions if not s.get("used")]
+        kept = [s for s in suggestions if not s.get("used") or s.get("source") == "news"]
         yt.save_suggestions(kept + merged)
         unused = list(merged)  # eligible by construction
 
@@ -4887,7 +4915,7 @@ def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict
     stitle = (suggestion.get("title") or "").strip().lower()
     all_suggestions = yt.load_suggestions()
     for s in all_suggestions:
-        if s.get("used"):
+        if s.get("used") or s.get("source") == "news":
             continue
         if (sid and str(s.get("id") or "") == sid) or ((s.get("title") or "").strip().lower() == stitle):
             s["used"] = True

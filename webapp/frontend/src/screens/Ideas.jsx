@@ -14,6 +14,42 @@ function fmtNum(n) {
   return String(n)
 }
 
+const sourceUrl = (value) => /^https?:\/\//i.test(value || '') ? value : ''
+const newsTime = (value) => value ? new Date(typeof value === 'number' ? value * 1000 : value).toLocaleString() : 'Never'
+const newsOutcome = (monitor) => ({
+  no_posts: 'No matching X posts were returned.',
+  no_new_posts: 'All matching posts were already checked.',
+  no_ideas: 'New posts were found, but no usable video ideas were generated.',
+  duplicates: 'Generated ideas were already present or previously reviewed.',
+  ideas_added: `${monitor.ideas_added || 0} new idea${monitor.ideas_added === 1 ? '' : 's'} added.`,
+  error: 'The news check failed. See the error below.',
+}[monitor.last_outcome] || '')
+
+function NewsDetails({ idea }) {
+  if (idea.source !== 'news' && !idea.news) return null
+  const news = idea.news || {}
+  return (
+    <div className="stack gap-8 mt-16" style={{ fontSize: 12.5 }}>
+      <div><Chip tone="accent">From X news</Chip></div>
+      {news.summary && <div>{news.summary}</div>}
+      {(news.sources || []).map((post, index) => (
+        <div key={post.id || index}>
+          {sourceUrl(post.url) && <a href={post.url} target="_blank" rel="noopener noreferrer">{post.author_name || post.author || `Source ${index + 1}`} on X</a>}
+          {post.created_at && <span className="muted"> · {newsTime(post.created_at)}</span>}
+          {post.text && <div className="muted">{post.text}</div>}
+          {(post.article_urls || []).filter(sourceUrl).map((url) => (
+            <div key={url}><a href={url} target="_blank" rel="noopener noreferrer">Read linked article</a></div>
+          ))}
+        </div>
+      ))}
+      {!!news.people?.length && <div className="muted">
+        People: {news.people.map((person) => person.name).join(', ')}.
+        {news.include_people ? ' Reference pictures will be sought when creating the film.' : ' Appearance references are off for this idea.'}
+      </div>}
+    </div>
+  )
+}
+
 // Per-idea predicted 3-day reach (issue #50). Renders nothing until an
 // engagement model has been built, so it's a graceful no-op by default.
 // Re-estimates when the chosen video length flips Short ↔ long-form.
@@ -71,7 +107,7 @@ const writeDismissedIdea = (idea, reason = 'dismissed') => {
   const record = { id: idea?.id || '', title, reason, dismissed_at: Date.now() }
   if (idea?.id) data[idea.id] = record
   const titleKey = normalizeIdeaTitle(title)
-  if (titleKey) data[titleKey] = record
+  if (titleKey && idea?.source !== 'news') data[titleKey] = record
   window.localStorage.setItem(DISMISSED_IDEAS_KEY, JSON.stringify(data))
 }
 const clearDismissedIdea = (idea) => {
@@ -79,20 +115,42 @@ const clearDismissedIdea = (idea) => {
   const data = readDismissedIdeas()
   if (idea?.id) delete data[idea.id]
   const titleKey = normalizeIdeaTitle(title)
-  if (titleKey) delete data[titleKey]
+  if (titleKey && idea?.source !== 'news') delete data[titleKey]
   window.localStorage.setItem(DISMISSED_IDEAS_KEY, JSON.stringify(data))
 }
 const isDismissedIdea = (idea) => {
   const title = idea?.title || idea?.final_title || idea
   const data = readDismissedIdeas()
+  if (idea?.source === 'news') return Boolean(idea.id && data[idea.id])
   return Boolean((idea?.id && data[idea.id]) || data[normalizeIdeaTitle(title)])
 }
 const sameIdea = (a, b) =>
   (a?.id && b?.id && a.id === b.id) ||
-  normalizeIdeaTitle(a?.title || a?.final_title || a) === normalizeIdeaTitle(b?.title || b?.final_title || b)
+  (a?.source !== 'news' && b?.source !== 'news' &&
+    normalizeIdeaTitle(a?.title || a?.final_title || a) === normalizeIdeaTitle(b?.title || b?.final_title || b))
 const visibleIdeas = (ideas) => (ideas || []).filter((idea) => !isDismissedIdea(idea))
 
 export default function Ideas({ go, meta = {} }) {
+  const [area, setArea] = useState('topics')
+  return (
+    <div>
+      <div className="page-head">
+        <div className="page-head__intro">
+          <span className="label-sm reveal">AI ideas</span>
+          <h1 className="display-md reveal reveal-d1">{area === 'news' ? 'News for your channel' : 'Topic ideas for your channel'}</h1>
+        </div>
+        <Segmented value={area} onChange={setArea} options={[
+          { value: 'topics', label: 'Topic Ideas' },
+          { value: 'news', label: 'News' },
+        ]} />
+      </div>
+      <IdeasArea key={area} area={area} go={go} meta={meta} />
+    </div>
+  )
+}
+
+function IdeasArea({ area, go, meta }) {
+  const isNews = area === 'news'
   const [ideas, setIdeas] = useState([])
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
@@ -105,6 +163,9 @@ export default function Ideas({ go, meta = {} }) {
   const [accepted, setAccepted] = useState([])   // ideas the user accepted — waiting to be queued/created
   const [rowSizes, setRowSizes] = useState({})   // accepted-row size overrides (recKey -> size)
   const [view, setView] = useState('ideas')      // 'ideas' | 'accepted' | 'declined'
+  const [newsStatus, setNewsStatus] = useState(null)
+  const [newsError, setNewsError] = useState('')
+  const [checkingNews, setCheckingNews] = useState(false)
 
   // Ideas belong to a style profile (issue #66): generation is steered by the
   // selected style and each idea is stamped with it, so a children-story style
@@ -114,6 +175,17 @@ export default function Ideas({ go, meta = {} }) {
   const styleList = meta.config?.styles || []
   const isAll = styleSel === ALL_STYLES
   const effectiveStyle = styleSel || meta.config?.default_style || ''
+  useEffect(() => {
+    if (!isNews) return
+    let live = true
+    const refresh = () => api.newsStatus(styleSel)
+      .then((data) => { if (live) { setNewsStatus(data); setNewsError('') } })
+      .catch((e) => { if (live) setNewsError(e.message) })
+    setNewsStatus(null)
+    refresh()
+    const timer = setInterval(refresh, 60000)
+    return () => { live = false; clearInterval(timer) }
+  }, [styleSel, isNews])
   // Styles opted out of auto-picked ideas stay out of the "All styles" mix
   // (reach them by selecting the style itself), mirroring the backend. A child
   // style inherits its parent's opt-out, so resolve through the chain.
@@ -123,9 +195,11 @@ export default function Ideas({ go, meta = {} }) {
   // The style an idea (and its size preset / queue entry) belongs to — its own
   // stamp in the mix, otherwise the selected style.
   const styleOf = (idea) => idea?.style_name || (isAll ? (meta.config?.default_style || '') : effectiveStyle)
-  const byStyle = (arr) => (arr || []).filter((i) => {
+  const byStyle = (arr, selection = styleSel, excludeOptedOut = true) => (arr || []).filter((i) => {
+    if ((i.source === 'news') !== isNews) return false
     const sn = i.style_name || meta.config?.default_style
-    return isAll ? !excludedStyles.has(sn) : (!effectiveStyle || sn === effectiveStyle)
+    const selectedStyle = selection || meta.config?.default_style || ''
+    return selection === ALL_STYLES ? (isNews || !excludeOptedOut || !excludedStyles.has(sn)) : (!selectedStyle || sn === selectedStyle)
   })
 
   // The text box steers generation (e.g. "Rock bands of the 90s" → ideas about
@@ -133,8 +207,8 @@ export default function Ideas({ go, meta = {} }) {
   const loadIdeas = async (g = '', refresh = false, styleName = styleSel) => {
     setLoadingIdeas(true); setError('')
     try {
-      const d = await api.getSuggestions(g, refresh, styleName)
-      setIdeas(visibleIdeas(d.suggestions || []))
+      const d = await (isNews ? api.getNewsIdeas(styleName) : api.getSuggestions(g, refresh, styleName))
+      setIdeas(byStyle(visibleIdeas(d.suggestions || []), styleName))
     } catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
   }
   // Accepted/declined ideas for the current style ('' style → its default;
@@ -143,16 +217,32 @@ export default function Ideas({ go, meta = {} }) {
   const loadDiscarded = async (sel = styleSel) => {
     try {
       const d = await api.getDiscarded(discardStyleArg(sel))
-      setDiscarded(d.discarded || [])
+      setDiscarded(byStyle(d.discarded || [], sel, false))
     } catch { /* non-fatal — the declined list is supplementary */ }
   }
   const loadAccepted = async (sel = styleSel) => {
     try {
       const d = await api.getAccepted(discardStyleArg(sel))
-      setAccepted(d.accepted || [])
+      setAccepted(byStyle(d.accepted || [], sel, false))
     } catch { /* non-fatal — the accepted list is supplementary */ }
   }
-  // First visit loads the cached set (no LLM call); only regenerates if empty.
+  const checkNews = async () => {
+    setCheckingNews(true); setNewsError(''); setStatus('')
+    try {
+      const result = await api.checkNews(styleSel)
+      const current = await api.newsStatus(styleSel)
+      setNewsStatus(current)
+      await Promise.all([loadIdeas('', false), loadAccepted()])
+      if (result.running) {
+        setStatus('A news check is already running. Check the monitor below for its results.')
+      } else if ((result.styles || current.styles || []).some((monitor) => monitor.enabled && monitor.last_error)) {
+        setNewsError('The news check reported errors. See the affected styles below.')
+      } else {
+        setStatus(`News check finished — ${result.ideas_added || 0} new idea${result.ideas_added === 1 ? '' : 's'}. See each style below for the search results.`)
+      }
+    } catch (e) { setNewsError(e.message) } finally { setCheckingNews(false) }
+  }
+  // News only loads saved ideas. Topic ideas generate a batch when the cache is empty.
   useEffect(() => { if (ideas.length === 0 && !loadingIdeas) loadIdeas('', false); loadDiscarded(); loadAccepted() }, [])
   // Switching style swaps to that style's cached ideas (generates when empty).
   // The guidance box is cleared with it (issue #202): it was steering the style
@@ -162,6 +252,9 @@ export default function Ideas({ go, meta = {} }) {
   const pickStyle = (name) => {
     setStyleSel(name)
     setIdeas([])
+    setAccepted([])
+    setDiscarded([])
+    setStatus('')
     setGuidance('')
     loadIdeas('', false, name)
     loadDiscarded(name)
@@ -170,9 +263,7 @@ export default function Ideas({ go, meta = {} }) {
 
   const ideaKey = (idea) => idea?.id || idea?.title || idea?.final_title || ''
   const removeIdeaLocal = (idea) => {
-    const key = ideaKey(idea)
-    const title = idea?.title || idea?.final_title || idea
-    setIdeas((arr) => arr.filter((it) => ideaKey(it) !== key && (it.title || it.final_title || it) !== title))
+    setIdeas((arr) => arr.filter((it) => !sameIdea(it, idea)))
   }
   // Per-idea size: stored on the idea itself so each card keeps its own choice.
   // New ideas have no size and default to 'small' until toggled.
@@ -249,7 +340,7 @@ export default function Ideas({ go, meta = {} }) {
     const { minutes, resolution } = presetFor(rec, recSize(rec))
     setBusy('acc-' + recKey(rec)); setError('')
     try {
-      await api.queueAdd(rec.title, minutes, rec.reason || '', resolution, styleOf(rec))
+      await api.queueAdd(rec.title, minutes, rec.reason || '', resolution, styleOf(rec), rec.source === 'news' ? rec.id || '' : '')
       await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'queue' }).catch(() => {})
       await loadAccepted()
       setStatus('Added to queue.')
@@ -262,7 +353,7 @@ export default function Ideas({ go, meta = {} }) {
   const createAccepted = async (rec) => {
     const { minutes, resolution } = presetFor(rec, recSize(rec))
     await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'create' }).catch(() => {})
-    go('create', { title: rec.title, description: rec.reason || '', minutes, resolution, styleName: styleOf(rec) })
+    go('create', { title: rec.title, description: rec.reason || '', minutes, resolution, styleName: styleOf(rec), ideaId: rec.source === 'news' ? rec.id || '' : '' })
   }
   // Bring a declined idea back into the active list. Clear the local hide too,
   // otherwise visibleIdeas would re-filter it straight back out.
@@ -322,6 +413,7 @@ export default function Ideas({ go, meta = {} }) {
             {rec.acted ? <span style={{ marginLeft: 8 }}><Chip tone="accent"><Icon name={rec.acted_via === 'create' ? 'wand-magic-sparkles' : 'layer-group'} style={{ fontSize: 10 }} /> {rec.acted_via === 'create' ? 'Sent to Create' : 'Queued'}</Chip></span> : null}
           </div>
           {rec.reason && <div className="muted" style={{ fontSize: 12.5, fontStyle: 'italic' }}>{rec.reason}</div>}
+          <NewsDetails idea={rec} />
         </div>
         <div className="row center gap-10 row--wrap">
           <Segmented value={size} onChange={(v) => setRecSize(rec, v)}
@@ -338,26 +430,19 @@ export default function Ideas({ go, meta = {} }) {
 
   return (
     <div>
-      <div className="page-head">
-        <div className="page-head__intro">
-          <span className="label-sm reveal">AI ideas</span>
-          <h1 className="display-md reveal reveal-d1">Topic ideas for your channel</h1>
-        </div>
-      </div>
-
       <Banner tone="danger">{error}</Banner>
-      {status && <Banner tone="ok">{status}</Banner>}
+      {status && <Banner tone={isNews ? 'info' : 'ok'}>{status}</Banner>}
 
       <div className="bento">
         <Card span={12} well className="reveal reveal-d1">
           <div className="row center between row--wrap gap-10">
             <div className="row center gap-10">
-              <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="lightbulb" /></span>
-              <div><div style={{ fontWeight: 600 }}>Topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Accept the ideas you like, decline the ones you don't — accepted ideas wait under Accepted until you queue or create them.</div></div>
+              <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name={isNews ? 'newspaper' : 'lightbulb'} /></span>
+              <div><div style={{ fontWeight: 600 }}>{isNews ? 'News ideas' : 'Topic ideas'}</div><div className="muted" style={{ fontSize: 12.5 }}>{isNews ? 'Video and song ideas from the X posts your styles monitor. Review their sources, then accept, queue or create.' : "Accept the ideas you like, decline the ones you don't — accepted ideas wait under Accepted until you queue or create them."}</div></div>
             </div>
             <Segmented value={view} onChange={setView}
               options={[
-                { value: 'ideas', label: 'Ideas' },
+                { value: 'ideas', label: `Ideas (${ideas.length})` },
                 { value: 'accepted', label: `Accepted (${accepted.length})` },
                 { value: 'declined', label: `Declined (${discarded.length})` },
               ]} />
@@ -365,8 +450,8 @@ export default function Ideas({ go, meta = {} }) {
           <div className="row gap-10 center mt-16" style={{ flexWrap: 'wrap' }}>
             {styleList.length > 0 && (
               <select className="select" value={isAll ? ALL_STYLES : effectiveStyle} onChange={(e) => pickStyle(e.target.value)}
-                disabled={loadingIdeas} style={{ maxWidth: 220 }} title="Ideas are generated for this style">
-                {styleList.length > 1 && <option value={ALL_STYLES}>All styles (mix)</option>}
+                disabled={loadingIdeas || checkingNews} style={{ maxWidth: 220 }} title={isNews ? 'Show news for this style' : 'Ideas are generated for this style'}>
+                {styleList.length > 1 && <option value={ALL_STYLES}>{isNews ? 'All styles' : 'All styles (mix)'}</option>}
                 {styleTreeOrder(styleList).map(({ style: s, depth }) => (
                   <option key={s.name} value={s.name}>
                     {'  '.repeat(depth)}{depth ? '↳ ' : ''}{s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
@@ -380,17 +465,56 @@ export default function Ideas({ go, meta = {} }) {
                   style={{ maxWidth: 180 }} title="Sort the ideas">
                   {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-                <div className="grow">
-                  <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
-                    value={guidance} onChange={(e) => setGuidance(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !loadingIdeas) loadIdeas(guidance, true) }} />
-                </div>
-                <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance, true)}>
-                  {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
+                {!isNews && <>
+                  <div className="grow">
+                    <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
+                      value={guidance} onChange={(e) => setGuidance(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !loadingIdeas) loadIdeas(guidance, true) }} />
+                  </div>
+                  <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance, true)}>
+                    {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
+                </>}
               </>
             )}
           </div>
         </Card>
+        {isNews && <Card span={12} className="reveal reveal-d1">
+          <div className="row center between row--wrap gap-10">
+            <div>
+              <div style={{ fontWeight: 600 }}>News monitor</div>
+              <div className="muted" style={{ fontSize: 12.5 }}>Recent X posts become ideas in each enabled style. Configure topics and automation in Settings → Styles.</div>
+            </div>
+            <Button variant="ghost" icon="rotate" disabled={checkingNews || !newsStatus?.configured || !newsStatus?.styles?.some((s) => s.enabled)} onClick={checkNews}>
+              {checkingNews ? 'Checking X…' : 'Check news now'}
+            </Button>
+          </div>
+          {newsError && <Banner tone="danger">{newsError}</Banner>}
+          {newsStatus && !newsStatus.configured && <div className="mt-16"><Banner tone="warn">X news search is not connected. Add an X search bearer token in Settings → Channels to retrieve real posts.</Banner></div>}
+          {newsStatus?.background_enabled === false && <p className="muted" style={{ fontSize: 13 }}>Manual checks only on this server. Scheduled monitoring is disabled.</p>}
+          {newsStatus?.styles?.map((monitor) => (
+            <div key={monitor.style_name} className="stack gap-8 mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+              <div className="row center gap-10 row--wrap">
+                <strong>{monitor.style_name}</strong>
+                <Chip tone={monitor.enabled ? 'accent' : undefined}>{monitor.enabled ? (newsStatus.background_enabled === false ? 'Manual checks only' : `Every ${monitor.interval_minutes} min`) : 'Off'}</Chip>
+                {monitor.enabled && <span className="muted" style={{ fontSize: 12.5 }}>{monitor.auto_queue ? (monitor.auto_accept ? 'Auto-accept + queue' : 'Review then auto-queue') : monitor.auto_accept ? 'Auto-accept' : 'Review ideas'} · up to {monitor.max_ideas} ideas/check</span>}
+              </div>
+              {monitor.enabled && <>
+                <div style={{ fontSize: 13 }}>{monitor.query || 'No search query configured.'}</div>
+                {monitor.last_query && monitor.last_query !== monitor.query && <div className="muted" style={{ fontSize: 12 }}>Last check used a different query: {monitor.last_query}</div>}
+                <div className="muted" style={{ fontSize: 12 }}>Last check: {newsTime(monitor.last_checked)} · Last successful check: {newsTime(monitor.last_success)}</div>
+                {monitor.last_checked && <div style={{ fontSize: 13 }}>
+                  {monitor.posts_fetched ?? '—'} posts fetched · {monitor.posts_new ?? '—'} new posts · {monitor.ideas_added || 0} ideas added
+                  {newsOutcome(monitor) && <div className="muted">{newsOutcome(monitor)}</div>}
+                </div>}
+                {monitor.last_error && <Banner tone="danger">{monitor.last_error}</Banner>}
+              </>}
+            </div>
+          ))}
+        </Card>}
+        {isNews && view === 'ideas' && ideas.length === 0 && <Card span={12}>
+          <div style={{ fontWeight: 600 }}>{loadingIdeas ? 'Loading news ideas…' : 'No news ideas yet'}</div>
+          {!loadingIdeas && <p className="muted" style={{ fontSize: 13 }}>Enable a style's news monitor in Settings → Styles, then use Check news now. Automatically accepted ideas appear in this News tab's Accepted view.</p>}
+        </Card>}
         {view === 'ideas' && sortedIdeas.map((idea, i) => {
           const title = idea.title || idea.final_title || idea
           const size = ideaSize(idea)
@@ -404,6 +528,7 @@ export default function Ideas({ go, meta = {} }) {
                 <div className="row center gap-10">{isAll && idea.style_name && <Chip>{idea.style_name}</Chip>}<IdeaReach idea={idea} isShort={orientationOf(resolution) === 'Portrait'} onResult={(d) => setPreds((m) => ({ ...m, [pk]: d }))} /><Stars value={idea.interestingness} /></div>
               </div>
               {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
+              <NewsDetails idea={idea} />
               <div className="row center mt-16">
                 <Segmented value={size} onChange={(v) => setIdeaSize(idea, v)}
                   options={SIZE_ORDER.map((s) => ({ value: s, label: SIZE_LABELS[s] }))} />
@@ -425,7 +550,7 @@ export default function Ideas({ go, meta = {} }) {
               <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="check" /></span>
               <div>
                 <div style={{ fontWeight: 600 }}>Accepted ideas ({accepted.length})</div>
-                <div className="muted" style={{ fontSize: 12.5 }}>Topics you accepted. Queue or create one — it stays here, marked as acted on, so you always know which ideas haven't been made yet.</div>
+                <div className="muted" style={{ fontSize: 12.5 }}>{isNews ? 'News ideas' : 'Topics'} you accepted. Queue or create one — it stays here, marked as acted on, so you always know which ideas haven't been made yet.</div>
               </div>
             </div>
             {accepted.length === 0 && (
@@ -451,7 +576,7 @@ export default function Ideas({ go, meta = {} }) {
               <span className="stream-ico" style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}><Icon name="ban" /></span>
               <div>
                 <div style={{ fontWeight: 600 }}>Declined ideas ({discarded.length})</div>
-                <div className="muted" style={{ fontSize: 12.5 }}>Topics you turned down — kept out of new suggestions. Accept one to move it to the Accepted list, revive it back into the ideas, or remove it for good. (Ignored ideas stay hidden and aren't listed here.)</div>
+                <div className="muted" style={{ fontSize: 12.5 }}>{isNews ? 'News ideas' : 'Topics'} you turned down — kept out of new suggestions. Accept one to move it to the Accepted list, revive it back into the ideas, or remove it for good. (Ignored ideas stay hidden and aren't listed here.)</div>
               </div>
             </div>
             {discarded.length === 0 && (
@@ -465,6 +590,7 @@ export default function Ideas({ go, meta = {} }) {
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 600 }}>{rec.title}{isAll && rec.style_name ? <span style={{ marginLeft: 8 }}><Chip>{rec.style_name}</Chip></span> : null}</div>
                       {rec.reason && <div className="muted" style={{ fontSize: 12.5, fontStyle: 'italic' }}>{rec.reason}</div>}
+                      <NewsDetails idea={rec} />
                     </div>
                     <div className="row gap-10">
                       <Button variant="ghost" icon="check" onClick={() => moveIdea(rec, 'accepted')} title="Move to the Accepted list">Accept</Button>
