@@ -330,8 +330,8 @@ export default function Create({ seed, meta, onGenerated }) {
                 value={videoTitle} onChange={(e) => setVideoTitle(e.target.value)} />
             </Field>
             <Field label={<RegenLabel busy={improving === 'direction'} disabled={busy} onRegen={(instr) => improve('direction', instr)} chips={['Sharper angle', 'More detail', 'Simpler']}>Direction</RegenLabel>}
-              hint="Optional — steer the angle, tone, or what to emphasise.">
-              <textarea className="textarea" rows={3} placeholder="Focus on the economic decline, the military overreach, and the slow rise of Christianity."
+              hint={seed?.ideaId || seed?.news ? 'Includes the saved news brief and collected source text. The writer does not need to open links.' : 'Optional — steer the angle, tone, or what to emphasise.'}>
+              <textarea className="textarea" rows={seed?.ideaId || seed?.news ? 12 : 3} placeholder="Focus on the economic decline, the military overreach, and the slow rise of Christianity."
                 value={direction} onChange={(e) => setDirection(e.target.value)} />
             </Field>
 

@@ -167,7 +167,7 @@ def fetch_recent_posts(cfg: dict, query: str, since_id: str | None = None) -> di
         "query": query,
         "max_results": _POST_LIMIT,
         "sort_order": "recency",
-        "tweet.fields": "created_at,author_id,public_metrics,entities",
+        "tweet.fields": "created_at,author_id,public_metrics,entities,note_tweet",
         "expansions": "author_id",
         "user.fields": "username,name",
     }
@@ -196,8 +196,10 @@ def fetch_recent_posts(cfg: dict, query: str, since_id: str | None = None) -> di
         username = str(user.get("username") or "")
         if not re.fullmatch(r"[A-Za-z0-9_]{1,50}", username):
             username = ""
+        note = row.get("note_tweet") or {}
         article_urls = []
-        for entity in (row.get("entities") or {}).get("urls", []):
+        for entity in ((row.get("entities") or {}).get("urls", [])
+                       + (note.get("entities") or {}).get("urls", [])):
             if isinstance(entity, dict):
                 url = _http_url(entity.get("unwound_url") or entity.get("expanded_url"))
                 if url and url not in article_urls:
@@ -207,7 +209,7 @@ def fetch_recent_posts(cfg: dict, query: str, since_id: str | None = None) -> di
             "id": post_id,
             "url": f"https://x.com/{username}/status/{post_id}" if username
                    else f"https://x.com/i/web/status/{post_id}",
-            "text": str(row["text"])[:12000],
+            "text": str(note.get("text") or row["text"]),
             "author": username,
             "author_name": str(user.get("name") or "")[:200],
             "created_at": str(row.get("created_at") or ""),
@@ -242,14 +244,24 @@ def generate_news_ideas(posts: list[dict], cfg: dict, style: dict,
         "attribute disputed claims and retain uncertainty. You have not read linked articles. "
         "Do not invent article contents, quotes, identities, dates, or physical appearances. "
         "Group reports of the same event into one idea; prefer relevant recent stories with "
-        "engagement and clear source detail. Return [] if nothing is relevant. "
-        "Return only a JSON array of objects with title, reason, summary, interestingness "
+        "engagement and clear source detail. Return [] if nothing is relevant or the posts "
+        "lack enough substantive detail to make a video without reading external pages. "
+        "Return only a JSON array of objects with title, reason, summary, directions, interestingness "
         "(0 to 1), source_ids (IDs copied from supplied posts), and people "
         "(objects with name and description of their role in this story). "
         "Each idea must cite at least one supplied source ID. Name a person only when their "
         "full name appears in the cited post text; never infer the subject from the author. "
+        "Keep reason as a short pitch. Make directions a complete, self-contained production brief: "
+        "explain the reported event and context, who is involved and their stated roles, what happened, "
+        "where and when if supplied, relevant figures and exact quotes if supplied, attribution, "
+        "conflicting claims and missing details. Include the style-specific angle, narrative beats "
+        "and concrete visual suggestions, clearly separating imagined scenes from reported events. "
+        "The downstream writer cannot browse, fetch links, research, or verify news: include every "
+        "fact it needs here, never delegate research or ask it to read an article, and omit unsupported "
+        "details or explicitly mark them unknown. URLs are citations only. "
         "For music videos propose an original song premise and hook, while separating "
-        "creative interpretation from the reported event."
+        "creative interpretation from the reported event; include the song's point of view, "
+        "verse/chorus progression and visual treatment in directions."
     )
     user = (
         f"Propose at most {monitor['max_ideas']} new ideas for this style.\n"
@@ -262,7 +274,7 @@ def generate_news_ideas(posts: list[dict], cfg: dict, style: dict,
         + "\nSource posts:\n" + json.dumps(list(sources_by_id.values()), ensure_ascii=False)
     )
     try:
-        reply = _chat_complete(cfg, system, user, max_tokens=4096, label="news_ideas", retries=1)
+        reply = _chat_complete(cfg, system, user, max_tokens=8192, label="news_ideas", retries=1)
     except Exception:
         raise NewsError("News idea generation failed. Check Settings → LLM backend and retry.") from None
     try:
@@ -307,6 +319,7 @@ def generate_news_ideas(posts: list[dict], cfg: dict, style: dict,
         ideas.append({
             "title": title,
             "reason": str(row.get("reason") or "")[:2000],
+            "directions": str(row.get("directions") or row.get("reason") or "")[:12000],
             "summary": str(row.get("summary") or "")[:4000],
             "interestingness": score,
             "source_ids": ids,

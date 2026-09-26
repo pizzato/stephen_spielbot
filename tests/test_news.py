@@ -91,6 +91,18 @@ def test_empty_search_and_env_token(monkeypatch):
     assert send.call_args.args[0].get_header("Authorization") == "Bearer environment-secret"
 
 
+def test_long_post_keeps_all_text_and_links_without_following_them():
+    full_text = "Anthony Albanese announces a rail project. " + "Details. " * 1500 + "Opening in 2028."
+    payload = {"data": [{"id": "125", "text": "Anthony Albanese announces…",
+                         "note_tweet": {"text": full_text, "entities": {"urls": [
+                             {"expanded_url": "https://example.com/full-report"}]}}}]}
+    with mock.patch.object(news, "_search_payload", return_value=payload) as search:
+        result = news.fetch_recent_posts({"news": {"x_bearer_token": "test"}}, "rail")
+    assert "note_tweet" in search.call_args.args[2]["tweet.fields"]
+    assert result["posts"][0]["text"] == full_text
+    assert result["posts"][0]["article_urls"] == ["https://example.com/full-report"]
+
+
 @pytest.mark.parametrize("status,hint", [(401, "bearer token"), (403, "recent-search access"),
                                         (429, "rate or usage limit"), (500, "retry later")])
 def test_x_errors_never_expose_token_or_response(status, hint):
@@ -129,11 +141,16 @@ def test_music_ideas_keep_only_real_sources_and_explicit_people():
         {"name": "Invented Person", "description": "Not actually in the report."},
     ])]
     output[0]["sources"] = [{"id": "made-up", "url": "https://evil.example"}]
+    output[0]["directions"] = "A reporter says Anthony Albanese announced a rail line. Sing from a commuter's view."
     with mock.patch.object(news, "_chat_complete", return_value=json.dumps(output)) as chat:
         result = news.generate_news_ideas([source], {}, style)
     assert "MUSIC VIDEO" in chat.call_args.args[2]
     assert "untrusted source data" in chat.call_args.args[1]
     assert "have not read linked articles" in chat.call_args.args[1]
+    assert "downstream writer cannot browse" in chat.call_args.args[1]
+    assert "lack enough substantive detail" in chat.call_args.args[1]
+    assert "verse/chorus progression" in chat.call_args.args[1]
+    assert result[0]["directions"] == output[0]["directions"]
     assert result[0]["sources"] == [source]
     assert result[0]["source_ids"] == ["123"]
     assert result[0]["people"] == [{"name": "Anthony Albanese", "description": "Named in the rail announcement."}]

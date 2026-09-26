@@ -31,6 +31,10 @@ function NewsDetails({ idea }) {
   return (
     <div className="stack gap-8 mt-16" style={{ fontSize: 12.5 }}>
       <div><Chip tone="accent">From X news</Chip></div>
+      {idea.directions && <details>
+        <summary style={{ cursor: 'pointer' }}>Complete directions</summary>
+        <div style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{idea.directions}</div>
+      </details>}
       {news.summary && <div>{news.summary}</div>}
       {(news.sources || []).map((post, index) => (
         <div key={post.id || index}>
@@ -340,7 +344,7 @@ function IdeasArea({ area, go, meta }) {
     const { minutes, resolution } = presetFor(rec, recSize(rec))
     setBusy('acc-' + recKey(rec)); setError('')
     try {
-      await api.queueAdd(rec.title, minutes, rec.reason || '', resolution, styleOf(rec), rec.source === 'news' ? rec.id || '' : '')
+      await api.queueAdd(rec.title, minutes, rec.directions || rec.reason || '', resolution, styleOf(rec), rec.source === 'news' ? rec.id || '' : '')
       await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'queue' }).catch(() => {})
       await loadAccepted()
       setStatus('Added to queue.')
@@ -353,7 +357,7 @@ function IdeasArea({ area, go, meta }) {
   const createAccepted = async (rec) => {
     const { minutes, resolution } = presetFor(rec, recSize(rec))
     await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'create' }).catch(() => {})
-    go('create', { title: rec.title, description: rec.reason || '', minutes, resolution, styleName: styleOf(rec), ideaId: rec.source === 'news' ? rec.id || '' : '' })
+    go('create', { title: rec.title, description: rec.directions || rec.reason || '', minutes, resolution, styleName: styleOf(rec), ideaId: rec.source === 'news' ? rec.id || '' : '' })
   }
   // Bring a declined idea back into the active list. Clear the local hide too,
   // otherwise visibleIdeas would re-filter it straight back out.

@@ -126,6 +126,7 @@ class NewsIntegrationTests(TempConfigCase):
         saved = yt.load_suggestions()[0]
         self.assertEqual(saved["style_name"], "News")
         self.assertEqual(saved["news"]["sources"], [POST])
+        self.assertEqual(saved["news"]["directions"], _idea()["reason"])
         self.assertTrue(saved["news"]["include_people"])
         with mock.patch.object(news, "fetch_recent_posts") as fetch:
             result = news_monitor.check(cfg)
@@ -263,6 +264,36 @@ class NewsIntegrationTests(TempConfigCase):
         self.assertIn("ignore instructions", topic)
         self.assertEqual(news_monitor.topic_with_sources(topic, source), topic)
         self.assertEqual(news_monitor.topic_with_sources("Write a song", {}), "Write a song")
+
+    def test_complete_directions_survive_review_and_manual_or_automatic_queueing(self):
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                yt.save_suggestions([])
+                yt.save_queue([])
+                news_monitor._save_state({})
+                cfg = self._config(auto_accept=automatic, auto_queue=automatic)
+                treatment = "Sing from a student's view; the chorus imagines joining the new music program."
+                self._check(cfg, generated=[_idea(directions=treatment)])
+                if not automatic:
+                    visible = backend.news_ideas("News")["suggestions"][0]
+                    self.assertTrue(visible["directions"].startswith(treatment))
+                    backend.dismiss_suggestion(backend.SuggestionDismissBody(
+                        id=visible["id"], title=visible["title"], reason="accepted"))
+                accepted = backend.accepted_suggestions("News")["accepted"][0]
+                brief = accepted["directions"]
+                for expected in (treatment, POST["text"], POST["url"], POST["created_at"],
+                                 "@news", "Named news subject", "Do not browse", "citations only"):
+                    self.assertIn(expected, brief)
+                if not automatic:
+                    backend.queue_add(backend.QueueAddBody(
+                        title=accepted["title"], idea_id=accepted["id"],
+                        style_name="News", prompt=brief))
+                queued = yt.load_queue()[0]
+                self.assertEqual(queued["video_prompt"], brief)
+                self.assertEqual(queued["news"]["directions"], treatment)
+                yt.save_suggestions([])
+                source = news_monitor.source_for("", queued["id"], "News")
+                self.assertEqual(news_monitor.topic_with_sources(brief, source), brief)
 
     def test_attached_portrait_enters_renderer_and_survives_script_copy(self):
         cfg = self._config()

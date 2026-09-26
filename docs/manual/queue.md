@@ -34,8 +34,11 @@ with **View render** to open [Render](render.md).
 
 ## Up next
 
-Ideas from the [news monitor](ideas.md#news-monitor) retain their saved news context and
-optional request for named people's appearance references when queued. Automatic news
+Ideas from the [news monitor](ideas.md#news-monitor) include a complete production brief
+in the prompt: creative directions, the reported event, collected source text, attribution
+and the optional request for named people's appearance references. Story and song writers
+use that material without fetching news or opening links. The saved source snapshot stays
+with the queue item even if the original idea is removed. Automatic news
 queueing uses the idea's saved size preset, defaulting to Small; writing and rendering follow that style's
 existing script, song and queue automation gates.
 
