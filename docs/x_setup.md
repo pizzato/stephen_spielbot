@@ -45,7 +45,7 @@ To monitor topics independently of publishing, enter an X API bearer token with
 recent-search access in **Settings → Channels → X news search**, then enable
 **News monitoring** for each chosen style. A connected publishing account by itself
 does not configure news search. See the [monitor settings](manual/settings.md#news-monitoring)
-and [AI ideas](manual/ideas.md#news-monitor) for topic queries, source review and
+and [AI ideas → News](manual/ideas.md#news-monitor) for topic queries, source review and
 unattended creation.
 
 ## Limits

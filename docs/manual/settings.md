@@ -332,7 +332,7 @@ them. **Save settings** applies the changes. Publishing continues to follow the
 separate publishing settings.
 
 Add the shared search credential under [Channels → X news search](#x-news-search).
-Check status, review source links and use **Check news now** on [AI ideas](ideas.md#news-monitor).
+Check status, review source links and use **Check news now** in [AI ideas → News](ideas.md#news-monitor).
 Monitoring runs only while the backend is running. A disabled monitor makes no checks.
 
 ### Characters

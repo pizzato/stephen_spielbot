@@ -2,12 +2,15 @@
 
 `#/ideas`
 
-Topic suggestions for your channel, with a memory. Accept the ones you like, decline the
-ones you don't, and the generator steers accordingly next time.
+Choose **Topic Ideas** for AI-generated topics or **News** for ideas drawn from the X
+posts your styles monitor. Each tab has its own ideas, accepted and declined lists.
+Accept the ones you like, decline the ones you don't, and the generator steers
+accordingly next time.
 
 ## The three views
 
-A segmented control switches between them:
+Within either tab, a segmented control switches between three views. Counts include
+only that tab's ideas for the selected style:
 
 | View | What's in it |
 |---|---|
@@ -17,7 +20,7 @@ A segmented control switches between them:
 
 ## Generating ideas
 
-Pick a **style** — ideas are generated for that style's channel and voice, and pitched to
+In **Topic Ideas**, pick a **style** — ideas are generated for that style's channel and voice, and pitched to
 suit its [default format](settings.md#script-content): a music-video style is offered
 topics that make good songs, an acted style topics that play as scenes. With more than
 one style, **All styles (mix)** shows a blended view and tags each card with its style.
@@ -50,10 +53,22 @@ All three keep the topic out of future suggestions.
 
 ## News monitor
 
-The **News monitor** panel shows the selected style's monitoring state, search query,
-interval, last check, last successful check and any error. **All styles (mix)** shows
-the monitors together. **Check news now** checks enabled monitors immediately;
-scheduled checks continue while the backend is running.
+Open **AI ideas → News** to review news ideas and use the **News monitor** panel. The
+News tab loads saved news ideas without generating general topics. Its **All styles**
+option shows news from all styles, including styles excluded from automatic topic
+selection. The Topic Ideas guidance box and generation buttons remain in Topic Ideas.
+
+The monitor panel shows the selected style's monitoring state, search query, interval,
+last check, last successful check and any error. It also reports posts fetched, new
+posts and ideas added, distinguishing an empty X search from already checked posts,
+duplicate ideas and a generation failure. If you edit the query, results from the
+previous query remain labelled until the next check.
+
+**Check news now** checks enabled monitors immediately. Scheduled checks continue
+while the backend is running; servers with background jobs disabled show **Manual
+checks only**. A missing search token is shown explicitly and disables the check
+button. A failed check shows the provider error instead of reporting zero ideas as a
+successful check.
 
 Enable monitoring, set the query and choose automation in
 [Settings → Styles → News monitoring](settings.md#news-monitoring). The shared X search
@@ -69,7 +84,9 @@ covers the last seven days; a busy query can miss older matches between polls.
 Linked article URLs are retained for review, but the monitor does not fetch or verify
 the article contents. Its summaries and ideas are based on the retrieved post text.
 
-News follows the same Ideas → Accepted → Queue/Create flow. If automatic acceptance is
+Within the News tab, news follows the same Ideas → Accepted → Queue/Create flow.
+These lists stay separate from Topic Ideas when accepting, declining or reviving an
+idea. If automatic acceptance is
 on, ideas arrive in Accepted. If automatic queueing is also on, they are marked Queued.
 You can enable queueing alone and accept ideas manually; the next monitor check queues
 those accepted ideas, using the size saved when accepting the idea (Small by default).

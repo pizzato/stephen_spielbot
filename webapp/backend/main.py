@@ -10400,6 +10400,16 @@ def news_status(style_name: str = Query("")) -> dict:
     return news_monitor.status(gapp.load_config(), style_name)
 
 
+@api.get("/api/news/ideas")
+def news_ideas(style_name: str = Query("")) -> dict:
+    """The News tab reads its own saved ideas without inventing topic ideas."""
+    cfg = gapp.load_config()
+    names = set(news_monitor._styles(cfg, style_name))
+    suggestions = [s for s in _visible_suggestions(yt.load_suggestions())
+                   if s.get("source") == "news" and s.get("style_name") in names]
+    return {"suggestions": suggestions, "cached": True}
+
+
 class NewsCheckBody(BaseModel):
     style_name: str = ""
 
@@ -10543,7 +10553,9 @@ def _is_suggestion_dismissed(suggestion: dict, dismissed: dict) -> bool:
     if suggestion.get("source") == "news":
         return bool(sid and sid in dismissed)
     title = _suggestion_key(str(suggestion.get("title") or suggestion.get("final_title") or ""))
-    return bool((sid and sid in dismissed) or (title and title in dismissed))
+    title_record = dismissed.get(title)
+    is_news_title = isinstance(title_record, dict) and title_record.get("source") == "news"
+    return bool((sid and sid in dismissed) or (title and title in dismissed and not is_news_title))
 
 
 def _visible_suggestions(suggestions: list[dict]) -> list[dict]:
@@ -10815,10 +10827,10 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
     if not g and not refresh:
         try:
             cached = [s for s in _visible_suggestions(yt.load_suggestions())
-                      if _idea_style_key(s, default_name) in eligible or s.get("source") == "news"]
+                      if _idea_style_key(s, default_name) in eligible and s.get("source") != "news"]
         except Exception:
             cached = []
-        if cached or news_monitor.enabled(cfg):
+        if cached:
             return {"suggestions": cached, "cached": True, "style_name": ALL_STYLES}
 
     discarded = _discarded_idea_titles(cfg)
@@ -10851,8 +10863,8 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
     others, combined = [], merged
     try:
         all_cached = yt.load_suggestions()
-        others = [s for s in all_cached if _idea_style_key(s, default_name) not in eligible]
-        existing = [s for s in all_cached if _idea_style_key(s, default_name) in eligible]
+        others = [s for s in all_cached if _idea_style_key(s, default_name) not in eligible or s.get("source") == "news"]
+        existing = [s for s in all_cached if _idea_style_key(s, default_name) in eligible and s.get("source") != "news"]
         combined = _merge_suggestions(existing, merged)
     except Exception:
         others, combined = [], merged
@@ -10860,7 +10872,7 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
         yt.save_suggestions(others + combined)
     except Exception:
         pass
-    return {"suggestions": _visible_suggestions(combined + [s for s in others if s.get("source") == "news"]),
+    return {"suggestions": _visible_suggestions(combined),
             "cached": False, "style_name": ALL_STYLES}
 
 
@@ -10888,8 +10900,8 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
         except Exception:
             cached = []
         cached_for_style = [s for s in _visible_suggestions(cached)
-                            if _idea_style_key(s, default_name) == target]
-        if cached_for_style or (ss.get("news_monitor") or {}).get("enabled"):
+                            if _idea_style_key(s, default_name) == target and s.get("source") != "news"]
+        if cached_for_style:
             return {"suggestions": cached_for_style, "cached": True, "style_name": target}
 
     with _track_op("Generating suggestions", g or target):
@@ -10925,8 +10937,8 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
     others, combined = [], ideas
     try:
         all_cached = yt.load_suggestions()
-        others = [s for s in all_cached if _idea_style_key(s, default_name) != target]
-        existing = [s for s in all_cached if _idea_style_key(s, default_name) == target]
+        others = [s for s in all_cached if _idea_style_key(s, default_name) != target or s.get("source") == "news"]
+        existing = [s for s in all_cached if _idea_style_key(s, default_name) == target and s.get("source") != "news"]
         combined = _merge_suggestions(existing, ideas)
     except Exception:
         others, combined = [], ideas
@@ -10966,7 +10978,7 @@ def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
                               style_name=original.get("style_name", ""))
     if body.size:
         dismiss_record["size"] = body.size
-    dismiss_keys = [k for k in (key, title) if k]
+    dismiss_keys = [k for k in ((key,) if original.get("source") == "news" else (key, title)) if k]
     if dismiss_keys:
         for dismiss_key in dismiss_keys:
             dismissed[dismiss_key] = {

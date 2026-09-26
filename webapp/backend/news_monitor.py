@@ -47,9 +47,12 @@ def status(cfg, style_name="__all__"):
         saved = state.get(name, {})
         rows.append({"style_name": name, **monitor,
                      **{k: saved.get(k) for k in (
-                         "last_checked", "last_success", "last_error", "ideas_added")}})
+                         "last_checked", "last_success", "last_error", "last_query",
+                         "posts_fetched", "posts_new", "ideas_added", "last_outcome")}})
     return {"configured": bool((cfg.get("news") or {}).get("x_bearer_token")
-                                or os.environ.get("X_BEARER_TOKEN")), "styles": rows}
+                                or os.environ.get("X_BEARER_TOKEN")),
+            "background_enabled": not bool(os.environ.get("SPIELBOT_NO_BACKGROUND")),
+            "styles": rows}
 
 
 def enabled(cfg):
@@ -127,18 +130,22 @@ def check(cfg, style_name="__all__", *, force=False):
                     continue
                 saved = state.setdefault(name, {})
                 now = time.time()
-                if not force and now - saved.get("last_checked", 0) < monitor["interval_minutes"] * 60:
+                if (not force and saved.get("last_query") == monitor["query"]
+                        and now - saved.get("last_checked", 0) < monitor["interval_minutes"] * 60):
                     continue
-                saved.update(last_checked=now, ideas_added=0)
+                saved.update(last_checked=now, last_query=monitor["query"],
+                             posts_fetched=None, posts_new=None, ideas_added=0, last_outcome="")
                 _save_state(state)  # Failed calls are throttled, including across restarts.
                 try:
                     _auto_queue(cfg, name, monitor)
                     cursor = saved.get("since_id") if saved.get("query") == monitor["query"] else None
                     fetched = news.fetch_recent_posts(cfg, monitor["query"], since_id=cursor)
+                    saved["posts_fetched"] = len(fetched["posts"])
                     seen = set(saved.get("seen_posts", []))
                     articles = set(saved.get("seen_articles", []))
                     posts = [p for p in fetched["posts"] if p["id"] not in seen
                              and not articles.intersection(p.get("article_urls", []))]
+                    saved["posts_new"] = len(posts)
                     existing = yt.load_suggestions()
                     previous = [s["title"] for s in existing if s.get("style_name") == name]
                     generated = news.generate_news_ideas(
@@ -167,6 +174,10 @@ def check(cfg, style_name="__all__", *, force=False):
                             added += 1
                         yt.save_suggestions(ideas)
                         saved["ideas_added"] = added
+                    saved["last_outcome"] = (
+                        "ideas_added" if added else "no_posts" if not fetched["posts"]
+                        else "no_new_posts" if not posts else "no_ideas" if not generated
+                        else "duplicates")
                     # Only commit cursors after the corresponding ideas reached disk.
                     saved.update(query=monitor["query"], since_id=fetched.get("newest_id") or cursor,
                                  last_success=now, last_error="",
@@ -178,6 +189,7 @@ def check(cfg, style_name="__all__", *, force=False):
                     # Provider exceptions are deliberately safe; arbitrary LLM/IO errors
                     # can contain credentials or source content and never reach the UI.
                     saved["last_error"] = str(exc) if isinstance(exc, news.NewsError) else "News check failed; check the provider configuration and try again."
+                    saved["last_outcome"] = "error"
                 _save_state(state)
             return {**status(cfg, style_name), "ideas_added": total}
         finally:
