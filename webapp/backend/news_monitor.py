@@ -49,8 +49,7 @@ def status(cfg, style_name="__all__"):
                      **{k: saved.get(k) for k in (
                          "last_checked", "last_success", "last_error", "last_query",
                          "posts_fetched", "posts_new", "ideas_added", "last_outcome")}})
-    return {"configured": bool((cfg.get("news") or {}).get("x_bearer_token")
-                                or os.environ.get("X_BEARER_TOKEN")),
+    return {**news.search_connection(cfg),
             "background_enabled": not bool(os.environ.get("SPIELBOT_NO_BACKGROUND")),
             "styles": rows}
 

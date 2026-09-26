@@ -3,10 +3,14 @@ import json
 import math
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
+import requests
+
+from pipeline import x as xt
 from pipeline.llm import _chat_complete, style_suggestion_context
 
 
@@ -51,17 +55,111 @@ def _http_url(value) -> str:
     return ""
 
 
+def search_connection(cfg: dict) -> dict:
+    """Describe locally available search auth without API calls or token refresh."""
+    news_cfg = cfg.get("news") or {}
+    selected = str(news_cfg.get("x_account") or "").strip()
+    accounts = {str(a["id"]): a for a in (cfg.get("x_accounts") or [])
+                if isinstance(a, dict) and a.get("id")}
+    result = {"configured": False, "auth_source": "", "account": "",
+              "account_name": "", "connection_error": ""}
+    if not selected and (str(news_cfg.get("x_bearer_token") or "").strip()
+                         or os.environ.get("X_BEARER_TOKEN", "").strip()):
+        return {**result, "configured": True, "auth_source": "bearer"}
+    if not selected:
+        if len(accounts) > 1:
+            return {**result, "connection_error": "Choose an X account for news search in Settings → Channels → X."}
+        selected = next(iter(accounts), "")
+    if not selected:
+        return {**result, "connection_error":
+                "Connect an X account in Settings → Channels → X, or set an X search bearer token."}
+    result.update(auth_source="account", account=selected,
+                  account_name=str((accounts.get(selected) or {}).get("name") or ""))
+    if selected not in accounts:
+        return {**result, "connection_error":
+                "The X account selected for news is no longer connected. Choose or reconnect it in Settings → Channels → X."}
+    token = xt._load_token(selected)
+    valid = False
+    if isinstance(token, dict):
+        if token.get("auth") == "oauth1":
+            valid = all(token.get(key) for key in ("api_key", "api_secret", "access_token", "access_secret"))
+        elif token.get("access_token"):
+            try:
+                current = float(token.get("expires_at", 0)) > time.time()
+            except (TypeError, ValueError):
+                current = False
+            valid = current or bool(token.get("refresh_token") and cfg.get("x_client_id"))
+    if not valid:
+        result["connection_error"] = "Reconnect the X account used for news in Settings → Channels → X."
+    result["configured"] = bool(valid)
+    return result
+
+
+def _search_payload(cfg: dict, connection: dict, params: dict) -> dict:
+    """Read a bounded response using the connected account or explicit bearer."""
+    try:
+        if connection["auth_source"] == "account":
+            try:
+                auth = xt._account_auth(str(cfg.get("x_client_id") or ""),
+                                        str(cfg.get("x_client_secret") or ""),
+                                        account=connection["account"])
+            except Exception:
+                auth = None
+            if not auth:
+                raise NewsError("Reconnect the X account used for news in Settings → Channels → X.")
+            with xt._xreq("GET", _SEARCH_URL, auth, params=params,
+                          headers={"Accept": "application/json"}, timeout=30,
+                          stream=True, allow_redirects=False) as response:
+                response.raise_for_status()
+                if response.status_code != 200:
+                    raise NewsError("X news search returned an unexpected response; retry later.")
+                chunks, size = [], 0
+                for chunk in response.iter_content(chunk_size=65536):
+                    size += len(chunk)
+                    if size > 2_000_000:
+                        raise ValueError("oversized response")
+                    chunks.append(chunk)
+                raw = b"".join(chunks)
+        else:
+            token = str((cfg.get("news") or {}).get("x_bearer_token") or "").strip()
+            token = token or os.environ.get("X_BEARER_TOKEN", "").strip()
+            req = urllib.request.Request(
+                f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=30) as response:
+                raw = response.read(2_000_001)
+            if len(raw) > 2_000_000:
+                raise ValueError("oversized response")
+        return json.loads(raw)
+    except (urllib.error.HTTPError, requests.HTTPError) as exc:
+        code = (exc.code if isinstance(exc, urllib.error.HTTPError)
+                else getattr(exc.response, "status_code", None))
+        hints = {
+            400: "Check the style's X search query.",
+            401: ("Reconnect the X account used for news in Settings → Channels → X."
+                  if connection["auth_source"] == "account" else "Check the X bearer token in Settings."),
+            403: "Check that the X developer app has recent-search access.",
+            429: "X's rate or usage limit was reached; retry later.",
+        }
+        hint = hints.get(code, "X could not complete the search; retry later.")
+        status = f" (HTTP {code})" if code is not None else ""
+        raise NewsError(f"X news search failed{status}. {hint}") from None
+    except (urllib.error.URLError, OSError, requests.RequestException):
+        raise NewsError("Could not connect to X news search; check the connection and retry.") from None
+    except (ValueError, UnicodeError):
+        raise NewsError("X news search returned an invalid response.") from None
+
+
 def fetch_recent_posts(cfg: dict, query: str, since_id: str | None = None) -> dict:
     """Read at most 50 recent posts in one request, preserving source metadata.
 
     X recent search covers the last seven days. Callers retain ``newest_id``
     only after processing succeeds; this function never writes monitor state.
     """
-    news_cfg = cfg.get("news") or {}
-    token = str(news_cfg.get("x_bearer_token") or "").strip()
-    token = token or os.environ.get("X_BEARER_TOKEN", "").strip()
-    if not token:
-        raise NewsError("Set the X bearer token in Settings or X_BEARER_TOKEN to monitor news.")
+    connection = search_connection(cfg)
+    if not connection["configured"]:
+        raise NewsError(connection["connection_error"])
     query = str(query or "").strip()
     if not query or len(query) > 512:
         raise NewsError("An X news search query must contain 1–512 characters.")
@@ -77,29 +175,7 @@ def fetch_recent_posts(cfg: dict, query: str, since_id: str | None = None) -> di
         if not re.fullmatch(r"[0-9]+", str(since_id)):
             raise NewsError("The news monitor cursor must be an X post ID.")
         params["since_id"] = str(since_id)
-    req = urllib.request.Request(
-        f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            raw = response.read(2_000_001)
-        if len(raw) > 2_000_000:
-            raise ValueError("oversized response")
-        payload = json.loads(raw)
-    except urllib.error.HTTPError as exc:
-        hints = {
-            400: "Check the style's X search query.",
-            401: "Check the X bearer token in Settings.",
-            403: "Check that the X developer app has recent-search access.",
-            429: "X's rate or usage limit was reached; retry later.",
-        }
-        hint = hints.get(exc.code, "X could not complete the search; retry later.")
-        raise NewsError(f"X news search failed (HTTP {exc.code}). {hint}") from None
-    except (urllib.error.URLError, OSError):
-        raise NewsError("Could not connect to X news search; check the connection and retry.") from None
-    except (ValueError, UnicodeError):
-        raise NewsError("X news search returned an invalid response.") from None
+    payload = _search_payload(cfg, connection, params)
     if not isinstance(payload, dict) or (payload.get("errors") and not payload.get("data")):
         raise NewsError("X news search returned an error; check API access and the search query.")
     rows = payload.get("data", [])

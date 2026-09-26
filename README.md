@@ -42,7 +42,8 @@ Around the pipeline, the web app also handles the full channel workflow: a rende
 queue with automation — global or per style, unattended in any format, music videos
 included, their song written, sung and re-voiced before the pictures are made —
 AI-suggested video ideas, optional per-style [X news monitoring](docs/manual/ideas.md#news-monitor)
-in a dedicated News tab with source-backed ideas, people appearance references and unattended news-to-video
+in a dedicated News tab using a connected X account or an optional search bearer token,
+with source-backed ideas, people appearance references and unattended news-to-video
 or news-to-song creation, per-scene editing with image
 inpainting, clip trimming, per-scene review marks (to be reviewed / to work on /
 approved) and version history, opening titles and end credits
