@@ -306,7 +306,7 @@ class H3ReferenceWorkflowTests(unittest.TestCase):
         # hard-codes 1.0 leaves nothing to turn down.
         eng, wf = self._generate(engine_key="minimax-h3-ref-turbo-lx2v")
         lora = next(n for n in wf.values() if n["class_type"] == "MiniMaxH3TurboLoRA")
-        self.assertEqual(lora["inputs"]["strength"], 1.0)
+        self.assertEqual(lora["inputs"]["strength"], 0.6)
 
         with mock.patch.dict(engines.VIDEO_ENGINES["minimax-h3-ref-turbo-lx2v"],
                              {"lora_strength": 0.7}):

@@ -598,17 +598,16 @@ medium shot; no camera movement" swing just the same, so this is the model's own
 motion prior rather than prompt following.
 
 Each turbo engine therefore carries a `lora_strength` (`pipeline/engines.py`),
-applied to the `MiniMaxH3TurboLoRA` node. It defaults to **1.0** — the strength
-the distill was published at — and lowering it trades that baked-in motion prior
-back. One 4.79 s sung scene at one seed, 704×1280, same references and pinned
+applied to the `MiniMaxH3TurboLoRA` node. `ref-turbo` stays at **1.0**, the
+strength its distill was published at; `ref-turbo-lx2v` renders at **0.6**. Lowering it trades that baked-in motion prior back. One 4.79 s sung scene at one seed, 704×1280, same references and pinned
 track throughout:
 
 | `lora_strength` | Peak excursion (2 s) | Edge energy | Wall clock |
 |---|---|---|---|
-| 1.0 (default) | −45.3% | 3.25 | 270 s |
+| 1.0 (as published) | −45.3% | 3.25 | 270 s |
 | 0.85 | −25.0% | 3.57 | 258 s |
 | 0.7 | −16.1% | 3.63 | 258 s |
-| 0.6 | −10.9% | 3.65 | 256 s |
+| **0.6 (`ref-turbo-lx2v` default)** | −10.9% | 3.65 | 256 s |
 | 0.5 | −9.9% | 3.65 | 255 s |
 | 0.25 | −8.9% | 3.74 | 256 s |
 
@@ -632,10 +631,16 @@ the cause either: `BasicScheduler(simple)` at 4 steps emits
 `[1.0, 0.973, 0.9231, 0.8, 0.0]`, which is exactly the grid LightX2V distilled
 this LoRA against (NFE 4, video shift 12, audio shift 3).
 
-The default is unchanged at 1.0, because this is one sung scene at one seed and
-because dialogue takes — what these engines were chosen for — measured **zero**
-drift on the 14 s A/B above and so have nothing to gain from a weaker LoRA. Set
-it per engine when a film's shots need to hold their framing.
+`ref-turbo-lx2v` ships at 0.6, where the floor is reached. Re-rendered on
+2026-09-23 against the same scene and seed, 1.0 measured −50.0% and 0.6 measured
+−10.9% again, and the 0.6 take held its framing, face and wardrobe by eye. Dialogue
+takes measured zero drift at 1.0, so they gain nothing from 0.6, and dialogue at 0.6
+has not been measured. `ref-turbo` keeps 1.0, since it is opt-in and was not
+re-measured.
+
+LightX2V's later `ref2v_turbo_8step_v1.0_768p` LoRA was tried on the same scene
+and rejected: its −14.6% drift is no better than 0.6, it takes 75% longer (8 steps),
+and at 9:16 it ghosts — a translucent double of the singer in most frames.
 
 !!! warning "w4a8 needs ComfyUI ≥ 0.31.0 on every worker"
     Below that version the checkpoint does not error — it renders **black
