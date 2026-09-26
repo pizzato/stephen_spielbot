@@ -19,13 +19,13 @@ replies, analytics) requires a paid tier — see [Limits](#limits).
 ## Step 2 — Enter the client credentials
 
 1. Copy the app's **OAuth 2.0 Client ID**
-2. In Stephen Spielbot: **Settings** → X section → paste it into **Client ID**
+2. In Stephen Spielbot: **Settings → Channels → X** → paste it into **Client ID**
 3. **Client Secret** is only needed if you created a *confidential* client —
    leave it blank for a Native App
 
 ## Step 3 — Connect an account
 
-1. In **Settings**, click **Connect** next to the X account slot
+1. Save settings, then click **Connect X account** under **Settings → Channels → X**
 2. A browser window opens on x.com — authorize the app while logged in to the
    account you want to post from
 3. The local callback catches the redirect and stores the token at
@@ -41,12 +41,25 @@ also works and uses the classic v1.1 media upload.
 
 ## News search
 
-To monitor topics independently of publishing, enter an X API bearer token with
-recent-search access in **Settings → Channels → X news search**, then enable
-**News monitoring** for each chosen style. A connected publishing account by itself
-does not configure news search. See the [monitor settings](manual/settings.md#news-monitoring)
-and [AI ideas → News](manual/ideas.md#news-monitor) for topic queries, source review and
-unattended creation.
+News monitoring can reuse the account connected above. Configure its search account
+in **Settings → Channels → X**, alongside the app credentials and publishing
+accounts. OAuth 2.0 tokens refresh automatically using the saved refresh token;
+OAuth 1.0a accounts use their existing keys. Client ID and Client Secret alone are not
+enough: complete **Connect X account** before searching.
+
+Select an account under **News search account** to use it for search. With
+**Automatic** selected, a saved standalone **X search bearer token (optional)**
+(or `X_BEARER_TOKEN`) is used first; otherwise, the sole connected account is used
+automatically. If several accounts are connected,
+choose one for search. This choice does not change any style's publishing destination.
+The bearer field remains available as an optional alternative; you do not need to
+paste an expiring OAuth 2.0 access token there.
+
+The X app needs recent-search endpoint access with either method. Enable **News
+monitoring** for each chosen style, then open **AI ideas → News**. See the
+[monitor settings](manual/settings.md#news-monitoring) and
+[News tab](manual/ideas.md#news-monitor) for topic queries, source review and unattended
+creation.
 
 ## Limits
 

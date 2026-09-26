@@ -66,13 +66,17 @@ previous query remain labelled until the next check.
 
 **Check news now** checks enabled monitors immediately. Scheduled checks continue
 while the backend is running; servers with background jobs disabled show **Manual
-checks only**. A missing search token is shown explicitly and disables the check
-button. A failed check shows the provider error instead of reporting zero ideas as a
-successful check.
+checks only**. Missing search credentials or an account-selection requirement are
+shown explicitly and disable the check button. A failed check shows the provider
+error instead of reporting zero ideas as a successful check.
 
 Enable monitoring, set the query and choose automation in
-[Settings → Styles → News monitoring](settings.md#news-monitoring). The shared X search
-bearer token belongs in [Settings → Channels](settings.md#x-news-search).
+[Settings → Styles → News monitoring](settings.md#news-monitoring). Choose a connected
+X account for search, or provide an optional standalone bearer token, in
+[Settings → Channels → X](settings.md#x-news-search). A sole connected account is used
+automatically when no bearer token is saved. Connecting with your Client ID and
+Client Secret supplies renewable account credentials; the X app still needs access
+to recent search.
 
 News ideas carry a **From X news** label, a summary, links to the source posts and
 linked articles, and the named people involved. These links are evidence for the idea;

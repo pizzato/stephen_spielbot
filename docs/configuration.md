@@ -72,7 +72,8 @@ by default; configure them in [Settings → Styles](manual/settings.md#news-moni
 
 ```yaml
 news:
-  x_bearer_token: ""            # set privately in Settings → Channels
+  x_account: ""                # optional connected X account ID for search
+  x_bearer_token: ""            # optional standalone token in Settings → Channels → X
 styles:
   - name: News Songs
     news_monitor:
@@ -87,8 +88,21 @@ styles:
       auto_format: song
 ```
 
-The bearer token needs X recent-search access. It is stored privately and redacted in
-API responses. The scheduler runs in the backend; disabled styles are skipped.
+Configure search alongside publishing in [Settings → Channels → X](manual/settings.md#x).
+An explicit `news.x_account` selects that connected account for search. Otherwise, a
+saved `news.x_bearer_token` (or `X_BEARER_TOKEN`) takes precedence; with neither set,
+the sole connected X account is used automatically. With multiple accounts, select
+one for search. This selection does not change any style's publishing account.
+
+Connected OAuth 2.0 accounts reuse their saved access token and refresh it with the
+saved refresh token when needed; OAuth 1.0a accounts use their existing keys. Client
+ID and Client Secret alone are not an account connection: use **Connect X account**
+first. You do not need
+to copy an expiring access token into the bearer field. The X app must have access
+to recent search whichever authentication method is used. Stored bearer tokens are
+private and redacted in API responses.
+
+The scheduler runs in the backend; disabled styles are skipped.
 Automatic queueing uses the idea's saved size preset, defaulting to Small. Rendering without intervention also
 needs `automation.auto_start_job` and `automation.auto_approve_script`, plus `auto_song`
 and `auto_song_approve` for music videos. The Styles panel's **Enable unattended news

@@ -331,7 +331,7 @@ pipeline flags affect other queued films in this style too, and descendants inhe
 them. **Save settings** applies the changes. Publishing continues to follow the
 separate publishing settings.
 
-Add the shared search credential under [Channels → X news search](#x-news-search).
+Choose the shared search account or optional bearer token under [Channels → X](#x-news-search).
 Check status, review source links and use **Check news now** in [AI ideas → News](ideas.md#news-monitor).
 Monitoring runs only while the backend is running. A disabled monitor makes no checks.
 
@@ -425,8 +425,13 @@ Then connect channels via OAuth. Each connected channel has:
 
 ### X
 
-Two import modes: **API keys (no browser)** — key, secret, access token, access token
-secret — or **OAuth 2.0 tokens**. See [X setup](../x_setup.md).
+Publishing accounts and news search share this section. Enter the app's **Client ID**
+and, for a confidential client, **Client Secret**, save settings, then use
+**Connect X account** to authorize an account. The client credentials identify the
+app; the connection supplies the account tokens.
+
+Two import modes are also available: **API keys (no browser)** — key, secret, access
+token, access token secret — or **OAuth 2.0 tokens**. See [X setup](../x_setup.md).
 
 Per account: **default post text**, **post language**, **publishing cadence**, **community
 engagement prompt**, and **auto-respond**.
@@ -435,14 +440,26 @@ engagement prompt**, and **auto-respond**.
     Re-connecting maps orphaned styles back to their X account explicitly. It is opt-in —
     there is deliberately no silent fallback to some other account.
 
+#### X news search
+
+News monitors can use a connected X account. Choose it under **News search account**;
+this does not change the publishing account selected by any style. OAuth 2.0 access
+tokens refresh automatically using the saved refresh token, and OAuth 1.0a accounts
+use their existing keys. There is no need to copy an account's access token into a
+separate field. Imported OAuth 2.0 tokens need a refresh token to stay connected
+after expiry.
+
+The **X search bearer token (optional)** field is a standalone alternative. An
+explicitly selected account takes precedence. With **Automatic** selected, a saved
+bearer token (or `X_BEARER_TOKEN`) is used; otherwise the sole connected account is
+selected automatically. If several accounts are connected, choose one for search.
+Stored bearer tokens are redacted; leave the password box blank to keep the saved
+value.
+
+The X app still needs recent-search endpoint access. Save settings, then configure
+each style's [news monitor](#news-monitoring).
+
 ---
-
-### X news search
-
-**X search bearer token** is the shared credential for style news monitors. It needs X
-API recent-search access, independently of the account connection used for publishing.
-Stored tokens are redacted; leave the password box blank to keep the saved value. Save
-settings, then configure each style's [news monitor](#news-monitoring).
 
 ## Automation
 
