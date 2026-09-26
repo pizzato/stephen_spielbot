@@ -442,8 +442,10 @@ engagement prompt**, and **auto-respond**.
 
 #### X news search
 
-News monitors can use a connected X account. Choose it under **News search account**;
-this does not change the publishing account selected by any style. OAuth 2.0 access
+Choose a connected account under **X account for all news searches**. This is a
+global setting: every style uses it, including styles with no X publishing account
+or a different one. Each style still chooses its own query and monitoring settings.
+OAuth 2.0 access
 tokens refresh automatically using the saved refresh token, and OAuth 1.0a accounts
 use their existing keys. There is no need to copy an account's access token into a
 separate field. Imported OAuth 2.0 tokens need a refresh token to stay connected
