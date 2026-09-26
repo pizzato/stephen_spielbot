@@ -500,7 +500,7 @@ DEFAULT_CFG = {
     # mirror the default style back onto the flat keys (see _ensure_styles).
     "styles": [],
     "default_style": "",
-    "news": {"x_bearer_token": ""},
+    "news": {"x_bearer_token": "", "x_account": ""},
     "default_news_monitor": {},
 }
 
@@ -1763,6 +1763,8 @@ def merge_config_update(current: dict, update: dict) -> dict:
             token = val.get("x_bearer_token")
             if isinstance(token, str) and token.strip():
                 news["x_bearer_token"] = token.strip()
+            if isinstance(val.get("x_account"), str):
+                news["x_account"] = val["x_account"].strip()
             merged["news"] = news
             continue
         if key.endswith("_set"):

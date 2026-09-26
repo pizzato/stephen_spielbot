@@ -489,7 +489,12 @@ function IdeasArea({ area, go, meta }) {
             </Button>
           </div>
           {newsError && <Banner tone="danger">{newsError}</Banner>}
-          {newsStatus && !newsStatus.configured && <div className="mt-16"><Banner tone="warn">X news search is not connected. Add an X search bearer token in Settings → Channels to retrieve real posts.</Banner></div>}
+          {newsStatus && !newsStatus.configured && <div className="mt-16"><Banner tone="warn">{newsStatus.connection_error || 'Connect an X account in Settings → Channels → X to search for news.'}</Banner></div>}
+          {newsStatus?.configured && <p className="muted" style={{ fontSize: 13 }}>
+            {newsStatus.auth_source === 'account'
+              ? `Searching with ${newsStatus.account_name ? `@${newsStatus.account_name}` : newsStatus.account}.`
+              : 'Searching with the configured X bearer token.'}
+          </p>}
           {newsStatus?.background_enabled === false && <p className="muted" style={{ fontSize: 13 }}>Manual checks only on this server. Scheduled monitoring is disabled.</p>}
           {newsStatus?.styles?.map((monitor) => (
             <div key={monitor.style_name} className="stack gap-8 mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>

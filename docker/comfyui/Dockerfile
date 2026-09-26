@@ -204,17 +204,15 @@ RUN git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
 # serve a chained render; using it is still per style (h3_chain_scenes, off by
 # default), because chaining changes the take, not just its length.
 #
-# PINNED, and deliberately: it monkey-patches ComfyUI's H3 internals
-# (comfy.ldm.minimax.model.PackedLayout.__init__ and extra_conds) to lift a
-# restriction on interior keyframe anchors. The patch self-tests against the
-# installed ComfyUI and refuses if anything moved, and stands down if another
-# pack already owns that patch — so it fails loudly rather than silently
-# rendering an unchained clip. Bumping ComfyUI still wants a chained render to
-# prove the patch survived. Set empty to leave the nodes out entirely.
+# PINNED. Pack 0.6.2 (2026-09-06) matches ComfyUI >= 0.34, which places
+# interior keyframe anchors itself. Older pins patched PackedLayout and pass
+# frame_count, which 0.34 removed — the audio-track node then refuses every
+# singing clip. The pack still checks the layout once before the first chain
+# and refuses if the arithmetic moved. Set empty to leave the nodes out.
 #
 # GPL-3.0, unlike everything else in this image — relevant when redistributing
 # the built image.
-ARG H3_MOTION_CONTEXT_REF=c140ae99b8c38f782ebd8564c267b42aacade6a4
+ARG H3_MOTION_CONTEXT_REF=5335715abe54c1a9bfbe3494da29aae3e8635ce3
 RUN if [ -n "${H3_MOTION_CONTEXT_REF}" ]; then \
         git clone https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context.git \
             custom_nodes/ComfyUI-H3-Motion-Context \
@@ -261,10 +259,12 @@ RUN if [ -n "${FLASHVSR_NODES_REF}" ]; then \
         echo "FlashVSR nodes not installed (FLASHVSR_NODES_REF empty)"; \
     fi
 
-# Audio-driven H3 (this repo's addition, proven 2026-08-14): pin a whole audio
-# track across a clip so the video is generated to match it. Appended into the
-# Motion Context pack because it reuses its layout/payload patches and encode
-# path — a standalone package can't import a hyphenated sibling reliably.
+# Audio-driven H3 (this repo's addition): pin a whole audio track across a
+# clip so the video is generated to match it. Appended into the Motion Context
+# pack because it reuses that pack's encode helpers and layout check — a
+# standalone package can't import a hyphenated sibling reliably. The pin above
+# must be a 0.4+ pack: this node calls _ensure_layout_ok, which replaced the
+# old layout patch.
 COPY docker/comfyui/h3_audio_track/append_to_motion_context.py /tmp/h3_audio_track.py
 RUN if [ -d custom_nodes/ComfyUI-H3-Motion-Context ]; then \
         cat /tmp/h3_audio_track.py >> custom_nodes/ComfyUI-H3-Motion-Context/nodes.py; \
