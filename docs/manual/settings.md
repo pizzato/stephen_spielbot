@@ -532,7 +532,8 @@ way round from every other film — the song comes first and the pictures follow
   a bad song caught after the render costs a worker slot
 - **Singing voice** — the [voice](#voices) automation asks for, described to the music
   model by gender, age and tone. Left on *the model's own vocalist*, the film's cast
-  lead singer decides — the character drawn from the style's
+  lead singer decides — the main available news character for news music videos,
+  otherwise a character drawn from the style's
   [catalogue](../characters.md) whose sex, age and background the track is sung to
   match (a style with no catalogue lets the songwriter define the vocalist)
 - **Re-voice the finished track as that voice** — runs the voice conversion on the

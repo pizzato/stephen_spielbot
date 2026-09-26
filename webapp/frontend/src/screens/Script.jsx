@@ -1557,7 +1557,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               </Field>
               {(song.singers || []).length > 0 && (
                 <Field label="Lead singer"
-                  hint="The character the story shows singing, cast by name from the style catalogue — picking one fills the Vocalist line in from their card. Leave it on the invented performer to describe the singer freely below. A Vocalist (or Singing voice) of the other sex to the character drops them: the story then invents a performer to match the voice.">
+                  hint="The character shown singing. News videos prefer the main available news character; other films draw from the style catalogue. Picking one fills the Vocalist line. News subjects keep their identity when the audio voice changes. For catalogue characters, a voice of the other sex makes the story invent a matching performer.">
                   <select className="select" style={{ maxWidth: 340 }}
                     value={(songDraft ?? song).singer || ''}
                     onChange={(e) => {

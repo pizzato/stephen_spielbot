@@ -248,7 +248,7 @@ def generate_news_ideas(posts: list[dict], cfg: dict, style: dict,
         "lack enough substantive detail to make a video without reading external pages. "
         "Return only a JSON array of objects with title, reason, summary, directions, interestingness "
         "(0 to 1), source_ids (IDs copied from supplied posts), and people "
-        "(objects with name and description of their role in this story). "
+        "(objects with name and description of their role in this story, principal subject first). "
         "Each idea must cite at least one supplied source ID. Name a person only when their "
         "full name appears in the cited post text; never infer the subject from the author. "
         "Keep reason as a short pitch. Make directions a complete, self-contained production brief: "
@@ -261,7 +261,9 @@ def generate_news_ideas(posts: list[dict], cfg: dict, style: dict,
         "details or explicitly mark them unknown. URLs are citations only. "
         "For music videos propose an original song premise and hook, while separating "
         "creative interpretation from the reported event; include the song's point of view, "
-        "verse/chorus progression and visual treatment in directions."
+        "verse/chorus progression and visual treatment in directions. When named news characters "
+        "are included, cast the principal news subject as the lead singer in the creative portrayal, "
+        "ahead of a style's usual catalogue performer."
     )
     user = (
         f"Propose at most {monitor['max_ideas']} new ideas for this style.\n"

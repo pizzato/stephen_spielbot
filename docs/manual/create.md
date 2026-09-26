@@ -45,6 +45,11 @@ appearance references are enabled, the app adds found photographs to this film's
 characters. Directions require symbolic or non-identifying visuals when photographs
 are unavailable, rather than asking the writer to fetch images or invent likenesses.
 
+For a music video, news characters are prepared before writing the song. The main
+available news character is cast as lead singer ahead of the style's recurring cast.
+For example, a news idea with Anthony Albanese as its main resolved character makes
+him the on-screen singer. The Song tab lets you choose another lead afterward.
+
 ## Length, Scenes and Resolution
 
 **Length** is a slider in minutes — for a music video it is how long the *song* runs, and
@@ -162,7 +167,9 @@ Music videos only. Where the film's song comes from:
 
 Music videos only. Who sings the film: the vocalist is described to the music model from
 this voice's gender, age and tone — matched by description, never cloned, because the music
-engines cannot be handed a voice. Left on *the model's own vocalist*, the song decides. You
+engines cannot be handed a voice. Left on **Automatically choose the singer**, news videos
+prefer their main available news character; other videos use the style's cast or let
+the songwriter define a vocalist when no cast is available. You
 can change it, and actually re-voice the finished track, in the
 [Song tab](script.md#song). With **I have the song** nothing is described to a music model
 — your song is already sung — so it is only the target for re-voicing it there.

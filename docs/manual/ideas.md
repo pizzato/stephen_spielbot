@@ -114,6 +114,14 @@ those accepted ideas, using the size saved when accepting the idea (Small by def
 The source context and appearance setting travel with the idea through both Queue and
 Create. A music-video style uses the news as context for its song.
 
+For news music videos, the app prepares the news characters **before** writing the
+song. The first available character in the brief's principal-subject order becomes
+the lead singer, ahead of the style's recurring performers. That choice and its
+reference photograph follow the song through story drafting, redrafts and scene
+division, including unattended creation. Other news people can appear as supporting
+cast. If no news character is available, the usual style-catalogue selection applies.
+You can change the lead in the [Song tab](script.md#song).
+
 ## The Accepted list
 
 Split into **Not created yet** and **Acted on**, so you always know what's still waiting.

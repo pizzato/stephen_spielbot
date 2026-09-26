@@ -23,6 +23,13 @@ the idea and carried through manual Queue/Create and automatic queueing. Referen
 are sought when the film is created and kept with its per-script characters, so a
 news subject does not become part of every future film's recurring cast.
 
+For a news music video, these characters are prepared before the song is written.
+The main available news subject becomes the lead singer instead of the style's usual
+catalogue performer. The Song tab lists the film's news characters alongside the
+catalogue, so you can choose another subject. The selected character and portrait
+stay attached through story drafts and scene division; they remain local to this film.
+If no news character is available, the normal catalogue fallback still applies.
+
 Lookup matches the exact named person to a human record in Wikidata and retrieves its
 Wikimedia Commons portrait, keeping the source and license provenance. When several
 people share the name, the person's role in the story helps disambiguate the match;

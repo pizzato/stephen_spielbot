@@ -117,7 +117,11 @@ The pipeline changes in three places:
   music **caption** (genre, tempo, mood, arrangement) that becomes the film's music
   description. Both music engines sing lyrics natively; the caption reads best structured,
   and for song films it must *not* say "instrumental".
-- **One lead singer fronts it.** Before the song is written, a **lead singer is cast
+- **One lead singer fronts it.** News music videos prepare the film's news characters
+  first and cast the main available subject ahead of the style's recurring performers.
+  The selected news identity and portrait persist through the song, story, redrafts
+  and scene division. If none is available, the usual catalogue fallback applies.
+  Before an ordinary song is written, a **lead singer is cast
   from the style's [character catalogue](characters.md)** — a character the brief names
   wins, otherwise one is drawn at random so a channel's videos rotate through its cast —
   and their identity (sex, age, **background** — the character card's fields, plus their
@@ -132,7 +136,8 @@ The pipeline changes in three places:
   narrows the draw to characters of its sex, and the story (draft, redraft and divide
   alike) is written for whoever the track in use is sung as — the re-voicing, else the
   singing voice, else the Vocalist line. Change the Vocalist (or the voice) to the other
-  sex and the character cast at draft time is dropped rather than cast against the voice;
+  sex and a catalogue character cast at draft time is dropped rather than cast against the voice.
+  A selected news subject keeps their identity when the audio voice changes;
   the Song tab's **Lead singer** picker swaps in another character explicitly. Each video also dresses the singer in **one fresh outfit** chosen
   for that film — described consistently across its scenes, different film to film — so
   the catalogue portrait anchors the face, not an unchanging costume.
