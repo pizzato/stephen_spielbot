@@ -445,6 +445,10 @@ def divide_story(story: dict, n_scenes: int | None = None,
     video_style_note = _video_style_note(video_style_hint)
     avoid_note = _avoid_note(avoid_hint)
     character_note = _merge_character_note(_character_note(character_sheet), identified)
+    character_note += (
+        "\nThe approved chapter prose is the source of truth for the cast. "
+        "Do not restore people from an earlier topic, title or brief who no longer "
+        "appear in that prose.")
     language_note = _language_note(language)
     topic_ref = f'"{video_title}"' if video_title and video_title.strip() else f'"{title}"'
 

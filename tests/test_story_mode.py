@@ -176,6 +176,16 @@ class DivideStoryTests(unittest.TestCase):
         self.assertEqual(style_, "Story style")
         self.assertEqual(chars, [])
 
+    def test_cast_rule_reaches_each_chapter_without_dialogue_instructions(self):
+        fake = mock.Mock(side_effect=make_fake())
+        self._divide(12, fake, dialogue_note=None)
+        prompts = [c.args[2] for c in fake.call_args_list
+                   if c.args[4].startswith("divide scenes")]
+        self.assertEqual(len(prompts), 2)
+        for prompt in prompts:
+            self.assertIn("approved chapter prose is the source of truth for the cast", prompt)
+            self.assertIn("Do not restore people from an earlier topic, title or brief", prompt)
+
     def test_style_hint_override(self):
         _, _, style_, _ = self._divide(6, make_fake(), style_hint="Divide style")
         self.assertEqual(style_, "Divide style")

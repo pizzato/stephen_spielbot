@@ -2634,14 +2634,26 @@ def _read_story(wd: Path) -> dict:
 
 
 def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
-    """Fold edited chapter texts into the story dict in place (blank edits are
-    ignored so a partial payload can't wipe a chapter)."""
+    """Fold chapter edits in and reconcile the hidden cast with the prose.
+
+    Blank edits are ignored so a partial payload can't wipe a chapter.
+    """
     by_id = {c.get("chapter"): c for c in (story.get("chapters") or [])
              if isinstance(c, dict)}
     for edit in edits or []:
         target = by_id.get(edit.chapter)
         if target is not None and (edit.text or "").strip():
             target["text"] = edit.text.strip()
+    # The prose is editable but the original outline's cast is hidden. Do not
+    # keep feeding removed people to the divider (including older saved edits).
+    text = _story_prose(story)
+    story["characters"] = [c for c in (story.get("characters") or [])
+                           if isinstance(c, dict) and gapp._character_mentions(text, c)]
+
+
+def _story_prose(story: dict) -> str:
+    return "\n".join(str(c.get("text") or "") for c in (story.get("chapters") or [])
+                     if isinstance(c, dict))
 
 
 def _acted_scene_plan(body: GenerateScriptBody, ss: dict) -> tuple[int, float]:
@@ -2938,12 +2950,13 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    # The same brief-named subset the draft was given, so the scenes stage the
-    # story's own cast rather than the whole library (gapp._requested_characters).
+    # Cast the approved prose, not an old brief that may name removed people.
+    story_text = _story_prose(story)
     requested_chars = gapp._requested_characters(
-        cfg, ss["name"], user_topic, video_title, (ss.get("extra_instructions") or ""))
+        cfg, ss["name"], story_text)
     if (wd / "news_source.json").exists():
-        requested_chars += gapp._read_script_characters(wd)
+        requested_chars += [c for c in gapp._read_script_characters(wd)
+                            if gapp._character_mentions(story_text, c)]
     character_sheet = gapp._character_sheet(requested_chars) or None
     language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = video_title or user_topic.splitlines()[0][:80]
@@ -2963,6 +2976,10 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         except Exception:
             song_data = {}
         singer_char = _song_lead_singer(cfg, ss, song_data, wd)[0]
+        if singer_char is not None and not gapp._character_mentions(story_text, singer_char):
+            # A song's earlier selection cannot undo edits to the approved story.
+            song_data = {}
+            singer_char = None
         if singer_char is not None and singer_char not in requested_chars:
             requested_chars = [*requested_chars, singer_char]
             character_sheet = gapp._character_sheet(requested_chars) or None
@@ -3878,7 +3895,8 @@ def get_job_song(job_id: str) -> dict:
     track = wd / "background_music.wav"
     hist = music_history.history(wd)
     cfg = gapp.load_config()
-    style_name = gapp.style_settings(cfg, data.get("style_name") or "")["name"]
+    style_name = gapp.style_settings(
+        cfg, _read_create_brief(wd).get("style_name") or data.get("style_name") or "")["name"]
     news_cast = news_monitor.singer_candidates(wd)
     singers = [{"name": c["name"], "vocalist": _news_singer_descriptor(c, cfg)} for c in news_cast]
     singers += [{"name": str(c.get("name") or ""), "vocalist": gapp.singer_descriptor(c, cfg)}
@@ -4210,12 +4228,10 @@ def _do_story_redraft(job_id: str, body: StoryRedraftBody) -> dict:
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     user_topic = (brief.get("topic") or story.get("topic") or "").strip() or wd.name
     video_title = (brief.get("video_title") or story.get("video_title") or "").strip()
-    # Retelling the same story keeps the same cast rule: only the catalogue
-    # characters the brief named (gapp._requested_characters) — plus, for a
-    # song film, whoever is singing it now.
+    # Retell the current cast; a new instruction may explicitly add someone.
     fmt = (brief.get("format") or "narration").strip().lower()
     requested_chars = gapp._requested_characters(
-        cfg, ss["name"], user_topic, video_title, (ss.get("extra_instructions") or ""))
+        cfg, ss["name"], _story_prose(story), body.instruction)
     song_data: dict = {}
     if fmt == "song" and (wd / "song.json").exists():
         try:
@@ -4243,6 +4259,7 @@ def _do_story_redraft(job_id: str, body: StoryRedraftBody) -> dict:
         raise
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Story redraft failed: {str(e).splitlines()[0][:300]}")
+    _merge_story_edits(story, [])
     _story_path(wd).write_text(json.dumps(story, indent=2))
     if brief:
         brief["minutes"] = plan["minutes"]

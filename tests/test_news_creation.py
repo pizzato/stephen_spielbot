@@ -155,7 +155,9 @@ class NewsCreationTests(TempConfigCase):
             "image_url": "https://upload.wikimedia.org/person.png",
             "license": "CC BY 4.0", "attribution": "Test photographer", "credit": "",
         }
-        with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)), \
+        story = _fake_story(2)
+        story["chapters"][0]["text"] = "Anthony Albanese opens a railway station."
+        with mock.patch.object(backend.story_mode, "generate_story", return_value=story), \
                 mock.patch.object(news_people, "_identity", return_value={"id": "Q100"}), \
                 mock.patch.object(news_people, "_reference", return_value=reference), \
                 mock.patch.object(news_people, "_read_response", return_value=image_bytes.getvalue()):
@@ -269,12 +271,14 @@ class NewsCreationTests(TempConfigCase):
                 self.assertEqual(studio["singers"][0]["name"], "Anthony Albanese")
                 self.assertIn("Anthony Albanese", studio["singers"][0]["vocalist"])
 
-                with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)) as story:
+                prose = _fake_story(2)
+                prose["chapters"][0]["text"] = "Anthony Albanese sings at a railway station."
+                with mock.patch.object(backend.story_mode, "generate_story", return_value=prose) as story:
                     result = backend._do_story_generate(backend.GenerateScriptBody(
                         video_title=self.idea["title"], style_name="News", work_dir=str(wd), format="song", n_scenes=2))
                 self.assertIn("THE LEAD SINGER IS Anthony Albanese", story.call_args.kwargs["dialogue_note"])
                 self.assertIn("match this person's face", story.call_args.kwargs["character_sheet"])
-                with mock.patch.object(backend.story_mode, "redraft_story", return_value=_fake_story(2)) as redraft:
+                with mock.patch.object(backend.story_mode, "redraft_story", return_value=prose) as redraft:
                     backend._do_story_redraft(result["job_id"], backend.StoryRedraftBody(n_scenes=2))
                 self.assertIn("THE LEAD SINGER IS Anthony Albanese", redraft.call_args.kwargs["dialogue_note"])
                 scenes = _fake_scenes(2)
@@ -291,7 +295,9 @@ class NewsCreationTests(TempConfigCase):
 
     def test_headless_news_song_casts_subject_before_story_and_keeps_it_when_dividing(self):
         self._news_song_config()
-        with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)) as story, \
+        prose = _fake_story(2)
+        prose["chapters"][0]["text"] = "Anthony Albanese sings at a railway station."
+        with mock.patch.object(backend.story_mode, "generate_story", return_value=prose) as story, \
                 mock.patch.object(backend.story_mode, "divide_story",
                                    return_value=(_fake_scenes(2), "music", "style", [])) as divide, \
                 mock.patch.object(backend.story_mode, "write_song", side_effect=self._write_news_song) as song:
@@ -362,7 +368,9 @@ class NewsCreationTests(TempConfigCase):
 
     def test_headless_news_song_respects_saved_cast_before_lyrics_are_written(self):
         self._news_song_config()
-        with mock.patch.object(backend.story_mode, "generate_story", return_value=_fake_story(2)):
+        prose = _fake_story(2)
+        prose["chapters"][0]["text"] = "LuizPizzato sings about the new railway."
+        with mock.patch.object(backend.story_mode, "generate_story", return_value=prose):
             draft = backend._do_story_generate(backend.GenerateScriptBody(
                 video_title=self.idea["title"], style_name="News", idea_id=self.idea["id"], format="song", n_scenes=2))
         wd = Path(draft["work_dir"])

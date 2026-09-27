@@ -60,7 +60,11 @@ the format does to the render.
   arrangement). The Vocalist below is appended to this automatically when the track is
   sung, so leave the vocalist out of the Sound itself.
 - **Lead singer** — the news or catalogue character the story shows singing, cast by name
-  (shown when the film has news characters or the style has a usable cast). Picking a character fills the Vocalist
+  from the film's current style. **Refresh singers** picks up newly saved catalogue
+  characters without losing unsaved song edits. The choices also refresh when you open
+  the Song tab or return to the browser window. Eligible catalogue characters are enabled,
+  have a name and description, and belong to this style, a parent style, or the global pool.
+  Picking a character fills the Vocalist
   line in from their card; *An invented performer* leaves the story to invent one
   matching the Vocalist. A song is drafted with a singer already cast — one the brief
   names, else drawn at random from the style's cast, narrowed to the sex of the Singing
@@ -72,6 +76,8 @@ the format does to the render.
   film-local identity and photograph through story drafting, redrafts and scene
   division. Other news subjects remain selectable here. Without an available news
   character, the normal catalogue fallback applies.
+  After changing the singer, use **Draft the story →** to write the new performer into
+  the story; refreshing the choices alone does not change the story or existing scenes.
 - **Vocalist** — WHO sings, in one editable line: sex, age, background, voice quality
   (e.g. *"adult male vocalist, Australian"*). Filled at draft time from the lead singer,
   or by the songwriter itself when the style has no usable cast (see
@@ -152,7 +158,9 @@ editable box per chapter, each labelled with how many scenes it will become.
 - **Save story** keeps your edits and lets you come back later — the draft persists until
   you divide it.
 - **Divide into N scenes →** hands the story to the scene divider and moves you to
-  **Scenes**.
+  **Scenes**. Casting follows the current chapter text. Removing a character's name
+  and aliases from every chapter removes them from the saved story cast; the original
+  brief and earlier lead-singer selection do not add them back during division.
 - **Redraft the story…** rewrites the *whole* prose story. Its *tell it how* caret takes
   the changes to make — *the singer is a man*, *set it at night*, *end on the reunion* —
   and the retelling makes exactly those changes and keeps everything else; a plain click

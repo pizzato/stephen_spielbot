@@ -69,6 +69,7 @@ class CastRosterWiringTests(TempConfigCase):
                                           n_scenes=4, style_name="Hero")
         story = _fake_story(4)
         story["characters"] = story_characters
+        story["chapters"][0]["text"] = "Ash Delgado tattoos a rose."
         with mock.patch.object(backend.story_mode, "generate_story",
                                return_value=story):
             draft = backend._do_story_generate(body)

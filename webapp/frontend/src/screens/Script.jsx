@@ -79,7 +79,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // look versions is shown full-resolution.
   const [charLightbox, setCharLightbox] = useState(null)
   // Named voices (per-character voice picker) + the global character catalogue
-  // (their names are valid dialogue speakers too), loaded from config once.
+  // (their names are valid dialogue speakers too), refreshed when tabs change.
   const [voiceOpts, setVoiceOpts] = useState([])
   const [voiceMeta, setVoiceMeta] = useState({})
   const [globalCast, setGlobalCast] = useState([])
@@ -99,7 +99,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         .filter((x) => x.name))
       setCastStyles({ styles: cfg.styles || [], defaultStyle: cfg.default_style || '' })
     }).catch(() => {})
-  }, [])
+  }, [view, job?.job_id])
 
   // Does this job's style perform its SILENT scenes on H3 (h3_silent_scenes)?
   // Those scenes are then staged exactly like the acted ones — same fields,
@@ -143,6 +143,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     || (job?.scenes || []).some((s) => s.singing)
   const [songDraft, setSongDraft] = useState(null)   // {caption, lyrics} while editing
   const [songMsg, setSongMsg] = useState('')
+  const [singersBusy, setSingersBusy] = useState(false)
   const [songVoiceSel, setSongVoiceSel] = useState('')  // "Sing this as" voice
   // How many performed scenes the song splits into. The film runs the SONG's
   // length, so this is the only division there is — same "Scenes" control as
@@ -159,6 +160,26 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setSong(null); setSongDraft(null); setSongMsg(''); songStudioOpened.current = false
     if (job?.job_id) api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
   }, [job?.job_id])
+  // Refresh only the choices: returning from Settings must preserve unsaved
+  // lyrics, direction, vocalist and the user's explicit singer selection.
+  const refreshSingers = async () => {
+    setSingersBusy(true)
+    try {
+      const fresh = await api.getSong(job.job_id)
+      setSong((cur) => cur ? { ...cur, singers: fresh.singers || [] } : cur)
+    } catch (e) { setError(e.message) }
+    finally { setSingersBusy(false) }
+  }
+  useEffect(() => {
+    if (view !== 'song' || !job?.job_id) return
+    let alive = true
+    const reload = () => api.getSong(job.job_id)
+      .then((fresh) => { if (alive) setSong((cur) => cur ? { ...cur, singers: fresh.singers || [] } : cur) })
+      .catch(() => {})
+    reload()
+    window.addEventListener('focus', reload)
+    return () => { alive = false; window.removeEventListener('focus', reload) }
+  }, [view, job?.job_id])
   // A song-first job lands here BEFORE any story or scenes exist — open
   // straight onto the studio, once.
   useEffect(() => {
@@ -1555,25 +1576,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   value={(songDraft ?? song).caption}
                   onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
               </Field>
-              {(song.singers || []).length > 0 && (
-                <Field label="Lead singer"
-                  hint="The character shown singing. News videos prefer the main available news character; other films draw from the style catalogue. Picking one fills the Vocalist line. News subjects keep their identity when the audio voice changes. For catalogue characters, a voice of the other sex makes the story invent a matching performer.">
-                  <select className="select" style={{ maxWidth: 340 }}
-                    value={(songDraft ?? song).singer || ''}
-                    onChange={(e) => {
-                      const name = e.target.value
-                      const cur = songDraft ?? song
-                      const pick = (song.singers || []).find((c) => c.name === name)
-                      setSongDraft({ ...cur, singer: name,
-                                     vocalist: pick ? (pick.vocalist || cur.vocalist || '') : (cur.vocalist || '') })
-                    }}>
-                    <option value="">An invented performer, matching the Vocalist below</option>
-                    {(song.singers || []).map((c) => (
-                      <option key={c.name} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                </Field>
-              )}
+              <Field label="Lead singer"
+                hint="The character shown singing. Refresh to pick up new catalogue characters available to this style. Picking one fills the Vocalist line. News subjects keep their identity when the audio voice changes. For catalogue characters, a voice of the other sex makes the story invent a matching performer. Changing the singer applies when you draft the story again.">
+                <select className="select" style={{ maxWidth: 340 }}
+                  value={(songDraft ?? song).singer || ''}
+                  onChange={(e) => {
+                    const name = e.target.value
+                    const cur = songDraft ?? song
+                    const pick = (song.singers || []).find((c) => c.name === name)
+                    setSongDraft({ ...cur, singer: name,
+                                   vocalist: pick ? (pick.vocalist || cur.vocalist || '') : (cur.vocalist || '') })
+                  }}>
+                  <option value="">An invented performer, matching the Vocalist below</option>
+                  {(songDraft ?? song).singer && !(song.singers || []).some((c) => c.name === (songDraft ?? song).singer) && (
+                    <option value={(songDraft ?? song).singer}>{(songDraft ?? song).singer} (unavailable — choose another)</option>
+                  )}
+                  {(song.singers || []).map((c) => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+                <Button variant="ghost" icon="refresh" disabled={singersBusy}
+                  onClick={refreshSingers}>{singersBusy ? 'Refreshing…' : 'Refresh singers'}</Button>
+              </Field>
               <Field label="Vocalist"
                 hint="Who sings — sex, age, background, voice quality. Appended to the Sound description when the track is generated, so the voice matches the singer on camera, and the story casts a performer of this sex and age. Picking a Singing voice below overrides it.">
                 <input className="input"
