@@ -1563,6 +1563,16 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
     return output_path
 
 
+def copy_video_with_attribution(video_path: Path, output_path: Path, enabled: bool = True) -> Path:
+    """Copy the media streams while setting or clearing the app's credit tag."""
+    _run([
+        _FFMPEG, "-y", "-i", str(video_path), "-map", "0", "-c", "copy",
+        "-metadata", f"comment={_ATTRIBUTION_COMMENT if enabled else ''}",
+        str(output_path),
+    ])
+    return output_path
+
+
 def mix_background_music(
     video_path: Path,
     music_path: Path,
@@ -1571,6 +1581,7 @@ def mix_background_music(
     voice_volume: float = 1.0,
     ambient_path: Path | None = None,
     ambient_volume: float = 0.0,
+    metadata_enabled: bool = True,
 ) -> Path:
     """Mix narration voice, background music, and optional LTX ambient audio."""
     video_dur = _get_duration(video_path)
@@ -1626,10 +1637,10 @@ def mix_background_music(
             "-map", "[aout]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
-            "-metadata", f"comment={_ATTRIBUTION_COMMENT}",
+            "-metadata", f"comment={_ATTRIBUTION_COMMENT if metadata_enabled else ''}",
             str(output_path),
         ])
     except Exception as e:
         logger.warning("[ffmpeg] mix_background_music failed after retries: %s — copying video without music", e)
-        shutil.copy2(video_path, output_path)
+        copy_video_with_attribution(video_path, output_path, metadata_enabled)
     return output_path

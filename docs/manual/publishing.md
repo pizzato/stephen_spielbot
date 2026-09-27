@@ -50,8 +50,11 @@ The manual upload form.
 - **Tags** — the LLM's topic tags become YouTube tags and X hashtags
 - **Playlist** — the style's playlist, if it has one (`__auto__` finds or creates one named
   after the style)
-- **Content Credentials** — with `c2patool` installed, the file is signed as AI-generated
-  as the last step before upload
+- **Content Credentials** — when enabled for the film’s style and `c2patool` is installed,
+  the file is signed as AI-generated as the last step before upload. Configure signing
+  and the separate video metadata comment under
+  [Settings → Styles](settings.md#video-file-metadata). Disabling signing does not
+  remove a signature already in a file; rebuild the film to replace it
 
 ### Best time to post
 

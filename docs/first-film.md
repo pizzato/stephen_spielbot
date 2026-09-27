@@ -140,7 +140,7 @@ Open **Publishing → Publish a film** (or hit **Publish** on the film card).
 - Check the **thumbnail** and the **cover phrase**.
 
 Press publish. Captions from the script are attached automatically, tags come from the
-LLM's topic tags, and — if `c2patool` is installed — the file is signed with C2PA
+LLM's topic tags, and — if signing is enabled for the style and `c2patool` is installed — the file is signed with C2PA
 credentials declaring it AI-generated.
 
 ## Then what?

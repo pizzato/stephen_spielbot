@@ -369,7 +369,9 @@ class StartGenerationStyleTests(TempConfigCase):
                 _style("B", music_vol=42, voice_vol=142, ambient_vol=3,
                        lora_strength=0.9, first_pass_steps=20, second_pass_steps=9,
                        resolution="Landscape HD (1024×576)", voice_robotic=True,
-                       voice_robotic_amount=0.8, voice_speed=0.85),
+                       voice_robotic_amount=0.8, voice_speed=0.85,
+                       video_metadata_enabled=False, c2pa_enabled=False,
+                       c2pa_cert_path="/style-b.pem", c2pa_key_path="/style-b-key.pem"),
             ],
             "default_style": "A",
         })
@@ -396,6 +398,10 @@ class StartGenerationStyleTests(TempConfigCase):
             ))
         jc = json.loads((work_dir / "job_config.json").read_text())
         self.assertEqual(jc["style_name"], "B")
+        self.assertFalse(jc["video_metadata_enabled"])
+        self.assertFalse(jc["c2pa_enabled"])
+        self.assertEqual(jc["c2pa_cert_path"], "/style-b.pem")
+        self.assertEqual(jc["c2pa_key_path"], "/style-b-key.pem")
         self.assertEqual(jc["music_vol"], 42)
         self.assertEqual(jc["voice_vol"], 142)
         self.assertEqual(jc["ambient_vol"], 3)
@@ -1591,3 +1597,53 @@ class CharacterReferenceImageTests(TempConfigCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VideoProvenanceStyleTests(TempConfigCase):
+    def test_legacy_global_signing_policy_migrates_to_every_root(self):
+        cfg = {"styles": [_style("A"), _style("B"), {"name": "Child", "parent": "B"}],
+               "default_style": "A", "c2pa_enabled": False,
+               "c2pa_cert_path": "/cert.pem", "c2pa_key_path": "/key.pem"}
+        app._ensure_styles(cfg)
+        for name in ("A", "B", "Child"):
+            ss = app.style_settings(cfg, name)
+            self.assertFalse(ss["c2pa_enabled"])
+            self.assertEqual(ss["c2pa_cert_path"], "/cert.pem")
+            self.assertEqual(ss["c2pa_key_path"], "/key.pem")
+            self.assertTrue(ss["video_metadata_enabled"])
+        self.assertNotIn("c2pa_enabled", cfg["styles"][2])
+
+    def test_live_style_overrides_snapshot_and_siblings_stay_independent(self):
+        cfg = {"styles": [_style("A", video_metadata_enabled=True, c2pa_enabled=True),
+                          _style("B", video_metadata_enabled=False, c2pa_enabled=False),
+                          {"name": "Child", "parent": "B", "c2pa_enabled": True,
+                           "c2pa_cert_path": "/child.pem", "c2pa_key_path": "/child-key.pem"}],
+               "default_style": "A"}
+        app._ensure_styles(cfg)
+        wd = self.output_dir / "film"
+        wd.mkdir()
+        (wd / "job_config.json").write_text(json.dumps({
+            "style_name": "B", "video_metadata_enabled": True, "c2pa_enabled": True}))
+        settings = app.video_provenance_settings(cfg, wd)
+        self.assertFalse(settings["video_metadata_enabled"])
+        self.assertFalse(settings["c2pa_enabled"])
+        self.assertTrue(app.style_settings(cfg, "A")["video_metadata_enabled"])
+        child = app.style_settings(cfg, "Child")
+        self.assertFalse(child["video_metadata_enabled"])
+        self.assertTrue(child["c2pa_enabled"])
+        self.assertEqual(child["c2pa_cert_path"], "/child.pem")
+        self.assertEqual(child["c2pa_key_path"], "/child-key.pem")
+        # Disabled signing must never create credentials or invoke the signer.
+        with mock.patch.object(backend._c2pa, "_have") as have:
+            self.assertFalse(backend._c2pa.sign_if_enabled(wd / "final.mp4", settings))
+        have.assert_not_called()
+
+    def test_deleted_style_keeps_saved_policy(self):
+        wd = self.output_dir / "film"
+        wd.mkdir()
+        (wd / "job_config.json").write_text(json.dumps({
+            "style_name": "Deleted", "video_metadata_enabled": False, "c2pa_enabled": False}))
+        cfg = app._ensure_styles({"styles": [_style("A")], "default_style": "A"})
+        settings = app.video_provenance_settings(cfg, wd)
+        self.assertFalse(settings["video_metadata_enabled"])
+        self.assertFalse(settings["c2pa_enabled"])

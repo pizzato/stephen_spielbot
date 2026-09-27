@@ -5,6 +5,7 @@ migration, style→channel resolution, upload/reply channel routing, the
 multi-channel comment sweep, and per-channel engagement model paths.
 No network — everything is mocked at the pipeline boundary.
 """
+import json
 import os
 import tempfile
 import unittest
@@ -181,7 +182,12 @@ class UploadRoutingTests(unittest.TestCase):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-test-film-"))
         final = wd / "final.mp4"
         final.write_bytes(b"\0" * 20_000)
-        with mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/s.json"), \
+        (wd / "job_config.json").write_text(json.dumps({"style_name": "Private"}))
+        cfg = {"styles": [{"name": "Public", "c2pa_enabled": True},
+                          {"name": "Private", "c2pa_enabled": False}], "default_style": "Public"}
+        with mock.patch.object(backend.gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend._c2pa, "sign_if_enabled") as sign, \
+             mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/s.json"), \
              mock.patch.object(backend.yt, "upload_video",
                                return_value={"video_id": "v1", "url": "u", "error": ""}) as up, \
              mock.patch.object(backend.gapp, "_write_job_meta"), \
@@ -190,6 +196,7 @@ class UploadRoutingTests(unittest.TestCase):
             backend._run_upload_task(
                 "t1", {"title": "T", "description": "", "category": "22",
                        "privacy": "private", "channel": "UC9"}, wd, final, None)
+        self.assertFalse(sign.call_args.args[1]["c2pa_enabled"])
         self.assertEqual(up.call_args.kwargs.get("channel"), "UC9")
         self.assertEqual(backend._upload_tasks["t1"]["status"], "done")
 

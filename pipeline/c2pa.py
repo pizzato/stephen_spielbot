@@ -138,7 +138,7 @@ def _sign(path: Path, cert_path: Path, key_path: Path) -> bool:
 
 def sign_if_enabled(path, cfg: dict) -> bool:
     """Best-effort: sign *path* in place with Content Credentials when C2PA is
-    enabled in *cfg*. Never raises — a signing failure must not block a publish.
+    enabled in the resolved style *cfg*. Never raises — a signing failure must not block a publish.
     """
     try:
         if not cfg.get("c2pa_enabled", True):

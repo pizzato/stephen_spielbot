@@ -41,7 +41,11 @@ channel you care about.
 ## Content Credentials
 
 Published videos can be signed with [C2PA](https://c2pa.org) provenance declaring them
-AI-generated. It needs `c2patool` installed (`brew install c2patool`) and is skipped
+AI-generated. Signing and optional certificate/key paths are configured per style.
+The video attribution comment has a separate per-style switch. Neither control
+rewrites existing files; rebuild them to remove previously embedded provenance.
+The default self-signed certificate is shared across styles and can link their videos.
+These controls do not remove other source metadata or model watermarks. Signing needs `c2patool` installed (`brew install c2patool`) and is skipped
 silently otherwise. With no certificate configured, a local self-signed one is generated
 automatically — readable everywhere, though validators show "issued by an unknown
 source". See [Settings → Content Credentials](manual/settings.md#content-credentials-c2pa).

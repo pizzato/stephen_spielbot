@@ -218,6 +218,8 @@ def _execute_scene_mux(store: DurableStore, task: TaskRecord) -> None:
 
 
 def _execute_final(store: DurableStore, task: TaskRecord) -> None:
+    from app import load_config, video_provenance_settings
+
     p = task.payload
     work_dir = Path(p["work_dir"]).expanduser()
     scene_count = int(p.get("scene_count", 0))
@@ -254,6 +256,7 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
         voice_volume=float(p.get("voice_vol", 1.0)),
         ambient_path=Path(p["ambient_path"]).expanduser() if p.get("ambient_path") else None,
         ambient_volume=float(p.get("ambient_vol", 0.0)),
+        metadata_enabled=video_provenance_settings(load_config(), work_dir).get("video_metadata_enabled", True),
     )
     if p.get("vid_width") and p.get("vid_height"):
         ensure_video_resolution(final_path, int(p["vid_width"]), int(p["vid_height"]))
