@@ -182,20 +182,31 @@ class NewsCreationTests(TempConfigCase):
         self.assertIn("Anthony Albanese appears EXACTLY as the character in <image1>", prompt)
         self.assertIn("Test photographer", prompt)
 
-    def test_unresolved_news_person_does_not_get_an_invented_automatic_portrait(self):
+    def test_unresolved_news_person_gets_a_persisted_reusable_automatic_portrait(self):
         wd = self.output_dir / "unresolved"
         wd.mkdir()
         self.source["include_people"] = True
         with mock.patch.object(news_people, "_identity", side_effect=ValueError("Ambiguous identity")):
             news_monitor.attach_source(wd, self.source)
-        app._write_script_characters(wd, [{"id": "albanese", "name": "Albanese",
-                                          "description": "The prime minister; appearance unknown."}])
+        self.assertEqual([c["name"] for c in app._read_script_characters(wd)], ["Anthony Albanese"])
+
+        def paint(engine, prompt, out, **kwargs):
+            Image.new("RGB", (128, 128), "navy").save(out, "PNG")
+
         with mock.patch.object(app, "_preview_worker_urls", return_value=["http://worker"]) as workers, \
-                mock.patch.object(app, "_generate_script_portrait") as paint:
+                mock.patch.object(app.engines, "resolve", return_value={"family": "qwen-image"}), \
+                mock.patch.object(app, "generate_with_engine", side_effect=paint) as generate:
             count = app.generate_all_script_portraits(wd, "News")
-        self.assertEqual(count, 0)
-        workers.assert_not_called()
-        paint.assert_not_called()
+            self.assertEqual(app.generate_all_script_portraits(wd, "News"), 0)
+        self.assertEqual(count, 1)
+        workers.assert_called_once()
+        generate.assert_called_once()
+        self.assertIn("Anthony Albanese", generate.call_args.args[1])
+        char = app._read_script_characters(wd)[0]
+        photo = wd / "characters" / char["ref_image"]
+        self.assertTrue(photo.is_file())
+        self.assertEqual(app._scene_reference_images(
+            "Anthony Albanese at a railway station", {}, app.load_config(), "News", wd), [photo])
         self.assertEqual(json.loads((wd / "news_people.json").read_text())["unresolved"][0]["name"],
                          "Anthony Albanese")
 
@@ -315,15 +326,31 @@ class NewsCreationTests(TempConfigCase):
         char, _ = backend._song_lead_singer(cfg, ss, {"singer": "LuizPizzato"}, wd)
         self.assertEqual(char["name"], "LuizPizzato")  # an explicit cast change stays selected
 
-    def test_missing_news_reference_keeps_existing_singer_fallback(self):
+    def test_missing_news_reference_keeps_subject_for_manual_and_automatic_song(self):
         cfg = self._news_song_config()
-        with mock.patch.object(news_people, "_identity", side_effect=ValueError("Ambiguous identity")), \
-                mock.patch.object(backend.story_mode, "write_song", side_effect=self._write_news_song):
-            draft = backend.song_draft(backend.SongDraftBody(
-                video_title=self.idea["title"], style_name="News", idea_id=self.idea["id"]))
-        wd = Path(draft["work_dir"])
-        self.assertEqual(json.loads((wd / "song.json").read_text())["singer"], "LuizPizzato")
-        self.assertEqual(news_monitor.singer_candidates(wd), [])
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic), \
+                    mock.patch.object(news_people, "_identity", side_effect=ValueError("Ambiguous identity")), \
+                    mock.patch.object(app, "pick_song_singer", side_effect=AssertionError("Catalogue fallback")), \
+                    mock.patch.object(backend.story_mode, "write_song", side_effect=self._write_news_song) as write, \
+                    mock.patch.object(backend.story_mode, "critique_song", return_value="Keep the hook"), \
+                    mock.patch.object(backend, "_do_song_generate") as render:
+                if automatic:
+                    entry = news_monitor.queue_idea(self.idea, cfg)
+                    draft = backend._auto_song_first(
+                        cfg, title=self.idea["title"], topic=entry["video_prompt"], minutes=1,
+                        style_name="News", n_scenes=2, queue_item_id=entry["id"])
+                    render.assert_called_once()
+                else:
+                    draft = backend.song_draft(backend.SongDraftBody(
+                        video_title=self.idea["title"], style_name="News", idea_id=self.idea["id"]))
+                for call in write.call_args_list:
+                    self.assertIn("Anthony Albanese", call.kwargs["singer_note"])
+                wd = Path(draft["work_dir"])
+                self.assertEqual(json.loads((wd / "song.json").read_text())["singer"], "Anthony Albanese")
+                self.assertEqual([c["name"] for c in news_monitor.singer_candidates(wd)], ["Anthony Albanese"])
+                self.assertEqual(json.loads((wd / "news_people.json").read_text())["unresolved"][0]["name"],
+                                 "Anthony Albanese")
         self.assertEqual(cfg["characters"][0]["name"], "LuizPizzato")
 
     def test_news_vocalist_does_not_guess_gender_from_photo_credit_text(self):

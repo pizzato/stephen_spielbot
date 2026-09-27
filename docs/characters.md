@@ -30,14 +30,18 @@ catalogue, so you can choose another subject. The selected character and portrai
 stay attached through story drafts and scene division; they remain local to this film.
 If no news character is available, the normal catalogue fallback still applies.
 
-Lookup matches the exact named person to a human record in Wikidata and retrieves its
-Wikimedia Commons portrait, keeping the source and license provenance. When several
-people share the name, the person's role in the story helps disambiguate the match;
-weak or tied matches remain unresolved. If a person
-cannot be matched or has no usable portrait, add a reference manually in the film's
-Characters & Artifacts view. It does not infer an identity from a generic news photo.
-The Characters & Artifacts view shows any unresolved names and the lookup failure
-reasons, so missing references can be reviewed before rendering.
+People can be identified from full names, surnames or nicknames in the source text.
+Lookup chooses the best human record in Wikidata using the name, the person's role
+in the story and search ranking, then retrieves its Wikimedia Commons portrait,
+keeping the source and license provenance. Ambiguous matches carry a warning instead
+of dropping the character. It does not infer an identity from a generic news photo.
+
+If an identity or usable photograph cannot be found, the app still creates a named
+character with a best-guess description. The normal automatic portrait generation
+continues from that description, including in unattended runs; a generated portrait
+is not a verified likeness. The Characters & Artifacts view lists uncertainty and
+lookup warnings. You can review the character or replace its reference there, but
+these warnings do not require manual intervention.
 
 This option concerns appearance. It does not clone the person's voice. Review the
 resulting film's characters and references before rendering if you want to verify the

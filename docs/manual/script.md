@@ -176,10 +176,13 @@ The **AI editor verdict** card shows the critique the drafter ran on itself: *pa
 ## Characters & Artifacts
 
 Films created from a [news idea](ideas.md#news-monitor) can include downloaded
-appearance references for named people. A notice lists any people whose automatic
-portrait lookup failed, with the reason. Add or find the person's character here and
-upload a suitable reference when their likeness is needed. Acquired portraits retain
-source and license details in the character description; see [news people](../characters.md#people-from-news-ideas).
+appearance references for named people. A notice lists uncertain identity matches
+and failed portrait lookups, with the reason. The app still creates each character
+using its best match or a description-based fallback, and automatic portrait generation
+can continue without manual review. Generated portraits are not verified likenesses.
+You can edit the character or upload a replacement reference here. Acquired portraits
+retain source and license details in the character description; see
+[news people](../characters.md#people-from-news-ideas).
 
 The same wall for every film, whatever the mix of scene modes. Characters are woven into
 every scene image; location, wardrobe and reference images feed the acted takes, so when

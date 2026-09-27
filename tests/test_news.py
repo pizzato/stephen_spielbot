@@ -168,14 +168,37 @@ def test_people_opt_out_overrides_model_and_duplicates_are_removed():
     assert result[0]["people"] == []
 
 
-def test_people_require_whole_name_in_one_source_but_mononyms_are_allowed():
+def test_people_allow_surnames_with_warning_but_require_whole_source_mentions():
     sources = [post("123", "Rihanna announced a tour with Anthony"), post("124", "Albanese sent a message.")]
     output = [idea(source_ids=["123", "124"], people=[
         {"name": "Ann"}, {"name": "Rihanna"}, {"name": "Anthony Albanese"},
     ])]
     with mock.patch.object(news, "_chat_complete", return_value=json.dumps(output)):
         result = news.generate_news_ideas(sources, {}, {"news_monitor": {"include_people": True}})
-    assert result[0]["people"] == [{"name": "Rihanna", "description": ""}]
+    assert result[0]["people"][0] == {"name": "Rihanna", "description": ""}
+    guessed = result[0]["people"][1]
+    assert guessed["name"] == "Anthony Albanese"
+    assert guessed["aliases"] == ["Albanese"]
+    assert "best-guess" in guessed["identity_warning"]
+    assert len(result[0]["people"]) == 2  # Ann is not a whole mention in Anthony
+
+
+def test_nickname_only_news_keeps_principal_character_with_identity_warning():
+    source = post(text='ALBO says: "Pauline Hanson appeals to our darkest forces."')
+    output = [idea(people=[
+        {"name": "Anthony Albanese", "source_name": "ALBO", "description": "Australian politician and speaker"},
+        {"name": "Pauline Hanson", "source_name": "Pauline Hanson", "description": "Politician mentioned"},
+        {"name": "Unmentioned Person", "source_name": "Unmentioned", "description": "Must be dropped"},
+    ])]
+    with mock.patch.object(news, "_chat_complete", return_value=json.dumps(output)) as chat:
+        result = news.generate_news_ideas([source], {}, {"news_monitor": {"include_people": True}})
+    people = result[0]["people"]
+    assert [p["name"] for p in people] == ["Anthony Albanese", "Pauline Hanson"]
+    assert people[0]["source_name"] == "ALBO"
+    assert people[0]["aliases"] == ["ALBO"]
+    assert '"ALBO"' in people[0]["identity_warning"]
+    assert "identity_warning" not in people[1]
+    assert "make a best guess instead of omitting" in chat.call_args.args[1]
 
 
 def test_idea_limit_and_format_override():

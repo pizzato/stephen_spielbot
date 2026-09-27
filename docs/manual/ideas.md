@@ -102,8 +102,13 @@ the article contents. Its summaries and ideas are based on the retrieved post te
 Directions mark those links as unread citations and tell the writer to work only from
 the included material, with no browsing or research step. Missing details stay unknown;
 the idea generator is instructed to skip posts that lack enough detail to make a video.
-Reference photographs, when enabled and found, are attached by the app as character
-assets; the writer is not asked to find images or invent a missing person's appearance.
+When appearance references are enabled, the app creates characters for the named
+people, including people mentioned by surname or nickname. It attaches reference
+photographs when found and uses the best available identity match, with a warning
+when uncertain. If lookup fails, a named character and best-guess description still
+let automatic portrait generation proceed. Generated portraits are not verified
+likenesses. The writer is not asked to fetch images; optional review is available in
+**Characters & Artifacts**.
 
 Within the News tab, news follows the same Ideas → Accepted → Queue/Create flow.
 These lists stay separate from Topic Ideas when accepting, declining or reviving an
@@ -117,7 +122,7 @@ Create. A music-video style uses the news as context for its song.
 For news music videos, the app prepares the news characters **before** writing the
 song. The first available character in the brief's principal-subject order becomes
 the lead singer, ahead of the style's recurring performers. That choice and its
-reference photograph follow the song through story drafting, redrafts and scene
+photograph or generated portrait follow the song through story drafting, redrafts and scene
 division, including unattended creation. Other news people can appear as supporting
 cast. If no news character is available, the usual style-catalogue selection applies.
 You can change the lead in the [Song tab](script.md#song).

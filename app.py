@@ -3860,12 +3860,7 @@ def generate_all_script_portraits(work_dir, style_name: str) -> int:
     work_dir = Path(work_dir)
     cfg = load_config()
     chars = _read_script_characters(work_dir)
-    try:
-        unresolved = json.loads((work_dir / "news_people.json").read_text()).get("unresolved", [])
-    except (OSError, ValueError):
-        unresolved = []
-    todo = [c for c in chars if c.get("description") and not c.get("ref_image")
-            and not any(_characters_refer_to_same(c, person) for person in unresolved)]
+    todo = [c for c in chars if c.get("description") and not c.get("ref_image")]
     if not todo:
         return 0
     urls = _preview_worker_urls()
@@ -4958,7 +4953,6 @@ def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict
 
     logger.info("Auto-picked suggestion: %r (id=%s)", suggestion["title"], queue_item.get("id"))
     return queue_item
-
 
 
 
