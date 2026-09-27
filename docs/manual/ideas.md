@@ -58,19 +58,24 @@ News tab loads saved news ideas without generating general topics. Its **All sty
 option shows news from all styles, including styles excluded from automatic topic
 selection. The Topic Ideas guidance box and generation buttons remain in Topic Ideas.
 
-The monitor panel shows the selected style's monitoring state, search query, interval,
+The monitor panel shows the selected style's check mode, search query, daily cadence,
 last check, last successful check and any error. It also reports posts fetched, new
 posts and ideas added, distinguishing an empty X search from already checked posts,
 duplicate ideas and a generation failure. If you edit the query, results from the
 previous query remain labelled until the next check.
 
-**Check news now** checks enabled monitors immediately. Scheduled checks continue
-while the backend is running; servers with background jobs disabled show **Manual
-checks only**. Missing search credentials or an account-selection requirement are
+**Check news now** checks enabled monitors immediately, bypassing scheduled spacing;
+styles set to **Off** are always skipped. **On demand** makes no automatic searches.
+**When opening AI Ideas** checks all styles using that mode once per visit to AI Ideas,
+even if you start on Topic Ideas. Switching tabs or styles, reading status, and leaving
+the page open do not trigger further searches. Visits within one minute are debounced.
+**Scheduled** defaults to one check per day, evenly spaced like publishing; it continues
+while the backend is running. Servers with background jobs disabled show the schedule
+as paused; on-demand and page-visit checks still work. Missing search credentials or an account-selection requirement are
 shown explicitly and disable the check button. A failed check shows the provider
 error instead of reporting zero ideas as a successful check.
 
-Enable monitoring, set the query and choose automation in
+Choose when to check, set the query and choose automation in
 [Settings → Styles → News monitoring](settings.md#news-monitoring). Choose a connected
 X account for search, or provide an optional standalone bearer token, in
 [Settings → Channels → X → X account for all news searches](settings.md#x-news-search).
@@ -80,6 +85,9 @@ stays the same. A sole connected account is used
 automatically when no bearer token is saved. Connecting with your Client ID and
 Client Secret supplies renewable account credentials; the X app still needs access
 to recent search.
+
+News searches use X API credits. Existing minute-based monitors become **On demand**
+on upgrade; select **Scheduled** explicitly to restart automatic checks.
 
 News ideas carry a **From X news** label, a summary, links to the source posts and
 linked articles, and the named people involved. These links are evidence for the idea;
