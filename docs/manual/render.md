@@ -18,6 +18,10 @@ A percentage, the current step, a per-stage counter, and a progress bar. The hea
 shows the ETA while it's running and **Done** when it finishes, at which point
 **Edit film** and **Download** appear.
 
+Downloaded files follow the style’s [video metadata setting](settings.md#video-file-metadata).
+C2PA signing, when enabled for the style, happens before publishing rather than on download.
+Changing either setting does not rewrite an existing file; rebuild it to replace embedded provenance.
+
 **Edit script** opens this film's [Script](script.md) at any time.
 
 ### Tasks

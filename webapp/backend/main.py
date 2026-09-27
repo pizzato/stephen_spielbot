@@ -7288,6 +7288,8 @@ def start_generation(body: GenerateBody) -> dict:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
 
     job_cfg = gapp._job_config_snapshot(cfg)
+    for field in ("video_metadata_enabled", "c2pa_enabled", "c2pa_cert_path", "c2pa_key_path"):
+        job_cfg[field] = ss[field]
     job_cfg.update({
         "resolution": resolution, "max_clip_secs": 0,
         # Upscale-only target (QHD/4K) this render finishes at, and the
@@ -8221,6 +8223,7 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
             voice_volume=voice_vol / 100.0,
             ambient_path=ambient if ambient.exists() else None,
             ambient_volume=ambient_vol / 100.0,
+            metadata_enabled=gapp.video_provenance_settings(cfg, wd).get("video_metadata_enabled", True),
         )
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
@@ -8517,6 +8520,7 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
         voice_volume=voice_vol / 100.0,
         ambient_path=ambient if ambient.exists() else None,
         ambient_volume=ambient_vol / 100.0,
+        metadata_enabled=gapp.video_provenance_settings(cfg, wd).get("video_metadata_enabled", True),
     )
     staged_final.replace(final_path)
     # Styles that auto-stamp the cover into the opening get the stamp on the
@@ -9583,9 +9587,13 @@ def _temporal_upscale_scenes_to_final(
             voice_volume=voice_vol / 100.0,
             ambient_path=ambient if ambient.exists() else None,
             ambient_volume=ambient_vol / 100.0,
+            metadata_enabled=gapp.video_provenance_settings(cfg, wd).get("video_metadata_enabled", True),
         )
     else:
-        shutil.copy2(combined, staged_final)
+        from pipeline.assembler import copy_video_with_attribution
+        copy_video_with_attribution(
+            combined, staged_final,
+            gapp.video_provenance_settings(cfg, wd).get("video_metadata_enabled", True))
     combined.unlink(missing_ok=True)
     return staged_final
 
@@ -12995,7 +13003,7 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
         # Content Credentials (C2PA): sign the final in place before it leaves
         # the machine — the last step, since a later re-encode breaks the
         # manifest. Best-effort, never blocks the upload.
-        _c2pa.sign_if_enabled(final, gapp.load_config())
+        _c2pa.sign_if_enabled(final, gapp.video_provenance_settings(gapp.load_config(), wd))
         # Track around the actual upload (the slow part) so it shows as
         # in-progress in the Activity panel and lands in the recent log.
         with _track_op("Uploading to YouTube", body_dict["title"]):
@@ -13428,7 +13436,7 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
         # Content Credentials (C2PA): sign the final in place before it leaves
         # the machine — the last step, since a later re-encode breaks the
         # manifest. Best-effort, never blocks the post.
-        _c2pa.sign_if_enabled(final, cfg)
+        _c2pa.sign_if_enabled(final, gapp.video_provenance_settings(cfg, wd))
         with _track_op("Posting to X", body_dict.get("title", "")):
             result = xt.post_video(
                 cid, secret, str(final), text, account=account,
@@ -15424,11 +15432,14 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
                 voice_volume=voice_vol,
                 ambient_path=ambient if ambient.exists() else None,
                 ambient_volume=ambient_vol,
+                metadata_enabled=gapp.video_provenance_settings(cfg, wd).get("video_metadata_enabled", True),
             )
         else:
             # No score: the clips already carry their own audio.
-            import shutil
-            shutil.copy2(combined, final_path)
+            from pipeline.assembler import copy_video_with_attribution
+            copy_video_with_attribution(
+                combined, final_path,
+                gapp.video_provenance_settings(cfg, wd).get("video_metadata_enabled", True))
         # Same normalisation the full render applies after mixing. No-op when
         # the concat already matches.
         ensure_video_resolution(final_path, vid_w, vid_h)

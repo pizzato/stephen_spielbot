@@ -42,6 +42,22 @@ class XPostTaskTests(unittest.TestCase):
         self.assertTrue(pv.call_args.kwargs.get("premium"))
         self.assertEqual(backend._x_post_tasks["t1"]["status"], "done")
 
+    def test_signing_uses_film_style_certificate(self):
+        wd, final = _film_dir()
+        (wd / "job_config.json").write_text(json.dumps({"style_name": "Custom"}))
+        cfg = {"styles": [{"name": "Public", "c2pa_enabled": False},
+                          {"name": "Custom", "c2pa_enabled": True,
+                           "c2pa_cert_path": "/custom.pem", "c2pa_key_path": "/custom-key.pem"}],
+               "default_style": "Public"}
+        with mock.patch(__name__ + "._film_dir", return_value=(wd, final)), \
+             mock.patch.object(gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend._c2pa, "sign_if_enabled") as sign:
+            self._run({"tweet_id": "x1", "url": "u", "error": "", "skipped": False})
+        policy = sign.call_args.args[1]
+        self.assertTrue(policy["c2pa_enabled"])
+        self.assertEqual(policy["c2pa_cert_path"], "/custom.pem")
+        self.assertEqual(policy["c2pa_key_path"], "/custom-key.pem")
+
     def test_fallback_to_link_reports_done_with_message(self):
         self._run({"tweet_id": "x2", "url": "https://x.com/u/status/x2", "error": "",
                    "fell_back_to_link": True, "skipped": False, "reason": "too long"},

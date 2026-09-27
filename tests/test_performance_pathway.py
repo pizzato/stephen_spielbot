@@ -1534,6 +1534,15 @@ class ReassembleActedTests(unittest.TestCase):
         finally:
             store.close()
 
+        # Assembly routing uses byte sentinels rather than encoded video.
+        # Keep the FFmpeg metadata remux at the same mocked media boundary.
+        def fake_copy(src, out, enabled=True):
+            Path(out).write_bytes(Path(src).read_bytes())
+            return out
+        patch = mock.patch("pipeline.assembler.copy_video_with_attribution", side_effect=fake_copy)
+        self.copy_with_attribution = patch.start()
+        self.addCleanup(patch.stop)
+
     def test_no_music_reassembles_to_the_concat(self):
         # No background_music.wav on disk — the acted film never got a score.
         def fake_concat(clips, out, **kw):
@@ -1547,6 +1556,7 @@ class ReassembleActedTests(unittest.TestCase):
         mix.assert_not_called()
         final = self.backend.gapp._final_path_for_work_dir(self.wd)
         self.assertEqual(final.read_bytes(), b"concat")
+        self.copy_with_attribution.assert_called_once_with(self.wd / "combined.mp4", final, True)
         self.assertTrue((self.wd / "combined.mp4").exists())
 
     def test_music_off_skips_the_mix_even_with_a_score_on_disk(self):

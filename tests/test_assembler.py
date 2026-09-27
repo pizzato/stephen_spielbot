@@ -662,3 +662,46 @@ class KeepAudioHeadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+class VideoAttributionTests(unittest.TestCase):
+    def test_real_mp4_comment_is_optional_in_mix_copy_and_fallback(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video, music = root / "source.mp4", root / "music.wav"
+            subprocess.run([
+                assembler._FFMPEG, "-v", "error", "-f", "lavfi", "-i", "color=s=64x64:r=25:d=1",
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "1",
+                "-c:v", "libx264", "-c:a", "aac", "-metadata", "comment=old credit", str(video),
+            ], check=True, capture_output=True)
+            subprocess.run([
+                assembler._FFMPEG, "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                "-t", "1", str(music),
+            ], check=True, capture_output=True)
+            for enabled in (True, False):
+                for mode in ("mix", "copy", "fallback"):
+                    with self.subTest(enabled=enabled, mode=mode):
+                        out = root / f"{mode}-{enabled}.mp4"
+                        if mode == "copy":
+                            assembler.copy_video_with_attribution(video, out, enabled)
+                        else:
+                            run = assembler._run
+
+                            def fail_mix_only(cmd, **kwargs):
+                                if "-filter_complex" in cmd:
+                                    raise RuntimeError("simulated mix failure")
+                                return run(cmd, **kwargs)
+
+                            with mock.patch.object(assembler, "_run", side_effect=fail_mix_only if mode == "fallback" else run):
+                                assembler.mix_background_music(video, music, out, metadata_enabled=enabled)
+                        probe = subprocess.run([
+                            assembler._FFPROBE, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(out),
+                        ], check=True, capture_output=True, text=True)
+                        info = json.loads(probe.stdout)
+                        comment = info["format"].get("tags", {}).get("comment")
+                        self.assertEqual(comment, assembler._ATTRIBUTION_COMMENT if enabled else None)
+                        self.assertEqual({s["codec_type"] for s in info["streams"]}, {"audio", "video"})
+                        self.assertAlmostEqual(float(info["format"]["duration"]), 1.0, delta=0.1)

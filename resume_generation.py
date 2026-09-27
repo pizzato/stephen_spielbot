@@ -48,7 +48,7 @@ from pipeline.assembler import (
     _verify_upscale_not_blank,
     concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
     extract_audio, extract_frame_at, extract_last_frame, ensure_video_resolution,
-    mix_background_music,
+    mix_background_music, copy_video_with_attribution,
     parse_upscale_mode, temporal_ai_upscale_video, trim_video, upscale_video,
     upscale_target_dims,
     write_silence_wav as _write_silence_wav,
@@ -69,7 +69,7 @@ from pipeline import ui_activity
 # Resolution name → (w, h) map. Import the canonical table from app rather than
 # keeping a copy here — a stale local copy silently dropped the 720p tier and
 # rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
-from app import _RESOLUTIONS, _UPSCALE_RESOLUTIONS, _DEFAULT_RESOLUTION
+from app import _RESOLUTIONS, _UPSCALE_RESOLUTIONS, _DEFAULT_RESOLUTION, video_provenance_settings
 from app import build_cover_generation as _build_cover_generation
 from pipeline.cover import (
     burn_cover_into_first_frame as _burn_first_frame,
@@ -2442,6 +2442,7 @@ def main(work_dir: Path) -> None:
                 scene_finals, combined,
                 hard_boundaries=_continuity.hard_boundaries(scenes, kept_plan))
 
+        metadata_enabled = video_provenance_settings(cfg, work_dir).get("video_metadata_enabled", True)
         if music_on and music_path.exists():
             write_progress(status_file, 95,
                            f"Mixing audio (voice {voice_vol*100:.0f}%, music {music_vol*100:.0f}%)…")
@@ -2449,12 +2450,13 @@ def main(work_dir: Path) -> None:
                 combined, music_path, final_path,
                 volume=music_vol, voice_volume=voice_vol,
                 ambient_path=ambient_path, ambient_volume=ambient_vol,
+                metadata_enabled=metadata_enabled,
             )
         else:
             # No score: the clips already carry their own audio, so the final
             # IS the concatenation. (Acted scenes have voices in-picture.)
             write_progress(status_file, 95, "No music — finishing the cut…")
-            shutil.copy2(combined, final_path)
+            copy_video_with_attribution(combined, final_path, metadata_enabled)
         ensure_video_resolution(final_path, vid_width, vid_height)
         # Per-style: burn the script's captions into the picture itself (open
         # captions). Before the cover burn, so the cover overlays the text.
