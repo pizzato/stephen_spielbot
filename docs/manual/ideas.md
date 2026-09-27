@@ -2,8 +2,8 @@
 
 `#/ideas`
 
-Choose **Topic Ideas** for AI-generated topics or **News** for ideas drawn from the X
-posts your styles monitor. Each tab has its own ideas, accepted and declined lists.
+Choose **Topic Ideas** for AI-generated topics or **News** for ideas drawn from the
+subjects your styles monitor through web research or optional X post search. Each tab has its own ideas, accepted and declined lists.
 Accept the ones you like, decline the ones you don't, and the generator steers
 accordingly next time.
 
@@ -58,11 +58,13 @@ News tab loads saved news ideas without generating general topics. Its **All sty
 option shows news from all styles, including styles excluded from automatic topic
 selection. The Topic Ideas guidance box and generation buttons remain in Topic Ideas.
 
-The monitor panel shows the selected style's check mode, search query, daily cadence,
-last check, last successful check and any error. It also reports posts fetched, new
-posts and ideas added, distinguishing an empty X search from already checked posts,
-duplicate ideas and a generation failure. If you edit the query, results from the
-previous query remain labelled until the next check.
+The monitor panel shows the selected style's check mode, subjects, daily cadence,
+last check, last successful check and any error. For LLM research it also shows the
+shared provider/model, new research checks used against the UTC daily limit, the number
+of cited web sources, whether saved research was reused, and ideas added. It distinguishes
+no recent news, previously checked sources, duplicate ideas and failures. With the
+optional X source, it reports posts fetched and new posts instead. If you edit the
+subject, results from the previous subject remain labelled until the next check.
 
 **Check news now** checks enabled monitors immediately, bypassing scheduled spacing;
 styles set to **Off** are always skipped. **On demand** makes no automatic searches.
@@ -71,45 +73,78 @@ even if you start on Topic Ideas. Switching tabs or styles, reading status, and 
 the page open do not trigger further searches. Visits within one minute are debounced.
 **Scheduled** defaults to one check per day, evenly spaced like publishing; it continues
 while the backend is running. Servers with background jobs disabled show the schedule
-as paused; on-demand and page-visit checks still work. Missing search credentials or an account-selection requirement are
-shown explicitly and disable the check button. A failed check shows the provider
-error instead of reporting zero ideas as a successful check.
+as paused; on-demand and page-visit checks still work. Missing research credentials or
+unsupported local research configuration are shown explicitly and disable the check
+button. A failed check shows the provider error rather than reporting an empty success.
+Existing minute-based monitors become **On demand** on upgrade; select **Scheduled**
+explicitly to restart automatic checks.
 
-Choose when to check, set the query and choose automation in
-[Settings → Styles → News monitoring](settings.md#news-monitoring). Choose a connected
-X account for search, or provide an optional standalone bearer token, in
-[Settings → Channels → X → X account for all news searches](settings.md#x-news-search).
-This global account is shared by every style, regardless of its publishing account.
-Switching styles changes the displayed ideas and monitor query; the search account
-stays the same. A sole connected account is used
-automatically when no bearer token is saved. Connecting with your Client ID and
-Client Secret supplies renewable account credentials; the X app still needs access
-to recent search.
+### Web research
 
-News searches use X API credits. Existing minute-based monitors become **On demand**
-on upgrade; select **Scheduled** explicitly to restart automatic checks.
+**LLM web research** is the default source. Choose a provider, optional model override,
+country, lookback window and daily limit in
+[Settings → Infrastructure → News research](settings.md#news-research). It reuses your
+existing OpenAI, Claude or Grok API key. Local models cannot run the web-research step;
+you can use a cloud provider for research while retaining a different backend for
+scripts. Grok research enables web tools only, without reading X posts.
 
-News ideas carry a **From X news** label, a summary, links to the source posts and
-linked articles, and the named people involved. These links are evidence for the idea;
-an X post alone does not establish that a claim is true. The appearance option records
-whether reference pictures should be sought when the idea becomes a film.
+Set plain-language subjects such as *Medicare and public healthcare in Australia* or
+*OpenAI announcements*, and choose when to check, under
+[Settings → Styles → News monitoring](settings.md#news-monitoring). Research asks for
+recent substantive developments in the selected country and time window, with event
+dates, named people and roles, relevant figures, attribution and uncertainty. The
+provider must run a web search; a model answer from memory is not accepted as research.
+Source citations and the resulting factual brief are saved before creative ideas are
+generated for each style.
+
+Matching subjects with the same research settings reuse a durable one-hour cache
+across styles and repeat manual checks. Failed attempts have a five-minute cooldown.
+The default global cap is **three new research checks per UTC day**, including failures.
+Reusing saved research and generating creative ideas from it do not consume another
+research check. Those creative calls still have their own LLM usage. **Check news now**
+does not bypass the cache, cooldown or daily cap. One research check may involve
+multiple web-tool calls and tokens; the daily count is not a fixed spending budget.
+The cache and per-attempt usage audit survive restarts; see
+[configuration](../configuration.md#shared-web-research).
+
+Web-researched ideas carry **From web research**, a summary, named people, links to
+actual cited websites and an expandable **Saved research brief**. Review the sources
+and uncertainty before accepting an idea. A source link is evidence to assess, not an
+independent guarantee that every generated statement is accurate.
+
+### Complete production directions
 
 Expand **Complete directions** on a news idea to read its self-contained production
 brief. It includes the reported event, source attribution, available dates and details,
-people's reported roles, the style's creative treatment and the collected post text.
-Music briefs include a song premise, point of view, hook and verse/chorus progression.
-Create's **Direction** field and queued news prompts carry this complete brief, including
-when ideas are accepted and queued automatically. Existing saved ideas also include
-their saved source text without needing a new search.
+people's reported roles, the style's creative treatment and the saved research or post
+text. Music briefs include a song premise, point of view, hook and verse/chorus
+progression. Create's **Direction** field and queued news prompts carry this complete
+brief, including when ideas are accepted and queued automatically. Existing saved
+ideas also include their saved source text without needing a new search. Story and
+song writers use the included material without a later browsing step; missing details
+remain unknown. The appearance option travels with the idea.
 
-Each check makes one recent-search request for up to 50 recent posts. X recent search
-covers the last seven days; a busy query can miss older matches between polls.
-Long posts use the extended text returned by X when available.
-Linked article URLs are retained for review, but the monitor does not fetch or verify
-the article contents. Its summaries and ideas are based on the retrieved post text.
-Directions mark those links as unread citations and tell the writer to work only from
-the included material, with no browsing or research step. Missing details stay unknown;
-the idea generator is instructed to skip posts that lack enough detail to make a video.
+### Optional X post search
+
+Select **X post search** under
+[Settings → Infrastructure → News research](settings.md#news-research), then choose the
+shared account or optional bearer token under
+[Settings → Channels → X](settings.md#x-news-search). This account is shared by every
+style regardless of its publishing account. Each style's subject field becomes an X
+search query. X post reads use X API credits; the LLM research daily cap and cache do
+not apply to this source.
+
+X ideas carry **From X news**, links to source posts and linked articles, and the named
+people involved. Each check makes one recent-search request for up to 50 posts.
+X recent search covers the last seven days; a busy query can miss older matches
+between polls. Long posts use extended text when X supplies it. Linked article URLs
+are retained for review, but X mode does not fetch or verify the articles. Its summaries
+and ideas are based on retrieved post text. Directions mark those article links as
+unread citations. Posts without enough detail should not become video ideas, and a post
+alone does not establish that a claim is true.
+
+### People and video creation
+
 When appearance references are enabled, the app creates characters for the named
 people, including people mentioned by surname or nickname. It attaches reference
 photographs when found and uses the best available identity match, with a warning

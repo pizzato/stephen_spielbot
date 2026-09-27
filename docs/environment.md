@@ -11,7 +11,13 @@ the config file.
 | `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
 | `XAI_API_KEY` | _(unset)_ | Fallback Grok/xAI API key when `grok_api_key` isn't set in config |
 | `OPENAI_API_KEY` | _(unset)_ | Fallback OpenAI API key when `openai_api_key` isn't set in config |
-| `X_BEARER_TOKEN` | _(unset)_ | Optional X recent-search bearer token when `news.x_bearer_token` is not set. An explicit `news.x_account` takes precedence; otherwise a bearer token takes precedence over automatically using the sole connected X account. See [X search settings](manual/settings.md#x-news-search). |
+| `X_BEARER_TOKEN` | _(unset)_ | Only for `news.source: x`; optional X recent-search bearer token when `news.x_bearer_token` is not set. An explicit `news.x_account` takes precedence; otherwise a bearer token takes precedence over automatically using the sole connected X account. See [X search settings](manual/settings.md#x-news-search). |
+
+[News web research](manual/settings.md#news-research) reuses the chosen provider's
+existing key and the same environment fallback above. No separate research key is
+needed. Grok research uses `XAI_API_KEY` for web tools; it does not use `X_BEARER_TOKEN`
+or the connected X publishing account. `news.research_provider: default` follows
+`llm_backend`; select OpenAI, Claude or Grok explicitly when scripts use Local.
 
 ## Media tools
 

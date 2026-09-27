@@ -205,6 +205,7 @@ def test_connected_search_http_error_without_response_is_safe():
 
 def test_status_exposes_connection_metadata_without_credentials_or_refresh():
     cfg = {**config("alice"), "styles": [{"name": "News"}], "default_style": "News"}
+    cfg["news"]["source"] = "x"
     with mock.patch.object(xt, "_load_token", return_value=oauth2(refresh_token="refresh-secret")), \
             mock.patch.object(news_monitor, "_read_state", return_value={}):
         result = news_monitor.status(cfg)

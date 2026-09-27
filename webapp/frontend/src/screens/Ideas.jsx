@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { Card, Chip, Button, Segmented, Icon, Banner, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
-import { newsCheckLabel } from '../newsUtils.js'
+import { newsCheckLabel, newsProviderLabel } from '../newsUtils.js'
 
 function Stars({ value }) {
   if (value == null) return null
@@ -20,7 +20,10 @@ const newsTime = (value) => value ? new Date(typeof value === 'number' ? value *
 const newsOutcome = (monitor) => ({
   no_posts: 'No matching X posts were returned.',
   no_new_posts: 'All matching posts were already checked.',
-  no_ideas: 'New posts were found, but no usable video ideas were generated.',
+  no_news: 'No substantive recent news was found for this subject.',
+  no_new_sources: 'The researched stories were already checked.',
+  no_ideas: 'Sources were found, but no usable video ideas were generated.',
+  daily_limit: 'The daily limit for new research checks has been reached.',
   duplicates: 'Generated ideas were already present or previously reviewed.',
   ideas_added: `${monitor.ideas_added || 0} new idea${monitor.ideas_added === 1 ? '' : 's'} added.`,
   error: 'The news check failed. See the error below.',
@@ -29,9 +32,10 @@ const newsOutcome = (monitor) => ({
 function NewsDetails({ idea }) {
   if (idea.source !== 'news' && !idea.news) return null
   const news = idea.news || {}
+  const hasResearch = (news.sources || []).some((source) => source.kind === 'web_research')
   return (
     <div className="stack gap-8 mt-16" style={{ fontSize: 12.5 }}>
-      <div><Chip tone="accent">From X news</Chip></div>
+      <div><Chip tone="accent">{hasResearch ? 'From web research' : 'From X news'}</Chip></div>
       {idea.directions && <details>
         <summary style={{ cursor: 'pointer' }}>Complete directions</summary>
         <div style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{idea.directions}</div>
@@ -39,9 +43,16 @@ function NewsDetails({ idea }) {
       {news.summary && <div>{news.summary}</div>}
       {(news.sources || []).map((post, index) => (
         <div key={post.id || index}>
-          {sourceUrl(post.url) && <a href={post.url} target="_blank" rel="noopener noreferrer">{post.author_name || post.author || `Source ${index + 1}`} on X</a>}
+          {post.kind === 'web_research'
+            ? <strong>{post.title || 'Research brief'} · {newsProviderLabel(post.provider)}</strong>
+            : sourceUrl(post.url) && <a href={post.url} target="_blank" rel="noopener noreferrer">{post.author_name || post.author || `Source ${index + 1}`} on X</a>}
           {post.created_at && <span className="muted"> · {newsTime(post.created_at)}</span>}
-          {post.text && <div className="muted">{post.text}</div>}
+          {post.text && (post.kind === 'web_research'
+            ? <details><summary style={{ cursor: 'pointer' }}>Saved research brief</summary><div className="muted" style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{post.text}</div></details>
+            : <div className="muted">{post.text}</div>)}
+          {(post.references || []).filter((reference) => sourceUrl(reference.url)).map((reference, referenceIndex) => (
+            <div key={`${reference.url}-${referenceIndex}`}><a href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title || reference.url}</a></div>
+          ))}
           {(post.article_urls || []).filter(sourceUrl).map((url) => (
             <div key={url}><a href={url} target="_blank" rel="noopener noreferrer">Read linked article</a></div>
           ))}
@@ -466,7 +477,7 @@ function IdeasArea({ area, go, meta, pageCheck }) {
           <div className="row center between row--wrap gap-10">
             <div className="row center gap-10">
               <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name={isNews ? 'newspaper' : 'lightbulb'} /></span>
-              <div><div style={{ fontWeight: 600 }}>{isNews ? 'News ideas' : 'Topic ideas'}</div><div className="muted" style={{ fontSize: 12.5 }}>{isNews ? 'Video and song ideas from the X posts your styles monitor. Review their sources, then accept, queue or create.' : "Accept the ideas you like, decline the ones you don't — accepted ideas wait under Accepted until you queue or create them."}</div></div>
+              <div><div style={{ fontWeight: 600 }}>{isNews ? 'News ideas' : 'Topic ideas'}</div><div className="muted" style={{ fontSize: 12.5 }}>{isNews ? 'Video and song ideas from the subjects your styles monitor. Review the saved research and sources, then accept, queue or create.' : "Accept the ideas you like, decline the ones you don't — accepted ideas wait under Accepted until you queue or create them."}</div></div>
             </div>
             <Segmented value={view} onChange={setView}
               options={[
@@ -510,19 +521,28 @@ function IdeasArea({ area, go, meta, pageCheck }) {
           <div className="row center between row--wrap gap-10">
             <div>
               <div style={{ fontWeight: 600 }}>News monitor</div>
-              <div className="muted" style={{ fontSize: 12.5 }}>Recent X posts become ideas in each enabled style. Configure topics and automation in Settings → Styles.</div>
+              <div className="muted" style={{ fontSize: 12.5 }}>{newsStatus?.source === 'x' ? 'Recent X posts' : 'Sourced web research'} becomes ideas in each enabled style. Configure subjects and automation in Settings → Styles.</div>
             </div>
             <Button variant="ghost" icon="rotate" disabled={checkingNews || !newsStatus?.configured || !newsStatus?.styles?.some((s) => s.enabled)} onClick={checkNews}>
-              {checkingNews ? 'Checking X…' : 'Check news now'}
+              {checkingNews ? (newsStatus?.source === 'x' ? 'Checking X…' : 'Researching news…') : 'Check news now'}
             </Button>
           </div>
           {newsError && <Banner tone="danger">{newsError}</Banner>}
-          {newsStatus && !newsStatus.configured && <div className="mt-16"><Banner tone="warn">{newsStatus.connection_error || 'Connect an X account in Settings → Channels → X to search for news.'}</Banner></div>}
+          {newsStatus && !newsStatus.configured && <div className="mt-16"><Banner tone="warn">{newsStatus.connection_error || (newsStatus.source === 'x' ? 'Connect an X account in Settings → Channels → X to search for news.' : 'Configure a research provider in Settings → Infrastructure → News research.')}</Banner></div>}
           {newsStatus?.configured && <p className="muted" style={{ fontSize: 13 }}>
-            {newsStatus.auth_source === 'account'
-              ? `All styles search with ${newsStatus.account_name ? `@${newsStatus.account_name}` : newsStatus.account}.`
-              : 'All styles search with the configured X bearer token.'}
-            {' '}Choose the shared account in Settings → Channels → X. Each style keeps its own query and monitoring settings.
+            {newsStatus.source === 'x' ? <>
+              {newsStatus.auth_source === 'account'
+                ? `All styles search with ${newsStatus.account_name ? `@${newsStatus.account_name}` : newsStatus.account}.`
+                : 'All styles search with the configured X bearer token.'}
+              {' '}Choose the shared account in Settings → Channels → X.
+            </> : <>
+              All styles research with {newsProviderLabel(newsStatus.provider)}{newsStatus.model ? ` (${newsStatus.model})` : ''}.
+              {' '}Matching subjects share saved research for one hour. Change the provider and limits in Settings → Infrastructure → News research.
+            </>}
+            {' '}Each style keeps its own subjects and monitoring settings.
+          </p>}
+          {newsStatus?.source !== 'x' && newsStatus?.daily_checks_limit != null && <p className="muted" style={{ fontSize: 13 }}>
+            New research checks today (UTC): {newsStatus.daily_checks_used || 0} / {newsStatus.daily_checks_limit}. Reusing saved research does not consume another check.
           </p>}
           {newsStatus?.background_enabled === false && <p className="muted" style={{ fontSize: 13 }}>Background scheduling is disabled on this server. On-demand and page-visit checks remain available.</p>}
           {newsStatus?.styles?.map((monitor) => (
@@ -533,11 +553,15 @@ function IdeasArea({ area, go, meta, pageCheck }) {
                 {monitor.enabled && <span className="muted" style={{ fontSize: 12.5 }}>{monitor.auto_queue ? (monitor.auto_accept ? 'Auto-accept + queue' : 'Review then auto-queue') : monitor.auto_accept ? 'Auto-accept' : 'Review ideas'} · up to {monitor.max_ideas} ideas/check</span>}
               </div>
               {monitor.enabled && <>
-                <div style={{ fontSize: 13 }}>{monitor.query || 'No search query configured.'}</div>
-                {monitor.last_query && monitor.last_query !== monitor.query && <div className="muted" style={{ fontSize: 12 }}>Last check used a different query: {monitor.last_query}</div>}
+                <div style={{ fontSize: 13 }}>{monitor.query || 'No subject configured.'}</div>
+                {monitor.last_query && monitor.last_query !== monitor.query && <div className="muted" style={{ fontSize: 12 }}>Last check used a different subject: {monitor.last_query}</div>}
                 <div className="muted" style={{ fontSize: 12 }}>Last check: {newsTime(monitor.last_checked)} · Last successful check: {newsTime(monitor.last_success)}</div>
                 {monitor.last_checked && <div style={{ fontSize: 13 }}>
-                  {monitor.posts_fetched ?? '—'} posts fetched · {monitor.posts_new ?? '—'} new posts · {monitor.ideas_added || 0} ideas added
+                  {(monitor.last_source || 'x') === 'x'
+                    ? `${monitor.posts_fetched ?? '—'} posts fetched · ${monitor.posts_new ?? '—'} new posts`
+                    : monitor.sources_fetched == null ? 'Research not completed'
+                      : `${monitor.sources_fetched} web sources · ${monitor.research_cached ? 'reused saved research' : 'new research'}`}
+                  {' · '}{monitor.ideas_added || 0} ideas added
                   {newsOutcome(monitor) && <div className="muted">{newsOutcome(monitor)}</div>}
                 </div>}
                 {monitor.last_error && <Banner tone="danger">{monitor.last_error}</Banner>}

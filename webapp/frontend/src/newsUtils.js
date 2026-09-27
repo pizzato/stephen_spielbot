@@ -5,6 +5,15 @@ export const NEWS_CHECK_MODES = [
   { value: 'scheduled', label: 'Scheduled', hint: 'Check while the backend is running, spaced evenly like publishing. Defaults to once a day.' },
 ]
 
+export const NEWS_RESEARCH_PROVIDERS = [
+  { value: 'default', label: 'Use the LLM backend' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'claude', label: 'Claude' },
+  { value: 'grok', label: 'Grok' },
+]
+
+export const newsProviderLabel = (provider) => NEWS_RESEARCH_PROVIDERS.find((item) => item.value === provider)?.label || provider || 'LLM'
+
 export function newsCheckLabel(monitor) {
   if (!monitor?.enabled) return 'Off'
   if (monitor.check_mode === 'scheduled') return `${monitor.checks_per_day || 1} check${Number(monitor.checks_per_day || 1) === 1 ? '' : 's'} per day`

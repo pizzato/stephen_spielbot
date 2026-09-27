@@ -64,6 +64,38 @@ whole budget to the answer. Raise it to `low`/`medium`/`high` if you want the
 model to think; pick **model default** to leave the parameter off the request.
 Non-reasoning models (`gpt-4o`) and the Grok backend never receive it.
 
+### News research
+
+Choose how every style researches news. **LLM web research** is the default source;
+it uses OpenAI, Claude or Grok web-search tools and saves a sourced brief for the video
+pipeline. No X account or separate search-provider key is needed. Grok uses its web
+tools only, not X search. **X post search** remains available as an alternative.
+
+| Control | Effect |
+|---|---|
+| **News source** | LLM web research (default), or X post search |
+| **Research provider** | Use the LLM backend (default), OpenAI, Claude or Grok; reuses that provider's existing API key |
+| **Research model (optional)** | Blank uses the chosen provider's configured model; the model must support web search |
+| **Country** | Two-letter country code used to disambiguate subjects; default `AU` |
+| **News lookback (hours)** | Recent developments to research; default 48, range 1–168 |
+| **Maximum new research checks per day** | Global cap across all styles; default 3, range 1–100, resets at midnight UTC |
+
+A local LLM cannot perform this research. Choose a cloud provider for research while
+keeping Local for script writing if desired. Configure its key in the **LLM backend**
+fields above or through the existing [environment variables](../environment.md#credentials).
+
+Matching subjects with the same research settings reuse saved research for one hour,
+including repeated **Check news now** clicks. Failed attempts have a five-minute
+retry cooldown. The global daily cap counts new research attempts, including failures;
+cache reuse and subsequent style-specific idea generation do not consume it. A research
+attempt may use several tool calls and tokens, and creative idea generation has its
+own LLM usage. The limit does not apply to the optional X post-search source.
+
+Settings here do not enable monitoring. Set subjects and choose when each style may
+check under [Styles → News monitoring](#news-monitoring). Research and usage records
+survive restarts; see [configuration](../configuration.md#shared-web-research) for the
+cache and audit-log files.
+
 ### Image models
 
 The **Hugging Face token** used to auto-download gated engine weights onto the workers,
@@ -303,15 +335,17 @@ Three buckets — Small / Medium / Large — each pairing a video **length in mi
 
 ### News monitoring
 
-**When to check news** defaults to **Off — never check**. Choose another mode to turn recent posts
-matching an **X search query** into video ideas using this style's instructions and
-default format. For example, a Music video style can turn Australian political news
-into songs. The query chooses what is monitored; the style's extra instructions choose
-the angle and tone.
+**When to check news** defaults to **Off — never check**. Choose another mode to turn
+researched news into ideas using this style's instructions and default format. For
+example, a Music video style can turn Australian political news into songs. The
+subjects choose what is monitored; the style's extra instructions choose the angle
+and tone. The source and research provider are shared global settings under
+[Infrastructure → News research](#news-research).
 
 | Control | Effect |
 |---|---|
-| **X search query** | Topics, hashtags, people or accounts to search; for example `(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet` |
+| **Subjects to research** | Plain-language interests for LLM research, such as `Medicare and public healthcare in Australia` or `OpenAI announcements` |
+| **X search query** | Shown instead when X post search is selected; uses X query syntax, for example `(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet` |
 | **When to check news** | **Off — never check**, **On demand**, **When opening AI Ideas**, or **Scheduled** |
 | **Checks per day** | Shown for Scheduled only; default 1 (daily). Even spacing like publishing: 2 = every 12 hours, 0.5 = every two days. Range 0.5–96 |
 | **Maximum ideas per check** | 1–5 ideas for this style; default 1 |
@@ -326,11 +360,14 @@ does not search again. Quick revisits within one minute share the previous check
 Keeping the page open does not trigger further searches. **Scheduled** runs in the
 background while the backend is running, spacing attempts from the last check (including
 failures and manual checks). The first scheduled check can run immediately if never checked.
-Manual checks bypass that spacing. Changing a query does not bypass the schedule.
+Manual checks bypass that spacing, but still reuse the one-hour research cache and obey
+the failed-attempt cooldown and daily research cap. Changing a subject does not bypass
+the schedule.
 
 Existing minute-based monitors become **On demand** on upgrade. Choose **Scheduled**
-explicitly to resume background searches, starting at one check per day. Searches use
-X API credits; each style checks its own query even though they share an account.
+explicitly to resume background checks, starting at one check per day. Matching subjects
+share LLM research across styles. Each style still creates its own creative ideas from
+the saved facts. Selecting X post search uses X API credits instead.
 
 Automatic queueing is independent of automatic acceptance. Leave auto-accept off to
 review ideas yourself; accepted ideas are then queued on the next monitor check.
@@ -346,8 +383,10 @@ them. It keeps the chosen news-check mode; on-demand discovery still requires a 
 **Save settings** applies the changes. Publishing continues to follow the
 separate publishing settings.
 
-Choose the shared search account or optional bearer token under [Channels → X](#x-news-search).
-Check status, review source links and use **Check news now** in [AI ideas → News](ideas.md#news-monitor).
+Choose the shared provider under [Infrastructure → News research](#news-research), or
+configure an account under [Channels → X](#x-news-search) if using X post search.
+Check status, review saved research and source links, and use **Check news now** in
+[AI ideas → News](ideas.md#news-monitor).
 Scheduled monitoring runs only while the backend is running. A disabled monitor makes no checks.
 
 ### Characters
@@ -440,7 +479,8 @@ Then connect channels via OAuth. Each connected channel has:
 
 ### X
 
-Publishing accounts and news search share this section. Enter the app's **Client ID**
+Publishing accounts and optional X news search share this section. LLM web research
+does not use these credentials. Enter the app's **Client ID**
 and, for a confidential client, **Client Secret**, save settings, then use
 **Connect X account** to authorize an account. The client credentials identify the
 app; the connection supplies the account tokens.
@@ -456,6 +496,10 @@ engagement prompt**, and **auto-respond**.
     there is deliberately no silent fallback to some other account.
 
 #### X news search
+
+These settings apply only when **News source** is **X post search** under
+[Infrastructure → News research](#news-research). LLM web research uses the selected
+provider's existing API key, including when the provider is Grok.
 
 Choose a connected account under **X account for all news searches**. This is a
 global setting: every style uses it, including styles with no X publishing account
