@@ -9,7 +9,7 @@ from unittest import mock
 from fastapi import HTTPException
 
 import app
-from pipeline import news, x as xt, youtube as yt
+from pipeline import news, news_people, x as xt, youtube as yt
 from pipeline.llm import Scene
 from test_styles import TempConfigCase, _style
 from scriptstub import stub_script
@@ -493,16 +493,63 @@ class NewsIntegrationTests(TempConfigCase):
         self.assertEqual([s["id"] for s in accepted], ["news-b"])
         self.assertEqual(accepted[0]["news"]["summary"], "Other style")
 
-    def test_unresolved_news_people_do_not_trigger_invented_portrait_generation(self):
-        self._config()
-        wd = self.output_dir / "unresolved-news"
-        app._write_script_characters(wd, [{"name": "Alex Example", "description": "LLM guessed appearance"}])
-        (wd / "news_people.json").write_text(json.dumps({
-            "characters": [], "references": [],
-            "unresolved": [{"name": "Alex Example", "reason": "Ambiguous identity"}],
-        }))
-        with mock.patch.object(app, "_preview_worker_urls") as workers, \
-                mock.patch.object(app, "_generate_script_portrait") as generate:
-            self.assertEqual(app.generate_all_script_portraits(wd, "News"), 0)
-        workers.assert_not_called()
-        generate.assert_not_called()
+    def test_automatic_news_song_keeps_nickname_subjects_and_builds_fallback_portraits_before_render(self):
+        self._config(auto_accept=True, auto_queue=True)
+        raw = self.read_config()
+        raw["styles"][0]["automation"] = {
+            "auto_format": "song", "auto_song": True,
+            "auto_song_critic_passes": 0, "auto_critic": False,
+        }
+        self.write_config(raw)
+        cfg = app.load_config()
+        post = {**POST, "text": "ALBO warned about dark forces and Pauline Hanson responded."}
+        reply = [_idea(people=[
+            {"name": "Anthony Albanese", "source_name": "ALBO", "description": "Principal news subject"},
+            {"name": "Pauline Hanson", "source_name": "Pauline Hanson", "description": "Responded to ALBO"},
+        ])]
+        with mock.patch.object(news, "fetch_recent_posts", return_value={"posts": [post], "newest_id": "101"}), \
+                mock.patch.object(news, "_chat_complete", return_value=json.dumps(reply)):
+            news_monitor.check(cfg, force=True)
+        queued = yt.load_queue()[0]
+        self.assertEqual([p["name"] for p in queued["news"]["people"]], ["Anthony Albanese", "Pauline Hanson"])
+        self.assertEqual(queued["news"]["people"][0]["aliases"], ["ALBO"])
+        yt.save_suggestions([])  # unattended generation must work from the durable queue snapshot
+        scene = Scene(id=1, title="The chorus", narration="", mode="silent",
+                      image_prompt="ALBO and Pauline Hanson sing", video_prompt="A musical duet")
+        events = []
+
+        def paint(engine, prompt, out, **kwargs):
+            out.write_bytes(b"generated portrait fixture")
+            events.append("portrait")
+
+        with stub_script([scene]) as (draft, divide), \
+                mock.patch.object(news_people, "_identity", side_effect=ValueError("Ambiguous identity")), \
+                mock.patch.object(backend.threading.Thread, "start"), \
+                mock.patch.object(backend.story_mode, "write_song", return_value={
+                    "caption": "A folk song", "lyrics": "[Verse]\nSing the news"}) as song, \
+                mock.patch.object(backend, "_do_song_generate"), \
+                mock.patch.object(app, "pick_song_singer", side_effect=AssertionError("Catalogue fallback")), \
+                mock.patch.object(app, "_preview_worker_urls", return_value=["http://worker"]), \
+                mock.patch.object(app.engines, "resolve", return_value={"family": "qwen-image"}), \
+                mock.patch.object(app, "generate_with_engine", side_effect=paint) as generate, \
+                mock.patch.object(backend, "generate_all_previews"), \
+                mock.patch.object(backend.DurableStore, "ensure_generation_plan",
+                                  side_effect=lambda *a, **k: events.append("plan")), \
+                mock.patch.object(app, "_launch_generation_job", return_value={}) as launch:
+            result = backend._start_queue_item(queued)
+            self.assertEqual(app.generate_all_script_portraits(result["work_dir"], "News"), 0)
+        self.assertEqual(events, ["portrait", "portrait", "plan"])
+        self.assertEqual(generate.call_count, 2)
+        launch.assert_called_once()
+        self.assertIn("Anthony Albanese", song.call_args.kwargs["singer_note"])
+        for call in (draft.call_args, divide.call_args):
+            self.assertIn("Anthony Albanese", call.kwargs["character_sheet"])
+            self.assertIn("Pauline Hanson", call.kwargs["character_sheet"])
+        wd = Path(result["work_dir"])
+        characters = app._read_script_characters(wd)
+        self.assertEqual([c["name"] for c in characters], ["Anthony Albanese", "Pauline Hanson"])
+        self.assertTrue(all((wd / "characters" / c["ref_image"]).is_file() for c in characters))
+        self.assertEqual(json.loads((wd / "song.json").read_text())["singer"], "Anthony Albanese")
+        warnings = json.loads((wd / "news_people.json").read_text())["unresolved"]
+        self.assertEqual({p["name"] for p in warnings}, {"Anthony Albanese", "Pauline Hanson"})
+        self.assertEqual(len(app._scene_reference_images("ALBO and Pauline Hanson sing", {}, cfg, "News", wd)), 2)

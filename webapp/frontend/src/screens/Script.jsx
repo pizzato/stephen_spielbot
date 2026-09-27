@@ -2121,7 +2121,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           {!!newsPeople?.unresolved?.length && (
             <Card span={12} className="reveal reveal-d1">
               <Banner tone="warn">
-                Automatic news portrait lookup could not supply every person's reference. Add or find each person's character below and upload a suitable reference before rendering if their likeness is needed.
+                Some news identities or portraits are uncertain. Characters use the best available match or a description-based fallback, and automatic creation continues. Generated portraits are not verified likenesses. You can review the details below and replace a reference if needed.
               </Banner>
               <ul style={{ fontSize: 13, marginBottom: 0 }}>
                 {newsPeople.unresolved.map((person, index) => <li key={`${person.name}-${index}`}><strong>{person.name}</strong>: {person.reason}</li>)}

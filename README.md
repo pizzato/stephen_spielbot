@@ -44,7 +44,8 @@ included, their song written, sung and re-voiced before the pictures are made â€
 AI-suggested video ideas, optional per-style [X news monitoring](docs/manual/ideas.md#news-monitor)
 in a dedicated News tab using a connected X account or an optional search bearer token,
 with on-demand, AI Ideas page-visit or scheduled checks (default once daily when scheduled),
-self-contained, source-backed directions, people appearance references and unattended news-to-video
+self-contained, source-backed directions, people appearance references with best-guess
+character fallbacks and uncertainty warnings, and unattended news-to-video
 or news-to-song creation, per-scene editing with image
 inpainting, clip trimming, per-scene review marks (to be reviewed / to work on /
 approved) and version history, opening titles and end credits

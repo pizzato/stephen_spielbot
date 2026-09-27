@@ -41,9 +41,12 @@ and facts missing from the collected posts remain unknown.
 
 The backend restores saved source context by the idea or queue item's ID when drafting
 the story or writing the song, so editing the angle or title does not lose it. If
-appearance references are enabled, the app adds found photographs to this film's
-characters. Directions require symbolic or non-identifying visuals when photographs
-are unavailable, rather than asking the writer to fetch images or invent likenesses.
+appearance references are enabled, the app creates this film's named characters and
+adds found photographs. Surname and nickname mentions can identify a person too.
+Uncertain matches use the best guess with a warning. When lookup cannot supply an
+identity or photograph, a description-based character still allows automatic portrait
+generation to continue. Generated portraits are not verified likenesses; you can
+optionally review or replace them in **Characters & Artifacts**.
 
 For a music video, news characters are prepared before writing the song. The main
 available news character is cast as lead singer ahead of the style's recurring cast.
