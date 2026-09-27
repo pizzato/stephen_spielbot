@@ -206,8 +206,9 @@ polls until the status leaves `rendering`. Endpoints: `POST /api/characters/shee
 A style's catalogue is what a film *may* use, not what it *will* use. Script generation
 only tells the LLM about a catalogue character when the brief names them — their name or
 any alias appearing in the **topic/description**, the **video title**, or the style's
-**extra instructions** (`_requested_characters` in `app.py`, applied to all three script
-stages: story draft, divide, and redraft). Otherwise no character sheet is sent and the
+**extra instructions** (`_requested_characters` in `app.py`). After drafting, division
+uses names and aliases in the current chapter prose; redrafts use that prose plus names
+in the new instruction. Otherwise no character sheet is sent and the
 story invents its own cast, which becomes [per-script characters](#per-script-characters).
 
 - Ask for one by name — "A day in the life of Bob John" — and the sheet is sent, so the
@@ -221,14 +222,22 @@ This matters most for [performance films](performance_films.md), where the cast 
 as the speaker roster: handing over the whole library put library characters into every
 acted, silent or music-video script.
 
-**Dividing a story into scenes** follows the same rule. The story names its cast before
-it is divided, and those names — plus any catalogue character the brief asked for — are
+**Dividing a story into scenes** follows the edited prose. Saving or dividing removes
+identified characters whose names and aliases no longer appear in any chapter. The old
+brief and an earlier song singer selection cannot add those people back during division.
+Catalogue references are resolved from the current catalogue using the chapter text.
+The story names its cast before it is divided, and those names are
 the film's whole company: every scene's **On screen** cast, and every speaker, must be one
 of them. The writer is told so explicitly and may not introduce anyone new, however
 natural the beat would make it (a bandmate, a rival, a second lead). This matters most for
 a music video, where no one speaks: a rule that bound only *speakers* bound nothing at
 all, and the writer would name a fresh lead singer per scene — each with no portrait, so
 each rendered as a different stranger.
+
+The Song tab's **Refresh singers** reloads eligible catalogue characters for the film's
+current style without discarding unsaved lyrics, direction or singer edits. Choices also
+refresh on opening the tab or returning to the browser window. Changing the selected
+singer affects the next story draft; existing story text and scenes remain editable.
 
 Rewriting **one scene** follows the same rule. **Re-generate scene** and converting a
 narrated scene to dialogue may only cast people the film already has — the scene's own
