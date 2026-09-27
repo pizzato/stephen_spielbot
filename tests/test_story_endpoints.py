@@ -140,8 +140,10 @@ class StoryEndpointTests(TempConfigCase):
         })
         body = backend.GenerateScriptBody(video_title="Dlg", topic=topic, n_scenes=2,
                                           style_name="Hero", format="dialogue")
+        story = _fake_story(2)
+        story["chapters"][0]["text"] = topic
         with mock.patch.object(backend.story_mode, "generate_story",
-                               return_value=_fake_story(2)) as gen, \
+                               return_value=story) as gen, \
              mock.patch.object(backend.story_mode, "divide_story",
                                return_value=(_fake_scenes(2), "m", "st", [])) as div:
             backend._do_script_generate(body)
@@ -216,6 +218,53 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(len(res["scenes"]), 4)
         self.assertTrue((wd / "script.json").exists())
         self.assertEqual(res["create_brief"]["format"], "narration")
+
+    def test_removed_character_is_not_restored_from_cast_brief_or_song(self):
+        for edit_path in ("divide", "save", "legacy"):
+            with self.subTest(edit_path=edit_path):
+                draft = self._draft(2)
+                wd = Path(draft["work_dir"])
+                self._singing_cfg()
+                story = _fake_story(2)
+                story["characters"] = [{"name": "Ada", "description": "a singer"},
+                                       {"name": "Ben", "aliases": ["Benny"], "description": "a drummer"}]
+                story["chapters"][0]["text"] = "Ada joins Benny on stage."
+                backend._story_path(wd).write_text(json.dumps(story))
+                backend._write_create_brief(wd, {"style_name": "Pop", "format": "song",
+                                                  "topic": "Ada sings with Ben"})
+                (wd / "song.json").write_text(json.dumps({
+                    "singer": "Ada", "vocalist": "female vocalist", "lyrics": "[Verse]\nHello"}))
+                edits = [backend.StoryChapterEdit(chapter=1, text="Benny plays alone on stage.")]
+                if edit_path == "save":
+                    backend.save_job_story(draft["job_id"], backend.StorySaveBody(chapters=edits))
+                elif edit_path == "legacy":
+                    # Older saved drafts still contain the original hidden cast.
+                    story["chapters"][0]["text"] = edits[0].text
+                    backend._story_path(wd).write_text(json.dumps(story))
+                with mock.patch.object(backend.story_mode, "divide_story",
+                                       return_value=(_fake_scenes(2), "m", "st", [])) as div:
+                    backend._do_story_divide(backend.DivideStoryBody(
+                        work_dir=str(wd), chapters=edits if edit_path == "divide" else []))
+                self.assertEqual([c["name"] for c in div.call_args.args[0]["characters"]], ["Ben"])
+                self.assertNotIn("Ada", div.call_args.kwargs["character_sheet"] or "")
+                self.assertNotIn("Ada", div.call_args.kwargs["dialogue_note"])
+                self.assertIn("Ben", div.call_args.kwargs["dialogue_note"])
+
+    def test_song_picker_reads_new_catalogue_and_current_brief_style(self):
+        draft = self._draft(2)
+        wd = Path(draft["work_dir"])
+        (wd / "song.json").write_text(json.dumps({"style_name": "Plain", "singer": ""}))
+        self.assertEqual(backend.get_job_song(draft["job_id"])["singers"], [])
+        cfg = self.read_config()
+        cfg["characters"] = [
+            {"name": "New singer", "description": "a vocalist", "style": "Hero"},
+            {"name": "Other singer", "description": "a vocalist", "style": "Plain"},
+        ]
+        cfg["characters_scoped_v3"] = True
+        self.write_config(cfg)
+        refreshed = backend.get_job_song(draft["job_id"])
+        self.assertEqual([c["name"] for c in refreshed["singers"]], ["New singer"])
+        self.assertEqual(refreshed["singer"], "")
 
     def test_divide_without_draft_404s(self):
         wd = self.output_dir / "no-story-here"
