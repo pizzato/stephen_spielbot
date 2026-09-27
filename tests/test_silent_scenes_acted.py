@@ -663,8 +663,14 @@ class AssemblyTests(unittest.TestCase):
 
         store = DurableStore(root / "orchestrator.sqlite3")
         self.addCleanup(store.close)
+
+        def fake_copy(src, out, enabled=True):
+            Path(out).write_bytes(Path(src).read_bytes())
+            return out
+
         m = unittest.mock
-        with m.patch.object(rg, "load_config", return_value={}), \
+        with m.patch.object(rg, "copy_video_with_attribution", side_effect=fake_copy) as copy, \
+             m.patch.object(rg, "load_config", return_value={}), \
              m.patch.object(rg.DurableStore, "default", classmethod(lambda cls: store)), \
              m.patch.object(rg, "OUTPUT_DIR", out_dir), \
              m.patch.object(rg, "alive_workers", return_value=["http://w:8188"]), \
@@ -674,6 +680,8 @@ class AssemblyTests(unittest.TestCase):
              m.patch.object(rg, "concatenate_scenes",
                             side_effect=lambda clips, out, **kw: Path(out).write_bytes(b"c" * 20_000)):
             rg.main(wd)
+        copy.assert_called_once()
+        self.assertTrue(copy.call_args.args[2])
         return store, job_id_from_work_dir(wd), out_dir
 
     def _silent_row(self, sid):

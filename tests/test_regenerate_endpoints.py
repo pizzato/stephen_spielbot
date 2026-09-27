@@ -95,6 +95,15 @@ class FilmUpscaleTests(unittest.TestCase):
         backend._activity_log.clear()
         backend._current_ops.clear()
 
+        # These tests use fake clip bytes; the real metadata remux is covered
+        # with encoded MP4s in test_assembler.VideoAttributionTests.
+        def fake_copy(src, out, enabled=True):
+            out.write_bytes(src.read_bytes())
+            return out
+        p = mock.patch("pipeline.assembler.copy_video_with_attribution", side_effect=fake_copy)
+        self.copy_with_attribution = p.start()
+        self.addCleanup(p.stop)
+
     def test_final_video_upscale_replaces_final_and_records_version(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
         final = wd.with_suffix(".mp4")
@@ -228,7 +237,8 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(b"combined-scenes")
             return out
 
-        def fake_mix(video_path, music_path, output_path, volume=0.0, voice_volume=1.0, ambient_path=None, ambient_volume=0.0):
+        def fake_mix(video_path, music_path, output_path, volume=0.0, voice_volume=1.0, ambient_path=None, ambient_volume=0.0, metadata_enabled=True):
+            self.assertFalse(metadata_enabled)
             mixed.append((video_path.read_bytes(), music_path, volume, voice_volume, ambient_path, ambient_volume))
             output_path.write_bytes(b"scene-temporal-final")
             return output_path
@@ -237,6 +247,7 @@ class FilmUpscaleTests(unittest.TestCase):
              mock.patch.object(backend.gapp, "load_config", return_value={
                  "comfy_workers": ["http://w1:8188", "http://w2:8188"],
                  "temporal_video_upscaler_timeout": 1234,
+                 "video_metadata_enabled": False,
                  "music_vol": 5,
                  "voice_vol": 200,
                  "ambient_vol": 1,
@@ -326,7 +337,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(b"re-upscaled-scene" * 1000)
             return out
 
-        with mock.patch.object(backend.gapp, "load_config", return_value={"comfy_workers": ["http://w1:8188"]}), \
+        with mock.patch.object(backend.gapp, "load_config", return_value={"comfy_workers": ["http://w1:8188"], "video_metadata_enabled": False}), \
              mock.patch("pipeline.worker_pool.alive_workers", return_value=["http://w1:8188"]), \
              mock.patch("pipeline.assembler._get_video_dimensions", side_effect=fake_dims), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
@@ -338,6 +349,7 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(backend._film_tasks["tid"]["status"], "done")
         # Sized off the rendered film (704×2), fed the raw scene — no conform pass.
         self.assertEqual(calls, [(scene, 1408, 1408)])
+        self.assertFalse(self.copy_with_attribution.call_args.args[2])
         # Cached under the rendered-size key a later re-run can find again.
         self.assertTrue((wd / "final_upscale_scenes" / "flashvsr_2x-1408x1408").is_dir())
         history = backend.final_video_history.history(wd)
