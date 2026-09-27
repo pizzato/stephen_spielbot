@@ -41,10 +41,11 @@ wordless beat matches the takes it cuts against.
 Around the pipeline, the web app also handles the full channel workflow: a render
 queue with automation — global or per style, unattended in any format, music videos
 included, their song written, sung and re-voiced before the pictures are made —
-AI-suggested video ideas, optional per-style [X news monitoring](docs/manual/ideas.md#news-monitor)
-in a dedicated News tab using a connected X account or an optional search bearer token,
+AI-suggested video ideas, optional per-style [news research](docs/manual/ideas.md#news-monitor)
+in a dedicated News tab using OpenAI, Claude or Grok web tools with existing API keys
+(or optional X post search), shared cached research and a global daily research cap,
 with on-demand, AI Ideas page-visit or scheduled checks (default once daily when scheduled),
-self-contained, source-backed directions, people appearance references with best-guess
+self-contained, sourced directions, people appearance references with best-guess
 character fallbacks and uncertainty warnings, and unattended news-to-video
 or news-to-song creation, per-scene editing with image
 inpainting, clip trimming, per-scene review marks (to be reviewed / to work on /

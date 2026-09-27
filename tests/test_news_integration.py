@@ -51,7 +51,7 @@ class NewsIntegrationTests(TempConfigCase):
         self.write_config({
             "styles": [_style("News", news_monitor={"enabled": True,
                 "check_mode": "scheduled", "query": "music lang:en", "include_people": True, **monitor})],
-            "default_style": "News", "news": {"x_bearer_token": "test-token"},
+            "default_style": "News", "news": {"source": "x", "x_bearer_token": "test-token"},
         })
         return app.load_config()
 
@@ -138,7 +138,7 @@ class NewsIntegrationTests(TempConfigCase):
             _style("Manual", news_monitor={"enabled": True, "check_mode": "manual", "query": "manual"}),
             _style("Scheduled", news_monitor={"enabled": True, "check_mode": "scheduled", "query": "daily"}),
             {"name": "Off", "parent": "Visit", "news_monitor": {"enabled": False}},
-        ], "default_style": "Visit"})
+        ], "default_style": "Visit", "news": {"source": "x"}})
         with mock.patch.object(news, "fetch_recent_posts", return_value={"posts": []}) as fetch:
             backend.news_check(backend.NewsCheckBody(style_name="__all__", trigger="page_open"))
         self.assertEqual([call.args[1] for call in fetch.call_args_list], ["visit", "visit"])
@@ -149,7 +149,7 @@ class NewsIntegrationTests(TempConfigCase):
     def test_all_styles_search_with_global_account_regardless_of_publishing_account(self):
         self.write_config({
             "x_accounts": [{"id": "shared"}, {"id": "publisher"}],
-            "x_client_id": "client-id", "news": {"x_account": "shared"},
+            "x_client_id": "client-id", "news": {"source": "x", "x_account": "shared"},
             "styles": [
                 _style(name, x_account=publisher, news_monitor={"enabled": True, "query": name})
                 for name, publisher in (("First", "publisher"), ("Second", ""), ("Third", "shared"))

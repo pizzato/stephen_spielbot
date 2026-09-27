@@ -10472,7 +10472,7 @@ class NewsCheckBody(BaseModel):
 
 @api.post("/api/news/check")
 def news_check(body: NewsCheckBody) -> dict:
-    with _track_op("Checking X news", body.style_name):
+    with _track_op("Checking news", body.style_name):
         return news_monitor.check(gapp.load_config(), body.style_name,
                                   force=body.trigger == "manual", page_open=body.trigger == "page_open")
 

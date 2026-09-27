@@ -41,7 +41,11 @@ also works and uses the classic v1.1 media upload.
 
 ## News search
 
-News monitoring can reuse the account connected above. Configure its search account
+The default news source uses LLM web research and does not require an X connection.
+The steps below apply only after selecting **X post search** under
+[Settings → Infrastructure → News research](manual/settings.md#news-research).
+
+X news monitoring can reuse the account connected above. Configure its search account
 in **Settings → Channels → X**, alongside the app credentials and publishing
 accounts. OAuth 2.0 tokens refresh automatically using the saved refresh token;
 OAuth 1.0a accounts use their existing keys. Client ID and Client Secret alone are not

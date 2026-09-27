@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, resolutionTier, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import SettingsAssets from './SettingsAssets.jsx'
-import { NEWS_CHECK_MODES, newsCheckLabel } from '../newsUtils.js'
+import { NEWS_CHECK_MODES, NEWS_RESEARCH_PROVIDERS, newsCheckLabel, newsProviderLabel } from '../newsUtils.js'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
   globalAutomation, resolveAutomation, automationSource } from '../styleUtils.js'
 
@@ -2015,6 +2015,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   }
 
   const llmBackend = cfg.llm_backend || 'local'
+  const newsSource = cfg.news?.source || 'llm'
+  const researchProvider = cfg.news?.research_provider || 'default'
+  const effectiveResearchProvider = researchProvider === 'default' ? llmBackend : researchProvider
+  const setNews = (key, value) => set('news', { ...(cfg.news || {}), [key]: value })
 
   return (
     <div>
@@ -2125,6 +2129,54 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <Field label="Local LLM model"><input className="input" value={cfg.local_llm_model || ''} onChange={(e) => set('local_llm_model', e.target.value)} /></Field>
                 </>
               )}
+            </div>
+          </Card>
+
+          <Card span={12} className="reveal reveal-d2">
+            <span className="label-sm">News research</span>
+            <p className="muted" style={{ fontSize: 13 }}>
+              Research subjects once, then let each style turn the saved facts and sources into its own video ideas.
+              Complete research is included in the video directions. Set subjects and when to check under Styles → News monitoring.
+            </p>
+            <div className="stack gap-22">
+              <Field label="News source" hint="Shared by every style. Web research uses your LLM provider's search tools; X reads posts from your connected account.">
+                <select className="select" value={newsSource} onChange={(e) => setNews('source', e.target.value)}>
+                  <option value="llm">LLM web research</option>
+                  <option value="x">X post search</option>
+                </select>
+              </Field>
+              {newsSource === 'llm' ? <>
+                <div className="row gap-22 row--wrap">
+                  <div className="grow"><Field label="Research provider" hint="Uses the same API key as the LLM backend above. Research can use a different provider from script writing.">
+                    <select className="select" value={researchProvider} onChange={(e) => setNews('research_provider', e.target.value)}>
+                      {NEWS_RESEARCH_PROVIDERS.map((provider) => <option key={provider.value} value={provider.value}>{provider.label}</option>)}
+                    </select>
+                  </Field></div>
+                  <div className="grow"><Field label="Research model (optional)" hint={`Leave blank to use the configured ${newsProviderLabel(effectiveResearchProvider)} model. Choose a model that supports web search.`}>
+                    <input className="input" value={cfg.news?.research_model || ''}
+                      placeholder={cfg[`${effectiveResearchProvider}_model`] || 'Use the provider’s configured model'}
+                      onChange={(e) => setNews('research_model', e.target.value)} />
+                  </Field></div>
+                </div>
+                {effectiveResearchProvider === 'local' && <Banner tone="warn">Local models cannot perform this web research. Select OpenAI, Claude or Grok and configure its API key in the LLM backend above.</Banner>}
+                <div className="row gap-22 row--wrap">
+                  <div className="grow"><Field label="Country" hint="Two-letter country code for the news context, such as AU for Australia, GB or US.">
+                    <input className="input" maxLength={2} value={cfg.news?.country ?? 'AU'}
+                      onChange={(e) => setNews('country', e.target.value.toUpperCase())} placeholder="AU" />
+                  </Field></div>
+                  <div className="grow"><Field label="News lookback (hours)" hint="Ask for substantive developments during this period, with event dates and source links.">
+                    <input className="input" type="number" min={1} max={168} step={1} value={cfg.news?.lookback_hours ?? 48}
+                      onChange={(e) => setNews('lookback_hours', e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={(e) => setNews('lookback_hours', Math.max(1, Math.min(168, Math.round(Number(e.target.value) || 48))))} />
+                  </Field></div>
+                  <div className="grow"><Field label="Maximum new research checks per day" hint="Global limit across all styles, resetting at midnight UTC. Failed attempts count. Reusing saved research does not; generating style ideas has separate LLM usage.">
+                    <input className="input" type="number" min={1} max={100} step={1} value={cfg.news?.max_checks_per_day ?? 3}
+                      onChange={(e) => setNews('max_checks_per_day', e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={(e) => setNews('max_checks_per_day', Math.max(1, Math.min(100, Math.round(Number(e.target.value) || 3))))} />
+                  </Field></div>
+                </div>
+                <div className="muted" style={{ fontSize: 12.5 }}>Matching subjects reuse research for one hour across styles and repeated checks. Each new check may use multiple provider searches and tokens. No X account is needed for web research, including with Grok.</div>
+              </> : <p className="muted" style={{ fontSize: 13 }}>Choose the shared search account under Channels → X. X charges for returned posts; style subjects must use X search syntax.</p>}
             </div>
           </Card>
 
@@ -2745,8 +2797,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={12} className="reveal reveal-d2">
             <span className="label-sm">News monitoring · {st.name}</span>
             <p className="muted" style={{ fontSize: 13 }}>
-              Turn recent X posts into ideas shaped by this style's instructions and default format. A music-video style can write songs about the news.
-              Every style uses the shared X search account selected under Channels → X. Choose when this style may search; each search uses X API credits.
+              Turn {newsSource === 'x' ? 'recent X posts' : 'sourced web research'} into ideas shaped by this style's instructions and default format. A music-video style can write songs about the news.
+              {' '}{newsSource === 'x'
+                ? 'Every style uses the shared X search account selected under Channels → X. Each search uses X API credits.'
+                : 'Every style uses the research provider selected under Infrastructure → News research. Matching subjects share research for one hour, within the global daily limit.'}
+              {' '}Choose when this style may check.
             </p>
             <div className="stack gap-16">
               <Field label="When to check news" hint={NEWS_CHECK_MODES.find((mode) => mode.value === (newsMonitor.enabled ? newsMonitor.check_mode : 'off'))?.hint}>
@@ -2760,9 +2815,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               </Field>
               <ParentVal k="news_monitor" />
               {newsMonitor.enabled && (<>
-                <Field label="X search query" hint="Choose topics, people, hashtags or trusted accounts. Example: (Australia OR Canberra) (politics OR parliament) lang:en -is:retweet. The style's script instructions shape the resulting video ideas.">
+                <Field label={newsSource === 'x' ? 'X search query' : 'Subjects to research'} hint={newsSource === 'x'
+                  ? "Choose topics, people, hashtags or trusted accounts. Example: (Australia OR Canberra) (politics OR parliament) lang:en -is:retweet. The style's script instructions shape the resulting video ideas."
+                  : "Describe the subjects in plain language, such as Medicare policy and public healthcare in Australia, or OpenAI announcements. The style's script instructions shape the video ideas after research."}>
                   <textarea className="textarea" rows={2} value={newsMonitor.query}
-                    onChange={(e) => setNewsMonitor('query', e.target.value)} placeholder="(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet" />
+                    onChange={(e) => setNewsMonitor('query', e.target.value)} placeholder={newsSource === 'x' ? '(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet' : 'The latest Medicare and public healthcare news in Australia'} />
                 </Field>
                 <div className="row gap-22 row--wrap">
                   {newsMonitor.check_mode === 'scheduled' && <Field label="Checks per day" hint={`${cadenceHint(newsMonitor.checks_per_day || 1)} 1 = daily, 2 = every 12 hours, 0.5 = every two days. Up to 96/day.`}>
@@ -3349,6 +3406,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <input className="input" type="password" placeholder={cfg.x_client_secret_set ? '•••••••• (saved — leave blank to keep)' : ''} value={cfg.x_client_secret || ''} onChange={(e) => set('x_client_secret', e.target.value)} />
               </Field>
               <span className="label-sm">News search</span>
+              <p className="muted" style={{ fontSize: 12.5 }}>These credentials are used only when News source is set to X post search under Infrastructure → News research. LLM web research uses the provider API key and does not need an X account.</p>
               <Field label="X account for all news searches" hint="Shared by every style, including styles without an X publishing account. Automatic uses a saved bearer token if present, otherwise your only connected account. Choose an account here once when you have several.">
                 <select className="select" value={cfg.news?.x_account || ''}
                   onChange={(e) => set('news', { ...(cfg.news || {}), x_account: e.target.value })}>

@@ -500,7 +500,9 @@ DEFAULT_CFG = {
     # mirror the default style back onto the flat keys (see _ensure_styles).
     "styles": [],
     "default_style": "",
-    "news": {"x_bearer_token": "", "x_account": ""},
+    "news": {"source": "llm", "research_provider": "default", "research_model": "",
+             "country": "AU", "lookback_hours": 48, "max_checks_per_day": 3,
+             "x_bearer_token": "", "x_account": ""},
     "default_news_monitor": {},
 }
 
@@ -1765,6 +1767,10 @@ def merge_config_update(current: dict, update: dict) -> dict:
                 news["x_bearer_token"] = token.strip()
             if isinstance(val.get("x_account"), str):
                 news["x_account"] = val["x_account"].strip()
+            for field in ("source", "research_provider", "research_model", "country",
+                          "lookback_hours", "max_checks_per_day"):
+                if field in val:
+                    news[field] = val[field]
             merged["news"] = news
             continue
         if key.endswith("_set"):
@@ -1792,6 +1798,8 @@ _OPERATIONAL_FILE_NAMES = {
     "youtube_analytics.json",
     "youtube_suggestions.json",
     "news_monitor.json",
+    "news_research.json",
+    "news_research_usage.jsonl",
     "youtube_dismissed_suggestions.json",
     "youtube_daily_uploads.json",
     "last_session.json",

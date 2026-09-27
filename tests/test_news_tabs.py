@@ -25,7 +25,7 @@ class NewsTabTests(TempConfigCase):
                 _style("News", news_monitor={"enabled": True, "query": "Australian politics"}),
                 _style("Excluded", auto_pick_exclude=True),
             ],
-            "default_style": "News", "news": {"x_bearer_token": "test-token"},
+            "default_style": "News", "news": {"source": "x", "x_bearer_token": "test-token"},
         })
 
     def _saved_news(self, **overrides):

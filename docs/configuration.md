@@ -66,22 +66,31 @@ fetching, AI-idea top-ups and publishing stay global.
 
 ## News monitoring
 
-Each style can opt into monitoring recent X posts. The whole `news_monitor` object is
-inherited by a child unless the child overrides it. Monitoring and automation are off
-by default; configure them in [Settings → Styles](manual/settings.md#news-monitoring).
+Each style can opt into researching current news about its subjects. Web research
+uses OpenAI, Claude or Grok search tools by default; X post search remains an optional
+source. The whole `news_monitor` object is inherited by a child unless the child
+overrides it. Monitoring and automation are off by default. Choose the shared source
+in [Settings → Infrastructure → News research](manual/settings.md#news-research), then
+configure subjects and check modes in [Settings → Styles](manual/settings.md#news-monitoring).
 
 ```yaml
 news:
-  x_account: ""                # optional connected X account ID for search
-  x_bearer_token: ""            # optional standalone token in Settings → Channels → X
+  source: llm                  # llm (default), or x for legacy X post search
+  research_provider: default   # follow llm_backend; or openai, claude, grok
+  research_model: ""           # blank uses this provider's configured model
+  country: AU                  # two-letter country code
+  lookback_hours: 48           # 1–168 hours of recent developments
+  max_checks_per_day: 3        # 1–100 new research attempts globally, per UTC day
+  x_account: ""                # only for source: x; optional connected account ID
+  x_bearer_token: ""           # only for source: x; optional standalone token
 styles:
   - name: News Songs
     news_monitor:
       enabled: true
-      query: '(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet'
+      query: 'Medicare and public healthcare in Australia'
       check_mode: manual        # manual (default), page_open, or scheduled
       checks_per_day: 1         # scheduled only; 0.5–96, default once daily
-      max_ideas: 1              # 1–5 per check
+      max_ideas: 1              # 1–5 per style/check
       include_people: true     # seek appearance references for the film
       auto_accept: false       # review new ideas by default
       auto_queue: false        # queue accepted ideas on a monitor check
@@ -89,40 +98,77 @@ styles:
       auto_format: song
 ```
 
-Configure search alongside publishing in [Settings → Channels → X](manual/settings.md#x).
-An explicit `news.x_account` selects one connected account for every style's news
-searches, independently of each style's publishing account. Otherwise, a
-saved `news.x_bearer_token` (or `X_BEARER_TOKEN`) takes precedence; with neither set,
-the sole connected X account is used automatically. With multiple accounts, select
-one for search. This selection does not change any style's publishing account.
+### Shared web research
 
-Connected OAuth 2.0 accounts reuse their saved access token and refresh it with the
-saved refresh token when needed; OAuth 1.0a accounts use their existing keys. Client
-ID and Client Secret alone are not an account connection: use **Connect X account**
-first. You do not need
-to copy an expiring access token into the bearer field. The X app must have access
-to recent search whichever authentication method is used. Stored bearer tokens are
-private and redacted in API responses.
+The research provider reuses its existing `openai_api_key`, `claude_api_key` or
+`grok_api_key`, including the existing environment-variable fallbacks. There is no
+separate search key. `research_provider: default` follows `llm_backend`; Local cannot
+perform web research, so select a cloud research provider if scripts use a local model.
+The research model must support the provider's web tools. This is a distinct research
+request: normal script and idea generation keep their current provider settings.
+Grok research enables web search only, never its separately billed X-search tool.
+
+`query` is a plain-language subject in LLM mode. Research uses the requested country
+and recent time window, saving a complete factual brief and source citations before
+creating style-specific ideas. Directions carry that material through Queue/Create;
+song and story writers are not expected to browse. Named news people and the appearance
+option remain attached to the idea, including principal-subject singer selection for
+music videos.
+
+Matching subjects with the same research settings share a durable one-hour cache
+across styles and manual checks. Failed research attempts have a five-minute retry
+cooldown. `max_checks_per_day` limits new research attempts across the whole app,
+resetting at midnight UTC. Failures consume an attempt; cache reuse and creative
+idea-generation calls do not. One research attempt can use multiple web-tool calls and
+tokens, so the count is not a dollar budget or a count of individual provider searches.
+
+The cache is saved in `~/.config/video-generator/news_research.json`. The append-only
+`news_research_usage.jsonl` beside it records research attempts and provider-reported
+usage, including failures. These records survive a restart; credentials are not stored
+in them. The News panel shows the selected provider/model, daily research count, source
+count and whether a style reused research.
+
+### Optional X post search
+
+Set `news.source: x` to use recent X posts instead of web research. In this mode,
+`query` uses X search syntax, for example
+`(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet`. The LLM research
+provider, cache and daily research limit do not control X post reads.
+
+Configure X search alongside publishing in
+[Settings → Channels → X](manual/settings.md#x-news-search). An explicit
+`news.x_account` selects one connected account for every style's news searches,
+independently of its publishing account. Otherwise, a saved `news.x_bearer_token`
+(or `X_BEARER_TOKEN`) takes precedence; with neither set, the sole connected X account
+is used automatically. With multiple accounts, select one for search.
+
+Connected OAuth 2.0 accounts reuse and refresh their saved access token; OAuth 1.0a
+accounts use their existing keys. Client ID and Client Secret alone are not an account
+connection: use **Connect X account** first. The X app must have recent-search access.
+Stored bearer tokens are private and redacted in API responses. X post searches consume
+X API credits and do not fetch linked article contents.
+
+### Timing and automation
 
 `enabled: false` prevents all checks, including manual ones. An enabled monitor uses
-`manual` by default: only **Check news now** searches. `page_open` searches when AI Ideas
+`manual` by default: only **Check news now** searches. `page_open` checks when AI Ideas
 is visited (all styles using this mode, with a one-minute debounce across reloads/tabs).
 It does not repeat while the page stays open. `scheduled` opts into backend polling,
 spaced by `86400 / checks_per_day` seconds from the last attempt, including failures
 and manual checks. A new schedule can check immediately when there is no previous
-attempt. Manual checks bypass the interval; editing a query does not.
+attempt. Manual checks bypass the schedule, but not the LLM cache, failure cooldown
+or daily research limit. Editing a query does not bypass scheduled spacing.
 
 Legacy `interval_minutes` is removed during normalization. Existing enabled monitors
 become `manual` with `checks_per_day: 1`; explicitly choose `scheduled` to resume
-background searches. Disabled styles stay disabled, and sparse children inherit the
-parent's complete monitor settings. Each style's searches consume the shared X account's
-API credits.
+background checks. Disabled styles stay disabled, and sparse children inherit the
+parent's complete monitor settings.
 
-Automatic queueing uses the idea's saved size preset, defaulting to Small. Rendering without intervention also
-needs `automation.auto_start_job` and `automation.auto_approve_script`, plus `auto_song`
-and `auto_song_approve` for music videos. The Styles panel's **Enable unattended news
-videos** action stages these flags together, retaining the selected check mode.
-Publishing uses the existing settings.
+Automatic queueing uses the idea's saved size preset, defaulting to Small. Rendering
+without intervention also needs `automation.auto_start_job` and
+`automation.auto_approve_script`, plus `auto_song` and `auto_song_approve` for music
+videos. The Styles panel's **Enable unattended news videos** action stages these flags
+together, retaining the selected check mode. Publishing uses the existing settings.
 
 ## Worker lists
 
