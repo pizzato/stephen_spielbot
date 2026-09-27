@@ -32,10 +32,21 @@ def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
 def normalize_monitor(value) -> dict:
     """Defaults for an optional per-style monitor; automation stays opt-in."""
     value = value if isinstance(value, dict) else {}
+    # Old minute-based monitors become on-demand: background searches now need
+    # an explicit schedule choice, including after upgrading an existing config.
+    mode = value.get("check_mode")
+    if mode not in ("manual", "page_open", "scheduled"):
+        mode = "manual"
+    try:
+        per_day = float(value.get("checks_per_day", 1))
+        per_day = max(0.5, min(96, per_day)) if math.isfinite(per_day) and per_day > 0 else 1
+    except (TypeError, ValueError, OverflowError):
+        per_day = 1
     return {
         "enabled": value.get("enabled") is True,
         "query": str(value.get("query") or "").strip(),
-        "interval_minutes": _bounded_int(value.get("interval_minutes"), 60, 15, 1440),
+        "check_mode": mode,
+        "checks_per_day": per_day,
         "include_people": value.get("include_people") is True,
         "auto_accept": value.get("auto_accept") is True,
         "auto_queue": value.get("auto_queue") is True,

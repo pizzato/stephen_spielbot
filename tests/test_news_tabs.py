@@ -196,7 +196,7 @@ class NewsTabTests(TempConfigCase):
         }) as fetch, mock.patch.object(news, "generate_news_ideas", return_value=[_idea(
             title="A song about the policy", source_ids=["202"], sources=[new_post],
         )]) as generate:
-            result = news_monitor.check(app.load_config(), "News")
+            result = news_monitor.check(app.load_config(), "News", force=True)
         self.assertEqual(fetch.call_args.args[1], "Trump")
         self.assertIsNone(fetch.call_args.kwargs["since_id"])
         self.assertEqual(generate.call_args.args[0], [new_post])

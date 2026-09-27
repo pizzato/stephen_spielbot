@@ -79,7 +79,8 @@ styles:
     news_monitor:
       enabled: true
       query: '(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet'
-      interval_minutes: 60      # minimum 15
+      check_mode: manual        # manual (default), page_open, or scheduled
+      checks_per_day: 1         # scheduled only; 0.5–96, default once daily
       max_ideas: 1              # 1–5 per check
       include_people: true     # seek appearance references for the film
       auto_accept: false       # review new ideas by default
@@ -103,11 +104,25 @@ to copy an expiring access token into the bearer field. The X app must have acce
 to recent search whichever authentication method is used. Stored bearer tokens are
 private and redacted in API responses.
 
-The scheduler runs in the backend; disabled styles are skipped.
+`enabled: false` prevents all checks, including manual ones. An enabled monitor uses
+`manual` by default: only **Check news now** searches. `page_open` searches when AI Ideas
+is visited (all styles using this mode, with a one-minute debounce across reloads/tabs).
+It does not repeat while the page stays open. `scheduled` opts into backend polling,
+spaced by `86400 / checks_per_day` seconds from the last attempt, including failures
+and manual checks. A new schedule can check immediately when there is no previous
+attempt. Manual checks bypass the interval; editing a query does not.
+
+Legacy `interval_minutes` is removed during normalization. Existing enabled monitors
+become `manual` with `checks_per_day: 1`; explicitly choose `scheduled` to resume
+background searches. Disabled styles stay disabled, and sparse children inherit the
+parent's complete monitor settings. Each style's searches consume the shared X account's
+API credits.
+
 Automatic queueing uses the idea's saved size preset, defaulting to Small. Rendering without intervention also
 needs `automation.auto_start_job` and `automation.auto_approve_script`, plus `auto_song`
 and `auto_song_approve` for music videos. The Styles panel's **Enable unattended news
-videos** action stages these flags together. Publishing uses the existing settings.
+videos** action stages these flags together, retaining the selected check mode.
+Publishing uses the existing settings.
 
 ## Worker lists
 

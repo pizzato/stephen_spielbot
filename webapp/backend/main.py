@@ -27,6 +27,7 @@ import urllib.request
 import uuid
 from contextlib import asynccontextmanager, contextmanager, nullcontext
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
@@ -10466,12 +10467,14 @@ def news_ideas(style_name: str = Query("")) -> dict:
 
 class NewsCheckBody(BaseModel):
     style_name: str = ""
+    trigger: Literal["manual", "page_open"] = "manual"
 
 
 @api.post("/api/news/check")
 def news_check(body: NewsCheckBody) -> dict:
     with _track_op("Checking X news", body.style_name):
-        return news_monitor.check(gapp.load_config(), body.style_name, force=True)
+        return news_monitor.check(gapp.load_config(), body.style_name,
+                                  force=body.trigger == "manual", page_open=body.trigger == "page_open")
 
 
 @api.get("/api/youtube/comments")
@@ -17783,7 +17786,7 @@ def _automation_tick() -> dict:
         # flag is off, so the behaviour can't contradict what's ticked.
         out: dict = {}
         with _track_op("Automation tick"):
-            if news_monitor.enabled(cfg):
+            if news_monitor.scheduled_enabled(cfg):
                 out["news"] = news_monitor.check(cfg)
             # Self-heal queue rows first (e.g. fail items whose render errored)
             # so the steps below see real state. Without this, reconciliation
@@ -17938,7 +17941,7 @@ def _automation_loop():
                     # make the tick worth running, whatever the global says.
                     or gapp.automation_enabled_anywhere(cfg, "auto_start_job")
                     or gapp.automation_enabled_anywhere(cfg, "auto_write_scripts")
-                    or news_monitor.enabled(cfg)):
+                    or news_monitor.scheduled_enabled(cfg)):
                 _automation_tick()
         except Exception:
             pass

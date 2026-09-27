@@ -342,7 +342,7 @@ export const api = {
   getQueue: () => req('GET', '/queue'),
   newsStatus: (styleName = '') => req('GET', `/news/status?style_name=${encodeURIComponent(styleName)}`),
   getNewsIdeas: (styleName = '') => req('GET', `/news/ideas?style_name=${encodeURIComponent(styleName)}`),
-  checkNews: (styleName = '') => req('POST', '/news/check', { style_name: styleName }),
+  checkNews: (styleName = '', trigger = 'manual') => req('POST', '/news/check', { style_name: styleName, trigger }),
   getComments: () => req('GET', '/youtube/comments'),
   getSuggestions: (guidance, refresh, styleName) => {
     const p = new URLSearchParams()

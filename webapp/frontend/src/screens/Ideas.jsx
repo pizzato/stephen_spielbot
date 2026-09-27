@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { Card, Chip, Button, Segmented, Icon, Banner, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
+import { newsCheckLabel } from '../newsUtils.js'
 
 function Stars({ value }) {
   if (value == null) return null
@@ -136,6 +137,23 @@ const visibleIdeas = (ideas) => (ideas || []).filter((idea) => !isDismissedIdea(
 
 export default function Ideas({ go, meta = {} }) {
   const [area, setArea] = useState('topics')
+  const [pageCheck, setPageCheck] = useState({ running: false, result: null, error: '' })
+  const pageCheckStarted = useRef(false)
+  // One visit to AI Ideas is one trigger, regardless of its current tab/style.
+  // The server enforces each style's mode and debounces reloads across tabs.
+  useEffect(() => {
+    if (!meta.config?.styles || pageCheckStarted.current) return
+    pageCheckStarted.current = true
+    const styles = meta.config.styles || []
+    if (!styles.some((style) => {
+      const monitor = resolveStyle(styles, style.name)?.news_monitor
+      return monitor?.enabled && monitor.check_mode === 'page_open'
+    })) return
+    setPageCheck({ running: true, result: null, error: '' })
+    api.checkNews(ALL_STYLES, 'page_open')
+      .then((result) => setPageCheck({ running: false, result, error: '' }))
+      .catch((e) => setPageCheck({ running: false, result: null, error: e.message }))
+  }, [meta.config])
   return (
     <div>
       <div className="page-head">
@@ -148,12 +166,14 @@ export default function Ideas({ go, meta = {} }) {
           { value: 'news', label: 'News' },
         ]} />
       </div>
-      <IdeasArea key={area} area={area} go={go} meta={meta} />
+      {pageCheck.running && <Banner>Checking news for styles set to search when you open AI Ideas…</Banner>}
+      {pageCheck.error && <Banner tone="danger">{pageCheck.error}</Banner>}
+      <IdeasArea key={area} area={area} go={go} meta={meta} pageCheck={pageCheck} />
     </div>
   )
 }
 
-function IdeasArea({ area, go, meta }) {
+function IdeasArea({ area, go, meta, pageCheck }) {
   const isNews = area === 'news'
   const [ideas, setIdeas] = useState([])
   const [error, setError] = useState('')
@@ -169,7 +189,8 @@ function IdeasArea({ area, go, meta }) {
   const [view, setView] = useState('ideas')      // 'ideas' | 'accepted' | 'declined'
   const [newsStatus, setNewsStatus] = useState(null)
   const [newsError, setNewsError] = useState('')
-  const [checkingNews, setCheckingNews] = useState(false)
+  const [manualNewsCheck, setCheckingNews] = useState(false)
+  const checkingNews = manualNewsCheck || pageCheck.running
 
   // Ideas belong to a style profile (issue #66): generation is steered by the
   // selected style and each idea is stamped with it, so a children-story style
@@ -189,7 +210,7 @@ function IdeasArea({ area, go, meta }) {
     refresh()
     const timer = setInterval(refresh, 60000)
     return () => { live = false; clearInterval(timer) }
-  }, [styleSel, isNews])
+  }, [styleSel, isNews, pageCheck.result])
   // Styles opted out of auto-picked ideas stay out of the "All styles" mix
   // (reach them by selecting the style itself), mirroring the backend. A child
   // style inherits its parent's opt-out, so resolve through the chain.
@@ -248,6 +269,9 @@ function IdeasArea({ area, go, meta }) {
   }
   // News only loads saved ideas. Topic ideas generate a batch when the cache is empty.
   useEffect(() => { if (ideas.length === 0 && !loadingIdeas) loadIdeas('', false); loadDiscarded(); loadAccepted() }, [])
+  useEffect(() => {
+    if (isNews && pageCheck.result) { loadIdeas('', false); loadAccepted() }
+  }, [pageCheck.result])
   // Switching style swaps to that style's cached ideas (generates when empty).
   // The guidance box is cleared with it (issue #202): it was steering the style
   // you just left, and carrying it over generates off-theme ideas for the new
@@ -500,12 +524,12 @@ function IdeasArea({ area, go, meta }) {
               : 'All styles search with the configured X bearer token.'}
             {' '}Choose the shared account in Settings → Channels → X. Each style keeps its own query and monitoring settings.
           </p>}
-          {newsStatus?.background_enabled === false && <p className="muted" style={{ fontSize: 13 }}>Manual checks only on this server. Scheduled monitoring is disabled.</p>}
+          {newsStatus?.background_enabled === false && <p className="muted" style={{ fontSize: 13 }}>Background scheduling is disabled on this server. On-demand and page-visit checks remain available.</p>}
           {newsStatus?.styles?.map((monitor) => (
             <div key={monitor.style_name} className="stack gap-8 mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>
               <div className="row center gap-10 row--wrap">
                 <strong>{monitor.style_name}</strong>
-                <Chip tone={monitor.enabled ? 'accent' : undefined}>{monitor.enabled ? (newsStatus.background_enabled === false ? 'Manual checks only' : `Every ${monitor.interval_minutes} min`) : 'Off'}</Chip>
+                <Chip tone={monitor.enabled ? 'accent' : undefined}>{newsCheckLabel(monitor)}{monitor.enabled && monitor.check_mode === 'scheduled' && newsStatus.background_enabled === false ? ' (paused)' : ''}</Chip>
                 {monitor.enabled && <span className="muted" style={{ fontSize: 12.5 }}>{monitor.auto_queue ? (monitor.auto_accept ? 'Auto-accept + queue' : 'Review then auto-queue') : monitor.auto_accept ? 'Auto-accept' : 'Review ideas'} · up to {monitor.max_ideas} ideas/check</span>}
               </div>
               {monitor.enabled && <>

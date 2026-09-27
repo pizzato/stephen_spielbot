@@ -50,7 +50,7 @@ class NewsIntegrationTests(TempConfigCase):
     def _config(self, **monitor):
         self.write_config({
             "styles": [_style("News", news_monitor={"enabled": True,
-                "query": "music lang:en", "include_people": True, **monitor})],
+                "check_mode": "scheduled", "query": "music lang:en", "include_people": True, **monitor})],
             "default_style": "News", "news": {"x_bearer_token": "test-token"},
         })
         return app.load_config()
@@ -66,9 +66,85 @@ class NewsIntegrationTests(TempConfigCase):
                 mock.patch.object(news, "generate_news_ideas") as generate:
             result = news_monitor.check(cfg, force=True)
         self.assertEqual(result["ideas_added"], 0)
-        self.assertFalse(news_monitor.enabled(cfg))
+        self.assertFalse(news_monitor.scheduled_enabled(cfg))
         fetch.assert_not_called()
         generate.assert_not_called()
+
+    def test_each_trigger_respects_the_selected_mode(self):
+        for enabled, mode, expected in (
+            (False, "scheduled", (False, False, False)),
+            (True, "manual", (False, False, True)),
+            (True, "page_open", (False, True, True)),
+            (True, "scheduled", (True, False, True)),
+        ):
+            cfg = self._config(enabled=enabled, check_mode=mode)
+            self.assertEqual(news_monitor.scheduled_enabled(cfg), enabled and mode == "scheduled")
+            for kwargs, should_fetch in zip(({}, {"page_open": True}, {"force": True}), expected):
+                with self.subTest(enabled=enabled, mode=mode, trigger=kwargs):
+                    news_monitor._save_state({})
+                    with mock.patch.object(news, "fetch_recent_posts", return_value={"posts": []}) as fetch:
+                        news_monitor.check(cfg, **kwargs)
+                    self.assertEqual(fetch.call_count, int(should_fetch))
+
+    def test_legacy_enabled_monitor_does_not_poll_in_background(self):
+        cfg = self._config()
+        cfg["styles"][0]["news_monitor"] = {"enabled": True, "interval_minutes": 15, "query": "news"}
+        self.assertFalse(news_monitor.scheduled_enabled(cfg))
+        with mock.patch.object(news, "fetch_recent_posts") as fetch:
+            news_monitor.check(cfg)
+            news_monitor.check(cfg, page_open=True)
+        fetch.assert_not_called()
+
+    def test_scheduled_checks_are_spaced_by_attempt_even_after_failure_or_query_edit(self):
+        for per_day in (0.5, 1, 2, 2.5, 96):
+            with self.subTest(per_day=per_day):
+                cfg = self._config(checks_per_day=per_day)
+                news_monitor._save_state({})
+                interval = 86400 / per_day
+                with mock.patch.object(news_monitor.time, "time", return_value=1_000_000) as clock, \
+                        mock.patch.object(news, "fetch_recent_posts", side_effect=news.NewsError("Test failure")) as fetch:
+                    news_monitor.check(cfg)
+                    self.assertEqual(fetch.call_count, 1)
+                    cfg["styles"][0]["news_monitor"]["query"] = "changed query"
+                    clock.return_value += interval - 1
+                    news_monitor.check(cfg)
+                    self.assertEqual(fetch.call_count, 1)
+                    clock.return_value += 1
+                    news_monitor.check(cfg)
+                    self.assertEqual(fetch.call_count, 2)
+                    # A deliberate click bypasses the schedule.
+                    news_monitor.check(cfg, force=True)
+                    self.assertEqual(fetch.call_count, 3)
+
+    def test_page_visits_are_debounced_and_do_not_start_background_searches(self):
+        cfg = self._config(check_mode="page_open")
+        with mock.patch.object(news_monitor.time, "time", return_value=1_000_000) as clock, \
+                mock.patch.object(news, "fetch_recent_posts", return_value={"posts": []}) as fetch:
+            news_monitor.check(cfg, page_open=True)
+            clock.return_value += 59
+            news_monitor.check(cfg, page_open=True)
+            self.assertEqual(fetch.call_count, 1)
+            clock.return_value += 1
+            news_monitor.check(cfg, page_open=True)
+            self.assertEqual(fetch.call_count, 2)
+            clock.return_value += 86400
+            news_monitor.check(cfg)
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_page_visit_endpoint_checks_only_opted_in_styles_including_inherited_mode(self):
+        self.write_config({"styles": [
+            _style("Visit", news_monitor={"enabled": True, "check_mode": "page_open", "query": "visit"}),
+            {"name": "Child", "parent": "Visit"},
+            _style("Manual", news_monitor={"enabled": True, "check_mode": "manual", "query": "manual"}),
+            _style("Scheduled", news_monitor={"enabled": True, "check_mode": "scheduled", "query": "daily"}),
+            {"name": "Off", "parent": "Visit", "news_monitor": {"enabled": False}},
+        ], "default_style": "Visit"})
+        with mock.patch.object(news, "fetch_recent_posts", return_value={"posts": []}) as fetch:
+            backend.news_check(backend.NewsCheckBody(style_name="__all__", trigger="page_open"))
+        self.assertEqual([call.args[1] for call in fetch.call_args_list], ["visit", "visit"])
+        with mock.patch.object(news, "fetch_recent_posts", return_value={"posts": []}) as fetch:
+            backend.news_check(backend.NewsCheckBody(style_name="__all__"))
+        self.assertEqual([call.args[1] for call in fetch.call_args_list], ["visit", "visit", "manual", "daily"])
 
     def test_all_styles_search_with_global_account_regardless_of_publishing_account(self):
         self.write_config({

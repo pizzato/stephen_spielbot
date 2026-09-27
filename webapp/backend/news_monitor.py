@@ -54,9 +54,12 @@ def status(cfg, style_name="__all__"):
             "styles": rows}
 
 
-def enabled(cfg):
-    return any(news.normalize_monitor(gapp.style_settings(cfg, s["name"]).get("news_monitor"))["enabled"]
-               for s in cfg.get("styles", []))
+def scheduled_enabled(cfg):
+    for style in cfg.get("styles", []):
+        monitor = news.normalize_monitor(gapp.style_settings(cfg, style["name"]).get("news_monitor"))
+        if monitor["enabled"] and monitor["check_mode"] == "scheduled":
+            return True
+    return False
 
 
 def get_idea(idea_id, style_name):
@@ -110,7 +113,7 @@ def _auto_queue(cfg, name, monitor):
             yt.save_suggestions(ideas)
 
 
-def check(cfg, style_name="__all__", *, force=False):
+def check(cfg, style_name="__all__", *, force=False, page_open=False):
     names = _styles(cfg, style_name)
     _state_path().parent.mkdir(parents=True, exist_ok=True)
     # A second server or manual check cannot overlap or advance the cursor twice.
@@ -127,10 +130,16 @@ def check(cfg, style_name="__all__", *, force=False):
                 monitor = news.normalize_monitor(ss.get("news_monitor"))
                 if not monitor["enabled"]:
                     continue
+                if not force and monitor["check_mode"] != ("page_open" if page_open else "scheduled"):
+                    continue
                 saved = state.setdefault(name, {})
                 now = time.time()
-                if (not force and saved.get("last_query") == monitor["query"]
-                        and now - saved.get("last_checked", 0) < monitor["interval_minutes"] * 60):
+                # Page visits don't start a timer. Debounce quick reloads and
+                # multiple tabs; scheduled attempts (including failures) use
+                # the chosen daily cadence, even when the query changes.
+                interval = 60 if page_open else 86400 / monitor["checks_per_day"]
+                if (not force and saved.get("last_checked") is not None
+                        and now - saved["last_checked"] < interval):
                     continue
                 saved.update(last_checked=now, last_query=monitor["query"],
                              posts_fetched=None, posts_new=None, ideas_added=0, last_outcome="")
