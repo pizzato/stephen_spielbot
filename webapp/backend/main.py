@@ -3000,10 +3000,6 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         scene_secs=plan.get("scene_secs_target") if isinstance(plan, dict) else None)
     if fmt == "song":
         dialogue_note = (dialogue_note or "") + _song_singer_story_note(cfg, ss, song_data, wd)
-    dialogue_note = (dialogue_note or "") + (
-        "\nThe approved chapter prose is the source of truth for the cast. "
-        "Do not restore people from an earlier topic, title or brief who no longer "
-        "appear in that prose.")
     try:
         with _track_op("Dividing story into scenes", display_topic):
             scenes, music_desc, style, characters = story_mode.divide_story(

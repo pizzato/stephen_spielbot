@@ -12,7 +12,7 @@ import app
 from pipeline import news, news_people, x as xt, youtube as yt
 from pipeline.llm import Scene
 from test_styles import TempConfigCase, _style
-from scriptstub import stub_script
+from scriptstub import STORY, stub_script
 from webapp.backend import main as backend, news_monitor
 
 
@@ -522,7 +522,9 @@ class NewsIntegrationTests(TempConfigCase):
             out.write_bytes(b"generated portrait fixture")
             events.append("portrait")
 
-        with stub_script([scene]) as (draft, divide), \
+        story = {**STORY, "chapters": [{"chapter": 1, "title": "The chorus", "scenes": 1,
+                                        "text": "ALBO and Pauline Hanson sing about the news."}]}
+        with stub_script([scene], story=story) as (draft, divide), \
                 mock.patch.object(news_people, "_identity", side_effect=ValueError("Ambiguous identity")), \
                 mock.patch.object(backend.threading.Thread, "start"), \
                 mock.patch.object(backend.story_mode, "write_song", return_value={
