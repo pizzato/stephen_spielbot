@@ -33,19 +33,40 @@ def idea(title="The rail line refrain", source_ids=None, people=None):
 
 def test_monitor_defaults_and_limits():
     assert news.normalize_monitor(None) == {
-        "enabled": False, "query": "", "interval_minutes": 60,
+        "enabled": False, "query": "", "check_mode": "manual", "checks_per_day": 1,
         "include_people": False, "auto_accept": False, "auto_queue": False, "max_ideas": 1,
     }
     settings = news.normalize_monitor({
         "enabled": "false", "auto_accept": True, "auto_queue": "true",
-        "query": "  trains lang:en  ", "interval_minutes": 1, "max_ideas": 99,
+        "query": "  trains lang:en  ", "checks_per_day": 999, "max_ideas": 99,
     })
     assert settings["enabled"] is False
     assert settings["auto_accept"] is True
     assert settings["auto_queue"] is False
-    assert settings["interval_minutes"] == 15
+    assert settings["checks_per_day"] == 96
     assert settings["max_ideas"] == 5
     assert settings["query"] == "trains lang:en"
+
+
+def test_legacy_monitor_becomes_on_demand_with_daily_schedule_default():
+    settings = news.normalize_monitor({"enabled": True, "query": "news", "interval_minutes": 60})
+    assert settings["enabled"] is True
+    assert settings["check_mode"] == "manual"
+    assert settings["checks_per_day"] == 1
+    assert "interval_minutes" not in settings
+    assert news.normalize_monitor(settings) == settings
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, 1), ("bad", 1), ("NaN", 1), (float("inf"), 1), (0, 1), (-1, 1),
+    (0.25, 0.5), ("2.5", 2.5), (96, 96),
+])
+def test_daily_check_cadence_is_bounded_and_finite(value, expected):
+    assert news.normalize_monitor({"checks_per_day": value})["checks_per_day"] == expected
+
+
+def test_invalid_check_mode_cannot_enable_background_search():
+    assert news.normalize_monitor({"enabled": True, "check_mode": "unknown"})["check_mode"] == "manual"
 
 
 def test_x_request_and_source_provenance(monkeypatch):

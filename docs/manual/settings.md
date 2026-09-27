@@ -303,7 +303,7 @@ Three buckets — Small / Medium / Large — each pairing a video **length in mi
 
 ### News monitoring
 
-**Monitor news on X for this style** is off by default. Enable it to turn recent posts
+**When to check news** defaults to **Off — never check**. Choose another mode to turn recent posts
 matching an **X search query** into video ideas using this style's instructions and
 default format. For example, a Music video style can turn Australian political news
 into songs. The query chooses what is monitored; the style's extra instructions choose
@@ -312,11 +312,25 @@ the angle and tone.
 | Control | Effect |
 |---|---|
 | **X search query** | Topics, hashtags, people or accounts to search; for example `(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet` |
-| **Check every (minutes)** | How often the running backend checks; minimum 15, default 60 |
+| **When to check news** | **Off — never check**, **On demand**, **When opening AI Ideas**, or **Scheduled** |
+| **Checks per day** | Shown for Scheduled only; default 1 (daily). Even spacing like publishing: 2 = every 12 hours, 0.5 = every two days. Range 0.5–96 |
 | **Maximum ideas per check** | 1–5 ideas for this style; default 1 |
 | **Find reference pictures of named people** | Seek appearance references when creating a film from the idea and keep them with that film's characters |
 | **Automatically accept news ideas** | Put new ideas directly into Accepted; otherwise they wait in Ideas |
 | **Automatically queue accepted news ideas** | Add accepted news ideas to the render queue using their saved size from the style's presets; Small by default |
+
+**Off** prevents every search for this style, including **Check news now**. **On demand**
+searches only when you press that button. **When opening AI Ideas** checks opted-in
+styles once when you visit AI Ideas, whichever tab you open; switching tabs or styles
+does not search again. Quick revisits within one minute share the previous check.
+Keeping the page open does not trigger further searches. **Scheduled** runs in the
+background while the backend is running, spacing attempts from the last check (including
+failures and manual checks). The first scheduled check can run immediately if never checked.
+Manual checks bypass that spacing. Changing a query does not bypass the schedule.
+
+Existing minute-based monitors become **On demand** on upgrade. Choose **Scheduled**
+explicitly to resume background searches, starting at one check per day. Searches use
+X API credits; each style checks its own query even though they share an account.
 
 Automatic queueing is independent of automatic acceptance. Leave auto-accept off to
 review ideas yourself; accepted ideas are then queued on the next monitor check.
@@ -328,12 +342,13 @@ overrides that settings group; use the parent-value link to inherit it again.
 style's existing **Auto-start** and **Auto-approve scripts** flags. For a Music video
 style it also enables **Write and generate the song** and **Auto-approve songs**. These
 pipeline flags affect other queued films in this style too, and descendants inherit
-them. **Save settings** applies the changes. Publishing continues to follow the
+them. It keeps the chosen news-check mode; on-demand discovery still requires a click.
+**Save settings** applies the changes. Publishing continues to follow the
 separate publishing settings.
 
 Choose the shared search account or optional bearer token under [Channels → X](#x-news-search).
 Check status, review source links and use **Check news now** in [AI ideas → News](ideas.md#news-monitor).
-Monitoring runs only while the backend is running. A disabled monitor makes no checks.
+Scheduled monitoring runs only while the backend is running. A disabled monitor makes no checks.
 
 ### Characters
 

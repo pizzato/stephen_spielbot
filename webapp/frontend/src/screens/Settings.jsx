@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, resolutionTier, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import SettingsAssets from './SettingsAssets.jsx'
+import { NEWS_CHECK_MODES, newsCheckLabel } from '../newsUtils.js'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
   globalAutomation, resolveAutomation, automationSource } from '../styleUtils.js'
 
@@ -142,7 +143,7 @@ function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
-const NEWS_DEFAULTS = { enabled: false, query: '', interval_minutes: 60, include_people: false, auto_accept: false, auto_queue: false, max_ideas: 1 }
+const NEWS_DEFAULTS = { enabled: false, query: '', check_mode: 'manual', checks_per_day: 1, include_people: false, auto_accept: false, auto_queue: false, max_ideas: 1 }
 
 // "Fully automated mode" is exactly the sum of these per-step toggles: it shows
 // ticked only when all of them are, and ticking it turns every one on. Keeping it
@@ -1678,7 +1679,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           return `${b}: ${mins ? fmtDuration(mins) : '?'} · ${p.resolution || '?'}`
         }).join('  ·  ')
       case 'news_monitor':
-        return v?.enabled ? `${v.query || '(no query)'} · every ${v.interval_minutes || 60} min` : 'monitoring off'
+        return v?.enabled ? `${v.query || '(no query)'} · ${newsCheckLabel(v)}` : 'monitoring off'
       default:
         if (typeof v === 'boolean') return v ? 'on' : 'off'
         return v === '' || v == null ? '(blank)' : String(v)
@@ -2745,10 +2746,18 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <span className="label-sm">News monitoring · {st.name}</span>
             <p className="muted" style={{ fontSize: 13 }}>
               Turn recent X posts into ideas shaped by this style's instructions and default format. A music-video style can write songs about the news.
-              Every style uses the shared X search account selected under Channels → X. Checks run while the backend is running.
+              Every style uses the shared X search account selected under Channels → X. Choose when this style may search; each search uses X API credits.
             </p>
             <div className="stack gap-16">
-              <Check checked={newsMonitor.enabled} onChange={(v) => setNewsMonitor('enabled', v)} label="Monitor news on X for this style" />
+              <Field label="When to check news" hint={NEWS_CHECK_MODES.find((mode) => mode.value === (newsMonitor.enabled ? newsMonitor.check_mode : 'off'))?.hint}>
+                <select className="select" value={newsMonitor.enabled ? newsMonitor.check_mode : 'off'}
+                  onChange={(e) => setStyleField('news_monitor', {
+                    ...newsMonitor, enabled: e.target.value !== 'off',
+                    check_mode: e.target.value === 'off' ? newsMonitor.check_mode : e.target.value,
+                  })}>
+                  {NEWS_CHECK_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+                </select>
+              </Field>
               <ParentVal k="news_monitor" />
               {newsMonitor.enabled && (<>
                 <Field label="X search query" hint="Choose topics, people, hashtags or trusted accounts. Example: (Australia OR Canberra) (politics OR parliament) lang:en -is:retweet. The style's script instructions shape the resulting video ideas.">
@@ -2756,11 +2765,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     onChange={(e) => setNewsMonitor('query', e.target.value)} placeholder="(Australia OR Canberra) (politics OR parliament) lang:en -is:retweet" />
                 </Field>
                 <div className="row gap-22 row--wrap">
-                  <Field label="Check every (minutes)" hint="15 minutes to 24 hours.">
-                    <input className="input" type="number" min={15} max={1440} step={1} value={newsMonitor.interval_minutes}
-                      onChange={(e) => setNewsMonitor('interval_minutes', e.target.value === '' ? '' : Number(e.target.value))}
-                      onBlur={(e) => setNewsMonitor('interval_minutes', Math.max(15, Math.min(1440, Math.round(Number(e.target.value) || 15))))} />
-                  </Field>
+                  {newsMonitor.check_mode === 'scheduled' && <Field label="Checks per day" hint={`${cadenceHint(newsMonitor.checks_per_day || 1)} 1 = daily, 2 = every 12 hours, 0.5 = every two days. Up to 96/day.`}>
+                    <input className="input" type="number" min={0.5} max={96} step={0.5} value={newsMonitor.checks_per_day}
+                      onChange={(e) => setNewsMonitor('checks_per_day', e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={(e) => setNewsMonitor('checks_per_day', Math.max(0.5, Math.min(96, Number(e.target.value) || 1)))} />
+                  </Field>}
                   <Field label="Maximum ideas per check" hint="1–5 ideas for this style.">
                     <input className="input" type="number" min={1} max={5} step={1} value={newsMonitor.max_ideas}
                       onChange={(e) => setNewsMonitor('max_ideas', Math.max(1, Math.min(5, Math.round(Number(e.target.value) || 1))))} />
@@ -2774,7 +2783,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   label="Automatically queue accepted news ideas using their saved size — Small by default" />
                 <div className="muted" style={{ fontSize: 12.5 }}>
                   Unattended creation also needs this style's auto-start and auto-approve scripts settings; music videos need automatic song generation and song approval.
-                  These settings also apply to other queued films in this style. Publishing follows the existing publishing settings.
+                  These settings also apply to other queued films in this style. Creation uses your chosen news-check mode. Publishing follows the existing publishing settings.
                 </div>
                 <div className="row gap-10 center row--wrap">
                   <Button variant="ghost" icon="bolt" disabled={newsUnattended || !newsMonitor.query.trim()} onClick={enableNewsUnattended}>
