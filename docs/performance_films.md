@@ -183,15 +183,23 @@ take — the Song tab says which happened. Both keep the previous track as a ver
 
 **Whose voice sings?** Two levels. The music engines can't clone a voice, so at
 generation time the chosen singing voice only *describes* the vocalist (below). But the
-song panel's **"Sing this as [voice]"** step is an actual clone: seed-vc re-voices the
-generated track with any library voice's timbre — melody, timing and words kept — from
-its ~10 s reference clip, zero-shot. Install it once with `scripts/install_svc.sh`
-(GPL-3.0, see THIRD_PARTY_NOTICES) — that install separates the vocal stem from the
-backing and does the re-mix; the diffusion itself goes to whichever
-[GPU worker is free](cluster.md#song-re-voicing-rides-along-in-the-comfyui-container),
-falling back to the controller (minutes rather than seconds) when none is. The vocals
-are converted alone and laid back over the untouched instruments, so the arrangement
-survives. The converted track replaces
+song panel's **"Sing this as [voice]"** step clones the voice's timbre into the existing
+performance. **SoulX-Singer SVC** is the default; choose **Seed-VC** under
+[Settings → Styles → Narrator & audio → Singing voice conversion](manual/settings.md#narrator-audio)
+for a different conversion engine. Both preserve the source melody, timing and lyrics,
+using a short reference clip from the selected library voice. This is voice conversion;
+the separate SoulX-Singer SVS model is not part of this workflow.
+
+`make install` installs both engines and the shared Demucs separation tools. The
+controller separates the vocal stem, sends it to an available
+[GPU worker](cluster.md#song-re-voicing-rides-along-in-the-comfyui-container), and
+mixes the converted vocals over the original backing. Vocal level matching preserves
+the original balance; the complete mix is attenuated together when needed to keep
+its peak at or below −1 dB without clipping. If no worker can run it, the
+controller uses the same engine locally; CPU execution is slower. It never silently
+switches engines. SoulX-Singer code and weights are Apache-2.0; Seed-VC code remains
+GPL-3.0 (see [licensing](tts_licensing.md#singing-voice-conversion)).
+The converted track replaces
 `background_music.wav` — the film, and every pinned per-scene segment, then sings in
 that voice.
 

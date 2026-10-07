@@ -388,7 +388,8 @@ class SvcTests(unittest.TestCase):
              unittest.mock.patch.object(svc.subprocess, "run", fake_run), \
              tempfile.TemporaryDirectory() as td:
             out = Path(td) / "converted.wav"
-            svc.convert_song(Path("/x/src.wav"), Path("/x/ref.wav"), out)
+            svc.convert_song(Path("/x/src.wav"), Path("/x/ref.wav"), out,
+                             engine="seed-vc")
             self.assertTrue(out.exists())
             # f0 conditioning is what makes it a SINGING conversion.
             self.assertIn("--f0-condition", calls["cmd"])
@@ -454,7 +455,7 @@ class SvcTests(unittest.TestCase):
 
         with unittest.mock.patch.object(svc.subprocess, "run", fake_run):
             svc._convert_remote("s2", Path("/x/src.wav"), Path("/x/ref.wav"),
-                                Path("/tmp/out.wav"), 30, 60)
+                                Path("/tmp/out.wav"), 30, 60, engine="seed-vc")
 
         joined = " ".join(" ".join(c) for c in cmds)
         self.assertIn("docker exec spielbot-worker-comfyui-1", joined)

@@ -272,9 +272,13 @@ card becomes **The film's song**: the lyrics as sung (read-only here — the wor
 [Script screen's](script.md#song) to edit), the sound caption, **Sing it again**, and
 **Sing it as [voice]**.
 
-*Sing it as* is the seed-vc re-voicing: melody, timing and words kept, the singer's
-timbre swapped for a library voice's. It takes a few minutes, then the film is re-muxed
-so the finished cut plays the new vocals. Two things make it safe to try:
+*Sing it as* uses the style's **Singing voice conversion** engine: **SoulX-Singer SVC**
+by default, or **Seed-VC** selected under [Settings → Styles → Narrator & audio](settings.md#narrator-audio).
+It converts the singer's timbre to a library voice while preserving the source song's
+melody, timing and words, then re-muxes the finished cut with the new vocals.
+Only one re-voicing can run per film at a time, including the final remix. A second
+request reports that the current one must finish first; it cannot overwrite that take.
+Two things make it safe to try:
 
 - **Nothing is thrown away.** The sung original and every re-voicing are kept side by
   side in the version strip — play each one, and **Use** puts it back and re-mixes the
@@ -289,10 +293,12 @@ original vocals — it is a check track, never part of the mix). (Re-voice from 
 screen's [Song tab](script.md#song) *before* rendering and the per-scene stretches pinned
 into the takes sing in that voice too.)
 
-Re-voicing needs seed-vc on the controller (`scripts/install_svc.sh`); without it the
-button is disabled and says so. The conversion itself runs on whichever
-[GPU worker is free](../cluster.md#song-re-voicing-rides-along-in-the-comfyui-container),
-which is why it takes a couple of minutes and not ten.
+`make install` installs both conversion runtimes and prefetches the SoulX models. The
+selected engine must be ready on the controller; otherwise the button is disabled
+with an install hint. Conversion runs on an available
+[GPU worker](../cluster.md#song-re-voicing-rides-along-in-the-comfyui-container),
+falling back to the same engine on the controller. CPU fallback is slower. If an
+engine fails, the app reports the error rather than switching models for you.
 
 ---
 

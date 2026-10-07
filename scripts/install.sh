@@ -86,6 +86,9 @@ fi
 # F5-TTS runs in the worker containers, so the controller needs no local F5-TTS
 # environment (the workers handle narration over HTTP).
 
+banner "Setting up song revoicing (SoulX-Singer SVC and Seed-VC)"
+bash "$REPO_ROOT/scripts/install_svc.sh"
+
 # ── 2. Download models ────────────────────────────────────────────────────────
 # Strategy:
 #   • Local ComfyUI present  → download directly here

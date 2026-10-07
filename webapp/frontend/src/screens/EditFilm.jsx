@@ -1191,7 +1191,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
   }
 
-  // Re-voice a song film's song (seed-vc) and re-mux the final with it. Slow
+  // Re-voice a song film's song and re-mux the final with it. Slow
   // — minutes — so it runs as a film task, like the music regen above.
   const revoiceSong = async () => {
     setMusicBusy(true); setError(''); setStatus('')
@@ -2294,8 +2294,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           {data?.song && (
             <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
               {data.song.svc_available
-                ? <>Re-voicing keeps the melody, timing and words and swaps the singer&apos;s timbre — a few minutes on seed-vc, then the film is re-muxed. It always converts the <strong>sung original</strong>, never a previous re-voicing, and both stay below.{data.song.sung_as ? <> Currently sung as <strong>{data.song.sung_as}</strong>.</> : null}</>
-                : <>Re-voicing needs seed-vc on the controller — run <code>scripts/install_svc.sh</code> to enable it.</>}
+                ? <>Re-voicing uses <strong>{data.song.svc_engine_label || (data.song.svc_engine === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC')}</strong> to change the singer&apos;s timbre while preserving the melody, timing and words, then re-muxes the film. It always converts the <strong>sung original</strong>, never a previous re-voicing, and both stay below.{data.song.sung_as ? <> Currently sung as <strong>{data.song.sung_as}</strong>.</> : null}</>
+                : <>{data.song.svc_engine_label || (data.song.svc_engine === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC')} is not installed on the controller. Run <code>scripts/install_svc.sh</code> to enable re-voicing.</>}
             </p>
           )}
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}

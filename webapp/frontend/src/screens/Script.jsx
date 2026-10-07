@@ -1637,13 +1637,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   {busy === 'song-gen' ? 'Singing it…' : song.song_url ? 'Generate again' : '1. Generate the song'}
                 </Button>
                 {song.song_url && !!songVoiceSel && (
-                  <Button variant="ghost" icon="microphone-lines" disabled={!!busy}
+                  <Button variant="ghost" icon="microphone-lines" disabled={!!busy || !song.svc_available}
                     onClick={convertSongVoice}>
                     {busy === 'song-convert' ? 'Re-voicing…' : `2. Sing this as ${songVoiceSel}`}
                   </Button>
                 )}
                 {song.sung_as && <span className="muted" style={{ fontSize: 12.5 }}>♪ currently sung as <strong>{song.sung_as}</strong></span>}
               </div>
+              {song.song_url && (
+                <p className="muted" style={{ fontSize: 12.5 }}>
+                  {song.svc_available
+                    ? <>Re-voicing uses <strong>{song.svc_engine_label || (song.svc_engine === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC')}</strong>, selected in Settings → Styles → Narrator &amp; audio. It always converts the sung original, and keeps both versions.</>
+                    : <>{song.svc_engine_label || (song.svc_engine === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC')} is not installed on the controller. Run <code>scripts/install_svc.sh</code> to enable re-voicing.</>}
+                </p>
+              )}
               {song.song_url && (
                 <audio controls src={song.song_url} style={{ width: '100%', height: 36 }} />
               )}

@@ -1648,6 +1648,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return (engineInfo?.video_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'music_engine':
         return (engineInfo?.music_engines || []).find((e) => e.key === v)?.label || String(v || '')
+      case 'svc_engine':
+        return v === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC'
       case 'tts_engine':
         return (ttsEngineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'reference_engine':
@@ -3116,6 +3118,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   })()}
                 </Field>
               )}
+              <Field label="Singing voice conversion"
+                hint="The model used when you re-voice a song as a library voice. Choosing a model does not turn on automatic re-voicing.">
+                <select className="select" value={eff.svc_engine || 'soulx-svc'} onChange={(e) => setStyleField('svc_engine', e.target.value)}>
+                  <option value="soulx-svc">SoulX-SVC</option>
+                  <option value="seed-vc">Seed-VC</option>
+                </select>
+                <ParentVal k="svc_engine" />
+              </Field>
               <Field label="Lyric timing"
                 hint="Music videos only. Whisper-aligns the lyric sheet to the song's separated vocal stem at divide time, so every scene names and cuts on the words actually sung under it. Needs the re-voicing install (scripts/install_svc.sh); without it — or when the alignment can't be trusted — the energy measurement is used instead, so this is safe to leave on.">
                 <Check checked={eff.song_align_lyrics !== false}

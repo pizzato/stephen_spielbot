@@ -1,48 +1,67 @@
-"""Zero-shot singing-voice conversion — "Sing this as [voice]".
+"""Style-selected singing-voice conversion: SoulX-SVC (default) or Seed-VC.
 
-seed-vc re-voices a SUNG track as any library voice from its ~10 s reference
-clip: melody, timing and words are kept, only the timbre changes. It is the
-one true voice-clone in the singing pipeline — the music engines can only be
-*described* a vocalist, never given one.
+Demucs separates vocals on the controller; the selected model converts them on
+an available leased worker, falling back to the same model on the controller.
+Level-matched vocals are mixed over the original backing. The original take is
+preserved by the calling song-history workflow.
 
-The conversion runs on the VOCAL STEM, not the whole mix: demucs separates
-vocals from instruments first, seed-vc converts just the voice, and the
-converted vocals are remixed over the untouched backing. Converting a full
-mix re-voices the instruments too — measured on a real track, that turns the
-arrangement into vocal-ish noise. When demucs is missing the whole-mix path
-still runs (acceptable for a-cappella-leaning tracks) with a warning.
-
-The diffusion runs on whichever GPU worker is free — every worker's ComfyUI
-container carries seed-vc, so a re-voicing is picked up like any other UI
-job (idle worker first). Stem separation, level-matching and the remix stay
-on the controller, which needs the install `scripts/install_svc.sh` lays
-down at ``~/.local/share/video-generator/seed-vc``; that install is also the
-fallback when no worker can take it (Apple Silicon MPS, ~12x real time).
-Model weights (seed-vc and demucs) download from Hugging Face on the first
-conversion — on the controller and on each worker.
-
-seed-vc is GPL-3.0 (see THIRD_PARTY_NOTICES.md) — it is invoked as a separate
-process, never imported. demucs (MIT) lives in the same venv.
+``make install`` prepares isolated runtimes on the controller and workers.
+SoulX-SVC uses pinned SVC, RMVPE and Whisper weights, without lyric alignment.
+SoulX-SVC is Apache-2.0; Seed-VC is GPL-3.0. Both run as subprocesses, never as
+imports in the application process. See THIRD_PARTY_NOTICES.md.
 """
 from __future__ import annotations
 
 import logging
-import os
+import json
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Sequence
 
 logger = logging.getLogger("video_gen")
 
 SVC_DIR = Path.home() / ".local" / "share" / "video-generator" / "seed-vc"
+SOULX_DIR = SVC_DIR.with_name("soulx-singer")
+DEFAULT_ENGINE = "soulx-svc"
+ENGINE_LABELS = {"soulx-svc": "SoulX-SVC", "seed-vc": "Seed-VC"}
+SOULX_RUNNER = Path(__file__).resolve().parent.parent / "scripts" / "soulx_svc.py"
 
 
-def available() -> bool:
-    """Is seed-vc installed on this controller?"""
+def norm_engine(value) -> str:
+    """Normalize the style's converter, defaulting older styles to SoulX-SVC."""
+    key = str(value or "").strip().lower()
+    return key if key in ENGINE_LABELS else DEFAULT_ENGINE
+
+
+def available(engine: str = DEFAULT_ENGINE) -> bool:
+    """Is the selected converter installed on this controller?"""
+    if norm_engine(engine) == "soulx-svc":
+        if not all(path.exists() for path in (
+            SOULX_DIR / ".venv/bin/python",
+            SOULX_DIR / "soulxsinger/models/soulxsinger_svc.py",
+            SOULX_DIR / "pretrained_models/SoulX-Singer/model-svc.pt",
+            SOULX_DIR / "pretrained_models/SoulX-Singer-Preprocess/rmvpe/rmvpe.pt",
+            SOULX_RUNNER,
+        )):
+            return False
+        try:
+            manifest = json.loads((SOULX_DIR / "spielbot-models.json").read_text())
+            revision = manifest["openai/whisper-base"]
+            cache = SOULX_DIR / "hf-cache/hub/models--openai--whisper-base"
+            if not re.fullmatch(r"[0-9a-f]{40}", revision):
+                return False
+            return ((cache / "refs/main").read_text().strip() == revision
+                    and all((cache / "snapshots" / revision / name).is_file()
+                            for name in ("config.json", "preprocessor_config.json",
+                                         "model.safetensors")))
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
     return ((SVC_DIR / "inference.py").exists()
             and (SVC_DIR / ".venv" / "bin" / "python").exists())
 
@@ -65,11 +84,11 @@ def candidate_workers(cfg: dict) -> list[str]:
     so the fleet-wide worker lease can key on them (the conversion itself
     docker-execs on the URL's host).
 
-    Any worker will do — every ComfyUI container carries seed-vc — so the
+    Any worker will do — every ComfyUI container carries both converters — so the
     pick is just "who is free": idle workers first, then least-busy, the
     same ordering the UI uses to route cover jobs. Each is tried in turn and
     the controller is the last resort, so a host that is down, or whose
-    container predates the seed-vc image, only costs the next one a moment.
+    container predates the selected converter, only costs the next one a moment.
 
     ``svc_worker`` in the config pins one host instead of the whole fleet
     (returned as its comfy URL when the fleet lists it, else the bare host).
@@ -97,44 +116,47 @@ def candidate_workers(cfg: dict) -> list[str]:
 
 
 def convert_song(source: Path, voice_ref: Path, output: Path,
-                 diffusion_steps: int = 30, timeout: int = 3600,
-                 workers: Sequence[str] = ()) -> Path:
+                 diffusion_steps: int | None = None, timeout: int = 3600,
+                 workers: Sequence[str] = (), *, engine: str = DEFAULT_ENGINE) -> Path:
     """Re-voice *source* (a sung track) with the timbre of *voice_ref*.
 
     Separates the vocal stem, converts only it, and remixes it (level-matched
     to the original vocals) over the untouched instruments. Writes the result
     to *output* and returns it.
 
-    *diffusion_steps* trades speed for polish: seed-vc's own default is 25;
-    30 is this pipeline's default, 50 the high-quality setting (config key
-    ``svc_diffusion_steps``). *workers* are candidate GPU worker hosts (see
-    ``candidate_workers``), tried in order — a CUDA GB10 converts near real
-    time where the controller's Apple GPU runs at ~12x real time. Separation
-    and remixing stay local whoever converts (they are the cheap part), and
-    when no worker takes it the controller does rather than the song failing.
+    Defaults are 32 diffusion steps for SoulX-SVC and 30 for Seed-VC;
+    ``svc_diffusion_steps`` can override them. Workers are tried under the
+    shared fleet lease, then the selected model runs on the controller.
+    SoulX-SVC uses CUDA when available, otherwise CPU (slower).
     """
-    if not available():
+    engine = norm_engine(engine)
+    diffusion_steps = int(diffusion_steps or (32 if engine == "soulx-svc" else 30))
+    if not 1 <= diffusion_steps <= 200:
+        raise ValueError("Voice conversion diffusion steps must be between 1 and 200.")
+    if not available(engine):
         raise RuntimeError(
-            "seed-vc is not installed — run scripts/install_svc.sh on the "
-            "controller first.")
+            f"{ENGINE_LABELS[engine]} is not installed — run make install "
+            "(or scripts/install_svc.sh) on the controller first.")
     with tempfile.TemporaryDirectory() as td:
         work = Path(td)
         stems = _separate_stems(source, work)
         if stems is None:
+            if engine == "soulx-svc":
+                raise RuntimeError("SoulX-SVC requires Demucs vocal separation — "
+                                   "run make install (or scripts/install_svc.sh).")
             logger.warning("[svc] demucs unavailable — converting the WHOLE "
                            "mix (instruments will smear; fine only for "
                            "a-cappella-leaning tracks)")
             _convert_anywhere(source, voice_ref, output, diffusion_steps,
-                              timeout, workers)
+                              timeout, workers, engine=engine)
             _normalize_loudness(output)
             return output
         vocals, backing = stems
         converted = work / "converted_vocals.wav"
         _convert_anywhere(vocals, voice_ref, converted, diffusion_steps,
-                          timeout, workers)
-        # The converted stem comes back much quieter than the original
-        # (~18 dB measured) — match it to the level the original vocals sat
-        # at in the mix, then lay it back over the untouched backing.
+                          timeout, workers, engine=engine)
+        # Match either model's output to the original vocal level before
+        # laying it back over the untouched backing.
         _match_gain(converted, to=_mean_volume(vocals))
         _remix(converted, backing, output)
     logger.info("[svc] re-voiced %s with %s → %s (vocal stem)", source.name,
@@ -162,7 +184,7 @@ def separate_vocals(source: Path, output: Path) -> Path | None:
 
 def _convert_anywhere(source: Path, voice_ref: Path, output: Path,
                       diffusion_steps: int, timeout: int,
-                      workers: Sequence[str]) -> None:
+                      workers: Sequence[str], *, engine: str = DEFAULT_ENGINE) -> None:
     """The diffusion pass, on the first free worker that will take it —
     falling back to the controller when none does, because a slow conversion
     beats a failed one.
@@ -185,7 +207,7 @@ def _convert_anywhere(source: Path, voice_ref: Path, output: Path,
             continue
         try:
             _convert_remote(host, source, voice_ref, output,
-                            diffusion_steps, timeout)
+                            diffusion_steps, timeout, engine=engine)
             return
         except Exception as e:
             logger.warning("[svc] conversion on %s failed (%s) — trying the "
@@ -195,7 +217,7 @@ def _convert_anywhere(source: Path, voice_ref: Path, output: Path,
     if workers:
         logger.warning("[svc] no worker took the conversion — running on the "
                        "controller (slow)")
-    _convert(source, voice_ref, output, diffusion_steps, timeout)
+    _convert(source, voice_ref, output, diffusion_steps, timeout, engine=engine)
 
 
 # Where docker/comfyui/Dockerfile (and scripts/install_svc_worker.sh, for
@@ -214,25 +236,38 @@ def _is_local(host: str) -> bool:
     return host in ("localhost", "127.0.0.1", "::1")
 
 
-def _convert_remote(host: str, source: Path, voice_ref: Path, output: Path,
-                    diffusion_steps: int, timeout: int) -> None:
-    """Run the seed-vc diffusion inside *host*'s worker container (CUDA).
+def _inference_command(engine: str, root: Path, source: Path, voice_ref: Path,
+                       out_dir: Path, steps: int, runner: Path) -> list[str]:
+    python = str(root / ".venv/bin/python")
+    if engine == "soulx-svc":
+        return [python, str(runner), "--model-dir", str(root),
+                "--source", str(source), "--target", str(voice_ref),
+                "--output", str(out_dir), "--diffusion-steps", str(steps)]
+    return [python, str(root / "inference.py"),
+            "--source", str(source), "--target", str(voice_ref),
+            "--output", str(out_dir), "--diffusion-steps", str(steps),
+            "--length-adjust", "1.0", "--inference-cfg-rate", "0.7",
+            "--f0-condition", "True"]
 
-    Plain scp + docker cp + docker exec — the same transport worker.sh uses,
-    local commands and all when the worker is this machine. Files travel by
-    copy: the audio is seconds of wav, the diffusion is the minutes, so the
-    copies are noise."""
+
+def _convert_remote(host: str, source: Path, voice_ref: Path, output: Path,
+                    diffusion_steps: int, timeout: int, *,
+                    engine: str = DEFAULT_ENGINE) -> None:
+    """Run the selected converter in a leased worker, cleaning up on failure too."""
+    engine = norm_engine(engine)
+
     def _sh(args, step, tmo=120):
         proc = subprocess.run(args, capture_output=True, text=True, timeout=tmo)
         if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
             raise RuntimeError(f"{step}: " + " | ".join(tail))
         return proc
 
-    def _on_host(cmd: str) -> list[str]:
+    def _on_host(args: list[str]) -> list[str]:
+        command = shlex.join(args)
         if _is_local(host):
-            return ["bash", "-c", cmd]
-        return ["ssh", *_SSH_OPTS, "--", host, cmd]
+            return ["bash", "-c", command]
+        return ["ssh", *_SSH_OPTS, "--", host, command]
 
     def _push(local: Path, remote: str) -> list[str]:
         if _is_local(host):
@@ -244,60 +279,61 @@ def _convert_remote(host: str, source: Path, voice_ref: Path, output: Path,
             return ["cp", remote, str(local)]
         return ["scp", "-q", *_SSH_OPTS, f"{host}:{remote}", str(local)]
 
-    job = f"svc_{os.getpid()}_{source.stem}"
-    _sh(_push(source, f"/tmp/{job}_src.wav"), "copy source")
-    _sh(_push(voice_ref, f"/tmp/{job}_ref.wav"), "copy voice ref")
-    _sh(_on_host(
-        f"docker cp /tmp/{job}_src.wav {_REMOTE_CONTAINER}:/tmp/{job}_src.wav && "
-        f"docker cp /tmp/{job}_ref.wav {_REMOTE_CONTAINER}:/tmp/{job}_ref.wav"),
-        "stage into container")
-    _sh(_on_host(
-        f"docker exec {_REMOTE_CONTAINER} {_REMOTE_DIR}/.venv/bin/python "
-        f"{_REMOTE_DIR}/inference.py "
-        f"--source /tmp/{job}_src.wav --target /tmp/{job}_ref.wav "
-        f"--output /tmp/{job}_out --diffusion-steps {diffusion_steps} "
-        f"--length-adjust 1.0 --inference-cfg-rate 0.7 --f0-condition True"),
-        "remote inference", tmo=timeout)
-    _sh(_on_host(
-        f"docker exec {_REMOTE_CONTAINER} sh -c "
-        f"'cp /tmp/{job}_out/*.wav /tmp/{job}_done.wav' && "
-        f"docker cp {_REMOTE_CONTAINER}:/tmp/{job}_done.wav /tmp/{job}_done.wav"),
-        "collect output")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    _sh(_pull(f"/tmp/{job}_done.wav", output), "copy result")
-    subprocess.run(_on_host(
-        f"rm -f /tmp/{job}_src.wav /tmp/{job}_ref.wav /tmp/{job}_done.wav; "
-        f"docker exec {_REMOTE_CONTAINER} rm -rf /tmp/{job}_src.wav "
-        f"/tmp/{job}_ref.wav /tmp/{job}_out /tmp/{job}_done.wav"),
-        capture_output=True, timeout=60)
-    logger.info("[svc] diffusion on %s done (%d steps)", host, diffusion_steps)
+    # Do not interpolate source names into a remote shell or collide with a
+    # concurrent request in this process.
+    job = f"/tmp/svc_{uuid.uuid4().hex}"
+    src, ref = Path(job + "_src.wav"), Path(job + "_ref.wav")
+    runner, out_dir = Path(job + "_runner.py"), Path(job + "_out")
+    done = Path(job + "_done.wav")
+    staged = [(source, src), (voice_ref, ref)]
+    if engine == "soulx-svc":
+        staged.append((SOULX_RUNNER, runner))
+    root = Path("/opt/soulx-singer" if engine == "soulx-svc" else _REMOTE_DIR)
+    try:
+        for local, remote in staged:
+            _sh(_push(local, str(remote)), "copy conversion input")
+            _sh(_on_host(["docker", "cp", str(remote),
+                          f"{_REMOTE_CONTAINER}:{remote}"]), "stage into container")
+        command = _inference_command(engine, root, src, ref, out_dir,
+                                     diffusion_steps, runner)
+        _sh(_on_host(["docker", "exec", _REMOTE_CONTAINER, *command]),
+            f"{ENGINE_LABELS[engine]} inference", tmo=timeout)
+        # Both CLIs write one WAV. All paths here contain only our UUID.
+        _sh(_on_host(["docker", "exec", _REMOTE_CONTAINER, "sh", "-c",
+                      f"cp {out_dir}/*.wav {done}"]), "collect output")
+        _sh(_on_host(["docker", "cp", f"{_REMOTE_CONTAINER}:{done}", str(done)]),
+            "copy out of container")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        _sh(_pull(str(done), output), "copy result")
+    finally:
+        paths = [str(src), str(ref), str(runner), str(out_dir), str(done)]
+        for command in (["rm", "-f", str(src), str(ref), str(runner), str(done)],
+                        ["docker", "exec", _REMOTE_CONTAINER, "rm", "-rf", *paths]):
+            try:
+                subprocess.run(_on_host(command), capture_output=True, timeout=60)
+            except (OSError, subprocess.TimeoutExpired):
+                logger.warning("[svc] could not clean temporary conversion files on %s", host)
+    logger.info("[svc] %s on %s done (%d steps)", ENGINE_LABELS[engine], host,
+                diffusion_steps)
 
 
 def _convert(source: Path, voice_ref: Path, output: Path,
-             diffusion_steps: int, timeout: int) -> None:
-    """One seed-vc inference call. Raises with the converter's own stderr
-    tail on failure — "CUDA out of memory" and "weights still downloading"
-    need different fixes and both look like "conversion failed" otherwise."""
+             diffusion_steps: int, timeout: int, *, engine: str = DEFAULT_ENGINE) -> None:
+    """Run the selected converter in its isolated controller environment."""
+    engine = norm_engine(engine)
+    root = SOULX_DIR if engine == "soulx-svc" else SVC_DIR
     with tempfile.TemporaryDirectory() as td:
         out_dir = Path(td)
-        proc = subprocess.run(
-            [str(SVC_DIR / ".venv" / "bin" / "python"), "inference.py",
-             "--source", str(source),
-             "--target", str(voice_ref),
-             "--output", str(out_dir),
-             "--diffusion-steps", str(diffusion_steps),
-             "--length-adjust", "1.0",
-             "--inference-cfg-rate", "0.7",
-             # f0 conditioning is what makes it a SINGING conversion — without
-             # it the melody flattens toward speech.
-             "--f0-condition", "True"],
-            cwd=SVC_DIR, capture_output=True, text=True, timeout=timeout)
+        command = _inference_command(engine, root, source.resolve(), voice_ref.resolve(),
+                                     out_dir, diffusion_steps, SOULX_RUNNER)
+        proc = subprocess.run(command, cwd=root, capture_output=True, text=True,
+                              timeout=timeout)
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
-            raise RuntimeError("seed-vc failed: " + " | ".join(tail))
+            raise RuntimeError(f"{ENGINE_LABELS[engine]} failed: " + " | ".join(tail))
         wavs = sorted(out_dir.glob("*.wav"))
         if not wavs:
-            raise RuntimeError("seed-vc produced no output file")
+            raise RuntimeError(f"{ENGINE_LABELS[engine]} produced no output file")
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(wavs[0], output)
 
@@ -348,13 +384,17 @@ def _match_gain(path: Path, to: float) -> None:
     tmp = path.with_suffix(".gain.wav")
     subprocess.run(
         [_ffmpeg(), "-y", "-v", "error", "-i", str(path),
-         "-af", f"volume={gain:.1f}dB", str(tmp)],
+         "-af", f"volume={gain:.1f}dB", "-c:a", "pcm_f32le", str(tmp)],
         check=True, capture_output=True)
     tmp.replace(path)
 
 
 def _remix(vocals: Path, backing: Path, output: Path) -> None:
-    """Converted vocals over the untouched backing, at their own levels."""
+    """Mix at the original vocal balance, then leave 1 dB of peak headroom.
+
+    Float intermediates prevent a loud cloned vocal from clipping before the
+    shared final attenuation. No limiter or independent backing gain is used.
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_suffix(".remix.wav")
     subprocess.run(
@@ -362,9 +402,22 @@ def _remix(vocals: Path, backing: Path, output: Path) -> None:
          "-i", str(vocals), "-i", str(backing),
          "-filter_complex",
          "[0:a][1:a]amix=inputs=2:duration=longest:normalize=0[a]",
-         "-map", "[a]", "-ar", "44100", str(tmp)],
+         "-map", "[a]", "-ar", "44100", "-c:a", "pcm_f32le", str(tmp)],
         check=True, capture_output=True)
-    tmp.replace(output)
+    try:
+        proc = subprocess.run(
+            [_ffmpeg(), "-i", str(tmp), "-af", "astats=reset=0", "-f", "null", "-"],
+            check=True, capture_output=True, text=True)
+        levels = re.findall(r"Peak level dB:\s*(-?[\d.]+|-inf)", proc.stderr or "")
+        if not levels:
+            raise RuntimeError("Could not measure converted mix peak level.")
+        gain = min(0.0, -1.0 - max(float(level) for level in levels))
+        subprocess.run(
+            [_ffmpeg(), "-y", "-v", "error", "-i", str(tmp),
+             "-af", f"volume={gain:.6f}dB", "-c:a", "pcm_s24le", str(output)],
+            check=True, capture_output=True)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _normalize_loudness(path: Path) -> None:

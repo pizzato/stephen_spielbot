@@ -45,6 +45,9 @@ a convenience summary, **not** legal advice — always check the linked model ca
 |---|---|---|---|
 | ACE-Step 1.5 (music — **default**) + Qwen text encoders | `Comfy-Org/ace_step_1.5_ComfyUI_files` | Apache-2.0 | ✅ Yes |
 | MiniMax Music 3 (music — opt-in engine: DiT, pruned text encoder, audio VAE) | `Comfy-Org/MiniMax-Music-3` (repackaged from `MiniMaxAI/MiniMax-Music3`) | **MiniMax-Music3 Community License** (not an OSI license) | ⚠️ Yes, with conditions: a prominently displayed "MiniMax-Music3" credit on any commercial product using it, machine-generated disclosure, and separate authorization above US$20M yearly revenue. No territory restriction |
+| [SoulX-Singer SVC](https://huggingface.co/Soul-AILab/SoulX-Singer) (`model-svc.pt`; singing-voice conversion — **default**) | `Soul-AILab/SoulX-Singer`, pinned revision `40493ad90286056c7a9095035164434a79daa8c9` | Apache-2.0 (publisher explicitly includes code and model weights) | ✅ Yes |
+| [RMVPE](https://huggingface.co/Soul-AILab/SoulX-Singer-Preprocess) (SoulX pitch extraction) | `Soul-AILab/SoulX-Singer-Preprocess`, `rmvpe/rmvpe.pt`, pinned revision `83dc50289d22a81b1e9998f5b9e111aef7c1fdcd` | Apache-2.0 (preprocess repo card; [upstream code](https://github.com/Dream-High/RMVPE/blob/main/LICENSE) also Apache-2.0) | ✅ Yes |
+| [Whisper base](https://huggingface.co/openai/whisper-base) (SoulX content encoder) | `openai/whisper-base`, pinned revision `e37978b90ca9030d5170a5c07aadb050351a65bb` | Apache-2.0 per the downloaded model's card; the original [OpenAI Whisper](https://github.com/openai/whisper/blob/main/LICENSE) project is MIT | ✅ Yes |
 | **OpenF5-TTS-Base** (narration — **default**) | `mrfakename/OpenF5-TTS-Base` | Apache-2.0 | ✅ Yes |
 | F5-TTS Base original (narration — opt-in) | `SWivid/F5-TTS` (`F5TTS_v1_Base`) | CC-BY-NC-4.0 | ❌ No (non-commercial) |
 | Chatterbox Multilingual (narration — 23-language option) | `ResembleAI/chatterbox` | MIT | ✅ Yes (embeds Resemble's Perth watermark — kept on purpose) |
@@ -64,19 +67,29 @@ a convenience summary, **not** legal advice — always check the linked model ca
 - **ComfyUI** — GPL-3.0 (run as a separate service; not linked into this code).
 - **FFmpeg** — used as an external binary; your build is typically LGPL/GPL.
   Stephen Spielbot calls it as a subprocess and does not bundle it.
-- **seed-vc** (singing-voice conversion — the song panel's "Sing this as
-  [voice]" step) — GPL-3.0. Installed on the controller by
-  `scripts/install_svc.sh`, and inside each worker's ComfyUI container by the
-  image build (or `make svc-install`), where the diffusion actually runs. It is
-  invoked as a **separate process** (`pipeline/svc.py`), never imported or
-  bundled; its model weights download from Hugging Face on first use. Fine for
-  self-hosted use; consider the GPL terms before redistributing an installation
-  that includes it.
-- **demucs** (vocal-stem separation, so a re-voicing converts the voice and not
-  the arrangement, and so a music video's vocal timing is measured on the stem)
-  — MIT, its `htdemucs` weights released under the same
-  license. Installed into the same seed-vc virtualenv and run as a separate
-  process; when it is missing, the conversion falls back to the whole mix.
+- **SoulX-Singer SVC** (default singing-voice conversion) —
+  [Apache-2.0](https://github.com/Soul-AILab/SoulX-Singer/blob/main/LICENSE), code pinned
+  to `81aeb3ae772c70093c3de74dc23c92d983801ae4`. The
+  [publisher's model terms](https://huggingface.co/Soul-AILab/SoulX-Singer#license)
+  explicitly cover the weights. `make install` / `make svc-install` install it into
+  its own virtual environment on the controller and workers and download the three
+  model components listed above. The app invokes it as a separate process. Retain
+  Apache license/attribution notices and identify changes when redistributing it.
+  Only SVC is installed; the separate SVS checkpoint and its transcription toolkit
+  are not dependencies of the application.
+- **Seed-VC** (alternative singing-voice conversion engine) —
+  [GPL-3.0](https://github.com/Plachtaa/seed-vc/blob/main/LICENSE). Installed on the
+  controller by `scripts/install_svc.sh` and inside worker ComfyUI containers by
+  `make install` or `make svc-install`, in an environment separate from SoulX.
+  It is invoked as a **separate process** (`pipeline/svc.py`), never imported into
+  the application process; its model weights download from Hugging Face on first use. Selecting
+  SoulX does not remove this runtime from an installation. Redistributing it,
+  including in a built worker image, carries the GPL's source and notice obligations.
+- **Demucs** (shared vocal-stem separation for both conversion engines, and a music
+  video's vocal timing measurement) — MIT; its `htdemucs` weights use the same license.
+  Installed into the Seed-VC virtual environment and run as a separate process.
+  SoulX requires this separator; a missing install produces an error. Seed-VC retains
+  its legacy whole-mix fallback when separation is unavailable.
 - **faster-whisper** (word-timestamp transcription of the vocal stem, used to
   align a music video's lyric sheet to the sung track — `song_align_lyrics`) —
   MIT, built on CTranslate2 (MIT); the `Systran/faster-whisper-small` weights
@@ -98,7 +111,8 @@ The Dockerfiles under `docker/` clone or pip-install third-party code when
 | [ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context) | `docker/comfyui` (pinned; omit with an empty `H3_MOTION_CONTEXT_REF`) | GPL-3.0 |
 | [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) | `docker/comfyui` (pinned; omit with an empty `H3_LATENT_UPSCALER_REF`) | ⚠️ **No license declared** on the node repo — only the weights it loads are Apache-2.0. Redistributing the built image carries that ambiguity; set the ref empty to leave it out |
 | [ComfyUI-FlashVSR_Ultra_Fast](https://github.com/lihaoyun6/ComfyUI-FlashVSR_Ultra_Fast) (FlashVSR upscaler; bundles Sparse SageAttention in place of the upstream Block-Sparse kernel) | `docker/comfyui` (pinned; omit with an empty `FLASHVSR_NODES_REF`) | GPL-3.0 (the FlashVSR weights it loads are Apache-2.0) |
-| [seed-vc](https://github.com/Plachtaa/seed-vc) (song re-voicing; run with `docker exec`, never imported) | `docker/comfyui` (cloned into `/opt/seed-vc`; `make svc-install` adds it to older containers) | GPL-3.0 |
+| [SoulX-Singer](https://github.com/Soul-AILab/SoulX-Singer) (default SVC; separate process) | `make install` / `make svc-install`; pinned code at `/opt/soulx-singer`, separate virtualenv and persistent volume | Apache-2.0 |
+| [seed-vc](https://github.com/Plachtaa/seed-vc) (alternative song re-voicing; separate process) | `docker/comfyui` and `make install` / `make svc-install`; `/opt/seed-vc` | GPL-3.0 |
 | [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
 | [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |
 
