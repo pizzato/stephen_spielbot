@@ -3405,7 +3405,8 @@ def _characters_for_scene(scene_text: str, cfg: dict, style_name: str,
 
 
 def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str,
-                       work_dir: Path | None = None) -> str:
+                       work_dir: Path | None = None, *,
+                       allow_appearance_override: bool = False) -> str:
     """Append each matched character's canonical appearance to the image prompt so
     the same subject looks consistent across scenes, even if the LLM paraphrased.
 
@@ -3423,6 +3424,9 @@ def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str
     if not clauses:
         return base_prompt
     tail = " ".join(f"{c}." for c in clauses)
+    if allow_appearance_override:
+        tail = ("Character appearance context (use only where consistent with the "
+                f"requested changes): {tail}")
     sep = " " if base_prompt.rstrip().endswith((".", "!", "?")) else ". "
     return f"{base_prompt.rstrip()}{sep}{tail}"
 
@@ -3476,7 +3480,8 @@ _QWEN_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <image{n}> �
 
 def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_name: str,
                                 work_dir: Path | None = None,
-                                engine: dict | None = None) -> tuple[str, list[Path]]:
+                                engine: dict | None = None, *,
+                                allow_appearance_override: bool = False) -> tuple[str, list[Path]]:
     """Character-consistent prompt + reference images for one scene image render.
 
     Injects each featured character's canonical appearance (_inject_characters),
@@ -3484,12 +3489,25 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
     conditions on references (it has a t2i_ref_workflow — FLUX.2 or
     Qwen-Image 2.1) — appends a per-character note tying the name to its
     attached image. Qwen cites the slot (``<image1>``).
-    Engines without reference support get the plain injected prompt."""
-    prompt = _inject_characters(base_prompt, scene, cfg, style_name, work_dir)
+    Engines without reference support get the plain injected prompt. Guided
+    covers can allow appearance overrides: descriptions and portraits then
+    supply identity and unchanged features, not an immutable outfit."""
+    prompt = _inject_characters(
+        base_prompt, scene, cfg, style_name, work_dir,
+        allow_appearance_override=allow_appearance_override)
     pairs = _scene_reference_characters(prompt, scene, cfg, style_name, work_dir)
     refs = [p for _c, p in pairs]
     if pairs and engine is not None and engine.get("t2i_ref_workflow"):
-        if engine.get("family") == "qwen-image":
+        if allow_appearance_override:
+            notes = " ".join(
+                f"{c['name'].strip()}: use "
+                + (f"<image{i}>" if engine.get("family") == "qwen-image"
+                   else "their provided reference image")
+                + " for identity and unchanged features. Apply the requested changes, "
+                  "including clothing and colours, even when they differ from the reference image."
+                for i, (c, _p) in enumerate(pairs, start=1)
+                if (c.get("name") or "").strip())
+        elif engine.get("family") == "qwen-image":
             notes = " ".join(
                 _QWEN_REF_MATCH_NOTE.format(name=c.get("name", "").strip(), n=i)
                 for i, (c, _p) in enumerate(pairs, start=1)
@@ -3514,17 +3532,27 @@ def build_cover_generation(work_dir, cfg: dict, style_name: str, scenes=None,
     (_compose_visual_style — the same text the script's image prompts open
     with), and every character named in the subject hint gets the same
     canonical-appearance clause, portrait reference image, and exact-match
-    note the scene renders use (_characters_prompt_and_refs). Returns
+    note the scene renders use (_characters_prompt_and_refs). For a guided
+    regeneration, the user's changes override conflicting descriptions and
+    portrait details while references still anchor identity. Returns
     ``(prompt, reference_image_paths)`` — pass the refs to
     generate_with_engine (engines without reference conditioning ignore them).
     """
     from pipeline.cover import build_cover_prompt
 
+    instruction = (instruction or "").strip()[:500]
     style_text = _compose_visual_style(extra_style, cfg, style_name)
     prompt = build_cover_prompt(style_text, scenes=scenes, instruction=instruction,
                                 text_position=text_position)
     wd = Path(work_dir) if work_dir else None
-    return _characters_prompt_and_refs(prompt, {}, cfg, style_name, wd, engine=engine)
+    prompt, refs = _characters_prompt_and_refs(
+        prompt, {}, cfg, style_name, wd, engine=engine,
+        allow_appearance_override=bool(instruction))
+    if instruction:
+        # Restate the steer after all conditioning, outside the negative list
+        # and the saved descriptions that may contain the outfit being replaced.
+        prompt = f"{prompt} Requested changes for this cover: {instruction.rstrip('.')}."
+    return prompt, refs
 
 
 def _find_character(cfg: dict, char_id: str) -> dict:
