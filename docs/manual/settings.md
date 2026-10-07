@@ -319,6 +319,15 @@ end, never baked into a scene — off leaves a film with only its voices and roo
 minutes per film, caps at 6 minutes, and carries its own community licence. Download
 either under **Infrastructure → Music models**.
 
+**Singing voice conversion** chooses **SoulX-Singer SVC** (default) or **Seed-VC** for
+this style's **Sing this as…** / **Sing it as…** actions and automated song re-voicing.
+Child styles inherit the choice unless they override it. Both convert the original
+vocal stem and mix it back with the existing instruments; changing the picker does
+not alter a finished song or enable **Re-voice the finished track as that voice**.
+Use the Song tab to make a new version with the selected engine. This controls voice
+conversion, independently of the music model and narration voice model. See
+[singing voice conversion models](../models.md#singing-voice-conversion-per-style).
+
 **Lyric timing** — *Align lyrics to the sung track* (on by default) applies to
 [music videos](../performance_films.md#singing-films-the-music-video-format) only: at
 divide time the lyric sheet is whisper-aligned against the song's separated vocal stem,
@@ -626,9 +635,11 @@ way round from every other film — the song comes first and the pictures follow
   otherwise a character drawn from the style's
   [catalogue](../characters.md) whose sex, age and background the track is sung to
   match (a style with no catalogue lets the songwriter define the vocalist)
-- **Re-voice the finished track as that voice** — runs the voice conversion on the
-  controller, as the Song tab's *Sing this as…* does. The sung original is kept as a
-  version either way, so you can put it back
+- **Re-voice the finished track as that voice** — runs the style's selected singing
+  voice conversion engine, as the Song tab's *Sing this as…* does. An available GPU
+  worker runs the conversion, with the same engine on the controller as fallback.
+  The sung original is kept as a version, so you can put it back. This toggle remains
+  separate from the engine picker
 - **Auto-approve songs** — off, automation stops once the song exists and parks it in the
   Song tab: no story, no scenes and no render are built on a song you haven't heard. Open
   the film's Song tab, listen, and **Draft the story** to carry it on into the normal

@@ -1,7 +1,7 @@
 # Models
 
-`make install` (and `make download-models` on its own) downloads everything
-automatically — roughly **90 GB** for the defaults (the gated LTX 2.5 set needs an HF token — see below). Models live on each worker's host at
+`make install` downloads the required models automatically. The ComfyUI model sets
+are also available through `make download-models` — roughly **90 GB** for the defaults (the gated LTX 2.5 set needs an HF token — see below). Models live on each worker's host at
 `~/github/ComfyUI/models` and are mounted into the containers, so they survive image
 rebuilds.
 
@@ -22,6 +22,9 @@ rebuilds.
 | LibriVox character voices | small | 10 public-domain voices auto-cast onto script characters (`make download-voices`) |
 
 The **OpenF5-TTS-Base** narration weights are fetched by the TTS container on first use.
+[Song voice-conversion models](#singing-voice-conversion-per-style) use their own
+installer and persistent runtime directories; `make install` includes them and
+`make svc-install` repairs them separately from the ComfyUI model downloads.
 
 ## Manual download
 
@@ -402,6 +405,34 @@ MiniMax Music 3 notes:
   authorization above US$20M yearly revenue. There is no territory restriction
   (unlike MiniMax H3). The picker shows the same note.
 
+## Singing voice conversion (per style)
+
+**Settings → Styles → Narrator & audio → Singing voice conversion** selects the
+engine used by the Song tab, film editor and automated re-voicing. It applies to
+generated songs and uploaded songs alike. Child styles inherit it. Selecting a model
+does not re-voice an existing file or enable the separate automation toggle.
+
+| Engine | Configuration value | Conversion output | License |
+|---|---|---|---|
+| **SoulX-Singer SVC** (default) | `soulx-svc` | 24 kHz vocals, 32 diffusion steps by default | Apache-2.0 code and weights |
+| **Seed-VC** | `seed-vc` | 44.1 kHz vocals, 30 diffusion steps by default | GPL-3.0 code; see [notices](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md) |
+
+Both use the original separated vocal stem and a library voice reference, then remix
+with the same backing track. Versions retain their sung source, so switching voices
+or engines always converts that source rather than a previous conversion. The
+music-generation engine and narration TTS model are independent choices. SoulX's
+**SVS** model is not installed or exposed here; this feature uses **SVC**.
+
+`make install` supplies both runtimes. SoulX downloads `model-svc.pt`, the RMVPE pitch
+extractor and the Whisper-base content encoder, then uses those files offline.
+Seed-VC weights download on first conversion. SoulX does not need the SVS lyric/note
+transcription stack. The runtimes use separate virtual environments under
+`~/.local/share/video-generator/` on the controller and `/opt/` in each worker's
+ComfyUI container. See [installation](installation.md#song-voice-conversion) for repair
+commands and [cluster deployment](cluster.md#song-re-voicing-rides-along-in-the-comfyui-container)
+for persistent storage. Worker fallback keeps the selected engine; no automatic
+SoulX-to-Seed or Seed-to-SoulX substitution occurs.
+
 ## Gated weights
 
 Some Hugging Face repos require accepting a license. Set a **Hugging Face token** in
@@ -464,8 +495,8 @@ original at any time.
 
 ## Licensing
 
-The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model — are
-commercial-friendly on purpose. The original F5-TTS narration weights are offered only as
+The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, SoulX-Singer SVC, and the OpenF5
+narration model — are commercial-friendly on purpose. The original F5-TTS narration weights are offered only as
 an opt-in **non-commercial** preview. Both Qwen-Image 2.1 builds (INT8 and the faster NVFP4) are opt-in under the
 [Qwen Research License](#image-engines-per-style) — research and evaluation only,
 not for a monetized film without a separate grant from Qwen. The NVFP4 diffusion

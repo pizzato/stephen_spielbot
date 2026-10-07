@@ -45,7 +45,7 @@ at the top is the documented key set.
 | `tts_engines.py`, `openf5.py`, `chatterbox.py`, `tts_text.py` | Narration: engine choice, weights, and spoken-text handling |
 | `performance.py`, `shot_gate.py` | Acted scenes and performance films: the acted script shape, the H3 Ref2VA prompt, and the speech gate |
 | `song_timing.py`, `lyric_align.py` | Music videos: measure the sung track's vocal stem, whisper-align the lyric sheet, cut scenes between sung lines |
-| `svc.py` | Song re-voicing (seed-vc) on whichever GPU worker is free |
+| `svc.py` | Per-style song re-voicing: SoulX-Singer SVC (default) or Seed-VC, shared vocal separation/remix, worker leasing and controller fallback |
 | `assembler.py`, `captions.py`, `cover.py` | Final mux, SRT captions, cover images and first-frame burns |
 | `youtube.py`, `x.py`, `publish_queue.py` | Publishing, multi-channel tokens, the cadence scheduler |
 | `engagement.py` | Comment fetching, reply drafting, the predictive model |

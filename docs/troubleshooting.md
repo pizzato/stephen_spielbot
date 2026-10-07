@@ -154,6 +154,30 @@ editing or publishing it. If the published cut is a curated version — an upsca
 localization, or a hand-burnt cover — the sweep never touches it: press
 **Reassemble film** in [Edit film](manual/edit-film.md) to rebuild it anyway.
 
+## Song re-voicing
+
+### The re-voice button is disabled or reports missing models
+
+Check **Settings → Styles → Narrator & audio → Singing voice conversion** for the
+selected engine, then repair its installation:
+
+```bash
+make svc-install          # controller and workers; W=s2 limits the worker side
+```
+
+Both SoulX-Singer SVC and Seed-VC must have their own runtime; the selected engine
+must be installed on the controller even when workers handle conversion. Keep the
+controller's Seed-VC environment: it also supplies Demucs and lyric alignment for
+SoulX. On an older worker stack, run `make install` first so both persistent runtime
+volumes exist. See [installation](installation.md#song-voice-conversion).
+
+### Re-voicing is unexpectedly slow
+
+The selected engine may have fallen back to the controller because workers are busy
+or unavailable. SoulX's controller fallback uses CPU when CUDA is unavailable, which
+is slower. Check the conversion log and worker availability. The app keeps the engine
+you selected; choosing another engine is an explicit style setting.
+
 ## Publishing
 
 ### Nothing publishes even though films are finished

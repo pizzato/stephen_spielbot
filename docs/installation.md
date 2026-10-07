@@ -11,7 +11,8 @@ single-machine install where the controller is also the (localhost) worker.
 
 === "Controller"
 
-    - Python 3.11+
+    - Python 3.11+; the song-conversion runtimes use Python 3.10–3.12, discovered
+      automatically or selected with [`SVC_PYTHON`](environment.md#install-time-variables)
     - Node.js 20+ — builds the React frontend (`make install` skips the UI build without it)
     - FFmpeg — final assembly
     - A local vLLM server **or** an API key for Claude, Grok, or OpenAI (script writing)
@@ -56,10 +57,40 @@ arguments and it prompts once. An existing `config.yaml` is never overwritten.
 3. Downloads the [models](models.md) (~90 GB) and the 10-voice LibriVox character voice library
 4. Builds and deploys the [worker containers](cluster.md) over SSH, verifies each one
    registers the ComfyUI nodes the workflows need, and points the config at them
-5. Installs the web backend deps and builds the React frontend
+5. Installs **SoulX-Singer SVC** and **Seed-VC** in separate virtual environments on
+   the controller and workers, including the SoulX conversion checkpoint, pitch
+   extractor and content encoder; shared Demucs weights are prefetched on the
+   controller, and lyric alignment stays available
+6. Installs the web backend deps and builds the React frontend
 
 The macOS login service (a LaunchAgent that keeps the app running) is opt-in — the
 installer asks, or set `INSTALL_SERVICE=1 make install` to install it without asking.
+
+### Song voice conversion
+
+Both [singing voice conversion engines](models.md#singing-voice-conversion-per-style)
+are part of `make install`. **SoulX-Singer SVC** is the default; select **Seed-VC** per
+style under **Settings → Styles → Narrator & audio → Singing voice conversion**.
+This choice does not enable automated re-voicing.
+
+Controller runtimes live under `~/.local/share/video-generator/seed-vc` and
+`~/.local/share/video-generator/soulx-singer`, each with its own virtual environment.
+The worker copies live at `/opt/seed-vc` and `/opt/soulx-singer` inside ComfyUI's
+container, with persistent model storage. Keep the Seed-VC environment even when
+using SoulX: the shared Demucs separator and lyric aligner use it.
+
+To repair or update an existing installation without rebuilding the application:
+
+```bash
+bash scripts/install_svc.sh     # controller: both engines and shared audio tools
+make svc-install               # controller + workers; W=s2 limits the worker side
+```
+
+The app tries the selected engine on available workers, then on the controller.
+SoulX uses CUDA when available and CPU otherwise; CPU conversion is slower. Missing
+SoulX models produce an install error rather than switching to another voice engine.
+SoulX uses its prefetched local models; Seed-VC weights and the shared faster-whisper
+lyric-alignment model are downloaded on their first use.
 
 ## Day-to-day commands
 

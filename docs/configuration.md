@@ -182,12 +182,22 @@ tts_workers:
 ```
 
 Song [re-voicing](performance_films.md#singing-films-the-music-video-format) runs on the
-ComfyUI workers too, and has two YAML-only keys (no Settings control):
+ComfyUI workers too. Choose **Singing voice conversion** under **Settings → Styles →
+Narrator & audio**: `soulx-svc` (default) or `seed-vc`. The style's `svc_engine`
+inherits from its parent; `default_svc_engine` mirrors the default style. Existing
+styles without an explicit choice use SoulX-Singer SVC. Choosing an engine does not
+turn on unattended re-voicing.
+
+Two optional YAML-only keys tune execution:
 
 ```yaml
-svc_diffusion_steps: 30   # 25 fast · 30 default · 50 polish
-svc_worker: s2            # pin it to one host; unset = whichever worker is free
+svc_diffusion_steps: 32   # explicit override for either engine; higher is slower
+svc_worker: s2           # pin to one host; unset = whichever worker is free
 ```
+
+Omit `svc_diffusion_steps` to use each engine's default: **32** for SoulX-Singer SVC,
+**30** for Seed-VC. Worker or controller fallback always keeps the selected engine;
+a failed SoulX conversion never silently becomes a Seed-VC conversion.
 
 ## The highlights
 
@@ -199,6 +209,7 @@ The Settings screen covers everything; this is the short list of what people cha
 | TTS workers | F5-TTS/Chatterbox endpoints for parallel narration (port 8189, derived by `make install`) |
 | Music | Score films in this style (per-film override in Create); music is mixed in at the very end |
 | Music model | Per-style music engine — `ace-step` (default) or the opt-in `minimax-music3` (see [Models → Music engines](models.md#music-engines-per-style)) |
+| Singing voice conversion | Per-style `svc_engine`: `soulx-svc` (default) or `seed-vc`; selects the model that re-voices an existing song, independently of the music generator and automatic re-voicing toggle |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
 | LLM backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |

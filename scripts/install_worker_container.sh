@@ -273,6 +273,11 @@ echo "[deploy] verifying required ComfyUI nodes on $TARGET ..."
 NODES_OK=true
 bash "$REPO_ROOT/scripts/check_worker_nodes.sh" "$TARGET" "$COMFYUI_PORT" || NODES_OK=false
 
+# Refresh persistent singing-engine volumes too: they hide newer files from
+# the rebuilt image. Failure is fatal so an incomplete model install is not
+# recorded as a successfully deployed worker.
+bash "$REPO_ROOT/scripts/install_svc_worker.sh" "$TARGET"
+
 # ── 9. Stamp the build context this host now runs ─────────────────────────────
 # `make start` compares this against the repo and re-deploys when they differ,
 # so a node added to the Dockerfile later reaches every worker without a full

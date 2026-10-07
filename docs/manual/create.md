@@ -176,6 +176,9 @@ the songwriter define a vocalist when no cast is available. You
 can change it, and actually re-voice the finished track, in the
 [Song tab](script.md#song). With **I have the song** nothing is described to a music model
 — your song is already sung — so it is only the target for re-voicing it there.
+Re-voicing uses the style's **Singing voice conversion** choice: **SoulX-Singer SVC**
+by default, or **Seed-VC**. Picking a voice or conversion engine alone does not
+start a conversion.
 
 ## Auto-approve
 
