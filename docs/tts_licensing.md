@@ -54,16 +54,30 @@ Resemble AI, selectable in Settings as the `chatterbox-multilingual` engine:
   environment variable can point at a mirror or pinned fork but should remain an
   MIT-licensed repository.
 
-## Singing-voice conversion (seed-vc)
+## Singing-voice conversion
 
 The [Music-video format](performance_films.md#singing-films-the-music-video-format)'s
-"Sing this as *voice*" step is the one true voice-clone in the app: **seed-vc**
-re-voices a generated song with a library voice's timbre. It is **GPL-3.0** — installed
-by `scripts/install_svc.sh` into its own virtualenv and always invoked as a separate
-process, never imported, so the app's Apache-2.0 licensing is unaffected. Its helpers
-demucs (MIT) and faster-whisper (MIT) ride in the same install. See
-[`THIRD_PARTY_NOTICES.md`](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)
-for the full terms.
+**Sing this as…** action re-voices an existing song using the engine selected under
+**Settings → Styles → Narrator & audio → Singing voice conversion**.
+
+- **SoulX-Singer SVC** is the default. Its
+  [code license](https://github.com/Soul-AILab/SoulX-Singer/blob/main/LICENSE) is
+  **Apache-2.0**, and the [publisher's model card](https://huggingface.co/Soul-AILab/SoulX-Singer#license)
+  explicitly applies that license to the weights as well. Commercial use is allowed;
+  redistributions must retain the license and applicable notices and identify changes.
+  Its RMVPE pitch extractor is Apache-2.0. The downloaded
+  [Whisper-base checkpoint](https://huggingface.co/openai/whisper-base) is labelled
+  Apache-2.0 on its model card; the original OpenAI Whisper project is MIT.
+- **Seed-VC** remains selectable. Its
+  [code license](https://github.com/Plachtaa/seed-vc/blob/main/LICENSE) is **GPL-3.0**.
+  Commercial use is permitted, but distributing the runtime carries GPL obligations.
+
+`make install` places each engine in its own virtual environment and the app invokes
+it as a separate process. Demucs (MIT) and faster-whisper (MIT) remain shared helpers
+in the Seed-VC environment. Stephen Spielbot's own code remains Apache-2.0; selecting
+SoulX does not remove the licensing obligations of Seed-VC included in an installation.
+See [`THIRD_PARTY_NOTICES.md`](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)
+for component licenses and installation details.
 
 ## Scope
 

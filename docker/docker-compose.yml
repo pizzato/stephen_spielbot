@@ -62,6 +62,8 @@ services:
       # worker whose image predates seed-vc, `make svc-install` fills it once
       # and the install then survives restarts like any other worker state.
       - seed-vc:/opt/seed-vc
+      # SoulX's separate environment and pinned SVC/RMVPE/Whisper models.
+      - soulx-singer:/opt/soulx-singer
     # Let autoheal restart this container if its GPU-aware healthcheck fails
     # (silent CPU fallback after a host daemon-reload — see the autoheal service).
     labels:
@@ -124,3 +126,4 @@ volumes:
   comfyui-output:
   hf-cache:
   seed-vc:
+  soulx-singer:

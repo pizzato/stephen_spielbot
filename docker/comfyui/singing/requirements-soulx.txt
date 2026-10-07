@@ -1,0 +1,13 @@
+# Tested SVC-only environment. Do not install upstream's SVS/ASR requirements
+# or its torch 2.2 pin: workers must retain their CUDA-compatible torch build.
+numpy==1.26.4
+scipy==1.13.1
+librosa==0.10.2
+soundfile==0.12.1
+omegaconf==2.3.1
+transformers==4.41.2
+tokenizers==0.19.1
+accelerate==1.14.0
+huggingface-hub==0.36.2
+safetensors==0.8.0
+tqdm==4.70.1

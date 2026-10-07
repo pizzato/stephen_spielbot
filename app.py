@@ -252,6 +252,9 @@ DEFAULT_CFG = {
     # Music engine per style (see pipeline/engines.py MUSIC_ENGINES): which model
     # writes the background bed. Default = ACE-Step 1.5.
     "default_music_engine": "ace-step",
+    # Singing voice conversion per style; choosing a model does not enable
+    # automatic re-voicing (youtube_auto_song_revoice remains opt-in).
+    "default_svc_engine": "soulx-svc",
     # Music videos: force-align the lyric sheet against the song's separated
     # vocal stem (faster-whisper in the seed-vc venv) so every lyric line gets
     # a MEASURED time instead of an even-paced estimate — scenes then name and
@@ -418,8 +421,9 @@ DEFAULT_CFG = {
     # The singing voice automation asks for; "" = the music engine's own
     # vocalist. Described to the model (gender/age/tone), never cloned.
     "youtube_auto_song_voice": "",
-    # Also RE-VOICE the finished track as that library voice (seed-vc, local
-    # GPU). Needs youtube_auto_song_voice; both versions are kept.
+    # Also RE-VOICE the finished track as that library voice using the style's
+    # singing voice conversion model. Needs youtube_auto_song_voice; both
+    # versions are kept.
     "youtube_auto_song_revoice": False,
     # False = automation stops once the song is generated and parks it in the
     # Song tab for review, so no story, scenes or render are built on a song
@@ -597,6 +601,7 @@ STYLE_FIELD_TO_FLAT = {
     "music_enabled":        "music_enabled",
     # Music engine selection (background bed) — see pipeline/engines.py MUSIC_ENGINES
     "music_engine":         "default_music_engine",
+    "svc_engine":           "default_svc_engine",
     # Music videos: whisper-align lyric lines to the sung track at divide time
     "song_align_lyrics":    "default_song_align_lyrics",
     "music_vol":            "music_vol",
@@ -957,6 +962,12 @@ def _norm_music_engine(value) -> str:
     return value if engines.get_music(value) else engines.DEFAULT_MUSIC_ENGINE
 
 
+def _norm_svc_engine(value) -> str:
+    """Coerce a singing voice conversion model, defaulting to SoulX-SVC."""
+    from pipeline.svc import norm_engine
+    return norm_engine(value)
+
+
 def _norm_video_steps(value) -> int:
     """Clamp the per-style video steps override to 0..50 (0 = engine default)."""
     try:
@@ -1235,6 +1246,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "h3_first_frames", _norm_h3_first_frames)
         _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "music_engine", _norm_music_engine)
+        _coerce(row, "svc_engine", _norm_svc_engine)
         _coerce(row, "song_align_lyrics", _norm_song_align_lyrics)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)

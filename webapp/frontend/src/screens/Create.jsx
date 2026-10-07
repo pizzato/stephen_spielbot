@@ -436,7 +436,7 @@ export default function Create({ seed, meta, onGenerated }) {
             {songFmt && (
               <Field label="Singing voice"
                 hint={songSource === 'file'
-                  ? 'Only the target for re-voicing your file in the Song tab (seed-vc clones it onto the vocal). Nothing is described to a music model — your song is already sung.'
+                  ? 'The target for re-voicing your file in the Song tab using this style’s singing voice conversion model. Your song is already sung, so no voice description is sent to a music model.'
                   : 'The vocalist is described to the music model from this voice’s gender, age and tone (matched by description, not cloned). Automatic casting prefers the main available news character for a news video, then the style’s cast.'}>
                 <select className="select" value={songVoice} onChange={(e) => setSongVoice(e.target.value)}>
                   <option value="">Automatically choose the singer</option>

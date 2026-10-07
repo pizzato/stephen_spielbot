@@ -55,29 +55,36 @@ Full detail: [`docker/README.md`](https://github.com/pizzato/stephen_spielbot/bl
 ### Song re-voicing rides along in the ComfyUI container
 
 The [singing films](performance_films.md#singing-films-the-music-video-format)
-feature's **"Sing this as [voice]"** step (seed-vc) is the one job that does not go
-through ComfyUI's API: the controller copies the vocal stem in and runs the diffusion
-with `docker exec` inside `spielbot-worker-comfyui-1`, reusing that container's CUDA
-PyTorch. **Any worker can take it** — the backend picks the idle one (the same
-least-busy-first ordering covers use), tries the next if that host is down, and converts
-on the controller's own GPU only when no worker will. It honours the
-[fleet-wide worker lease](#one-job-per-worker-no-matter-who-asks): a worker busy with a
-render or upscale is skipped rather than double-booked, and when every worker is leased
-the controller converts (slow beats waiting out a multi-minute GPU job).
+feature's **Sing this as [voice]** step runs **SoulX-Singer SVC** by default, or
+**Seed-VC** selected per style. It uses `docker exec` inside
+`spielbot-worker-comfyui-1`, rather than ComfyUI's API. The controller separates the
+vocal stem, copies it and the voice reference to the worker, then remixes the result
+with the original backing.
 
-The image carries seed-vc, so a worker deployed with `make install` is ready. Containers
-built before it landed need it added once — they keep running while it installs:
+**Any worker can take it.** The backend picks an available worker and tries another
+if that host cannot run the selected engine. It honours the
+[fleet-wide worker lease](#one-job-per-worker-no-matter-who-asks), so rendering and
+voice conversion do not double-book a GPU. If no worker can take the job, the same
+engine runs on the controller; SoulX uses CUDA when available and CPU otherwise.
+CPU fallback is slower. Engine failures never silently switch SoulX to Seed-VC or
+vice versa.
+
+`make install` installs both engines and prefetches the SoulX conversion checkpoint,
+RMVPE pitch model and Whisper-base content encoder. To repair or update the controller
+and existing workers:
 
 ```bash
-make svc-install          # every worker; add W=s2 for one host
+make svc-install          # controller and every worker; W=s2 limits the worker side
 ```
 
-seed-vc and the ~1 GB of weights it downloads live in the `seed-vc` volume, so they
-survive the container recreation `make start` does. The volume is seeded from the image
-the first time the container is created, which means the order on an older fleet is:
-redeploy the stack (`make install`), then `make svc-install` once. A worker without it
-is not a failure — the backend just moves to the next worker, or converts on the
-controller.
+Each engine has a separate virtual environment: `/opt/seed-vc/.venv` and
+`/opt/soulx-singer/.venv`. The `seed-vc` and `soulx-singer` named volumes persist their
+runtimes and model caches across container recreation. SoulX's Hugging Face cache is
+`/opt/soulx-singer/hf-cache`; its downloaded checkpoint and pitch model live under
+`/opt/soulx-singer/pretrained_models/`. On an older fleet, run `make install` to deploy
+the updated volume configuration before repairing the runtimes. Keep both volumes:
+Seed-VC remains an available engine, and the controller's Seed-VC environment also
+provides the shared Demucs separator and lyric aligner.
 
 ## Deploying
 

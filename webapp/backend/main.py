@@ -3771,8 +3771,31 @@ class SongConvertBody(BaseModel):
     voice: str
 
 
+def _song_svc_engine(wd: Path, cfg: dict | None = None, data: dict | None = None) -> str:
+    """Resolve the current converter from this film's style, including inheritance."""
+    from pipeline import svc
+
+    cfg = gapp.load_config() if cfg is None else cfg
+    if data is None:
+        try:
+            data = json.loads((wd / "song.json").read_text())
+        except (OSError, ValueError):
+            data = {}
+    style = (_work_dir_style_name(wd) or _read_create_brief(wd).get("style_name")
+             or data.get("style_name") or "")
+    return svc.norm_engine(gapp.style_settings(cfg, style).get("svc_engine"))
+
+
+def _song_svc_info(wd: Path, cfg: dict | None = None, data: dict | None = None) -> dict:
+    from pipeline import svc
+
+    engine = _song_svc_engine(wd, cfg, data)
+    return {"svc_engine": engine, "svc_engine_label": svc.ENGINE_LABELS[engine],
+            "svc_available": svc.available(engine)}
+
+
 def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
-    """Re-voice the approved song as a library voice (seed-vc).
+    """Re-voice the approved song with its style-selected singing converter.
 
     Both sides of the conversion are kept: the sung original is captured into
     the music history first (if it wasn't already), and the converted track is
@@ -3818,6 +3841,7 @@ def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
     if sel and Path(sel["path"]).exists():
         source, source_id = Path(sel["path"]), sel["id"]
     cfg = gapp.load_config()
+    engine = _song_svc_engine(wd, cfg, data)
     staged = wd / "background_music.staging.wav"
     # Re-voicing is UI work like a cover: stamping activity makes a running
     # render hold a worker idle, so the conversion lands on a free GPU
@@ -3832,15 +3856,13 @@ def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
     with op:
         svc.convert_song(
             source, Path(ref), staged,
-            # 30 steps by default (seed-vc's own default is 25; 50 is the
-            # high-polish setting), and the diffusion goes to whichever GPU
-            # worker is free — the controller's Apple GPU, the fallback when
-            # none takes it, is ~12x slower than real time.
-            diffusion_steps=int(cfg.get("svc_diffusion_steps") or 30),
+            engine=engine,
+            diffusion_steps=(int(cfg["svc_diffusion_steps"])
+                             if cfg.get("svc_diffusion_steps") else None),
             workers=svc.candidate_workers(cfg))
     staged.replace(track)
     try:
-        music_history.record(wd, track, f"sung as {voice}", voice=voice,
+        music_history.record(wd, track, f"sung as {voice} · {svc.ENGINE_LABELS[engine]}", voice=voice,
                              source_id=source_id)
     except Exception:
         gapp.logger.warning("Could not record converted song", exc_info=True)
@@ -3848,6 +3870,7 @@ def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
     (wd / "song.json").write_text(json.dumps(data, indent=2))
     dur = _get_duration(track)
     return {"ok": True, "duration": dur, "sung_as": voice,
+            "svc_engine": engine, "svc_engine_label": svc.ENGINE_LABELS[engine],
             "song_url": f"/api/file?path={track}&t={int(time.time())}"}
 
 
@@ -3869,9 +3892,10 @@ def song_convert(body: SongConvertBody) -> dict:
     if not (body.voice or "").strip():
         raise HTTPException(400, "Pick a voice to sing it.")
     from pipeline import svc
-    if not svc.available():
-        raise HTTPException(503, "Voice conversion is not installed — run "
-                                 "scripts/install_svc.sh on the controller.")
+    engine = _song_svc_engine(wd)
+    if not svc.available(engine):
+        raise HTTPException(503, f"{svc.ENGINE_LABELS[engine]} is not installed — "
+                                 "run make install (or scripts/install_svc.sh).")
     task_id = uuid.uuid4().hex[:12]
     _script_tasks[task_id] = {"status": "running"}
     threading.Thread(target=_run_song_convert_task,
@@ -3923,7 +3947,8 @@ def get_job_song(job_id: str) -> dict:
             "song_url": (f"/api/file?path={track}&t={int(track.stat().st_mtime)}"
                          if track.exists() else ""),
             "versions": hist.get("versions", []),
-            "selected": hist.get("selected")}
+            "selected": hist.get("selected"),
+            **_song_svc_info(wd, cfg, data)}
 
 
 def _stamp_song_voice(wd: Path, version_id: int) -> str:
@@ -7914,8 +7939,6 @@ def _mix_volumes(wd: Path, jc: dict | None = None,
 
 def _remix_song_info(wd: Path) -> dict | None:
     """A song film's song, for the film editor — None for every other film."""
-    from pipeline import svc
-
     path = wd / "song.json"
     if not path.exists():
         return None
@@ -7926,10 +7949,7 @@ def _remix_song_info(wd: Path) -> dict | None:
     return {"lyrics": str(data.get("lyrics") or ""),
             "caption": str(data.get("caption") or ""),
             "sung_as": str(data.get("sung_as") or ""),
-            # Whether "sing it as" can run at all — seed-vc is an optional
-            # controller-local install, so the editor says so rather than
-            # offering a button that 503s.
-            "svc_available": svc.available(),
+            **_song_svc_info(wd, data=data),
             "job_id": job_id_from_work_dir(wd)}
 
 
@@ -9055,7 +9075,7 @@ class SongRevoiceBody(BaseModel):
 def _run_song_revoice(task_id: str, wd: Path, voice: str) -> None:
     """Background thread: re-voice a finished song film's song, then re-mux.
 
-    The slow half is seed-vc (minutes), so this runs as a film task like the
+    Voice conversion takes minutes, so this runs as a film task like the
     music regen beside it. Both the sung original and the re-voicing stay in
     the music history — the version strip is where you compare them and put
     either one back."""
@@ -9100,12 +9120,13 @@ def remix_song_voice(body: SongRevoiceBody) -> dict:
     if not (body.voice or "").strip():
         raise HTTPException(400, "Pick a voice to sing it.")
     from pipeline import svc
-    if not svc.available():
-        raise HTTPException(503, "Voice conversion is not installed — run "
-                                 "scripts/install_svc.sh on the controller.")
+    engine = _song_svc_engine(wd)
+    if not svc.available(engine):
+        raise HTTPException(503, f"{svc.ENGINE_LABELS[engine]} is not installed — "
+                                 "run make install (or scripts/install_svc.sh).")
     tid = f"song_revoice_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": "revoice"}
-    # Its own component (not "music"): a seed-vc conversion is nothing like a
+    # Its own component (not "music"): voice conversion is nothing like a
     # music generation, so it must not be labelled as one on Activity nor feed
     # its minutes into the music regen's learned ETA.
     _film_task_meta[tid] = {
@@ -16932,7 +16953,7 @@ def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
 
     _do_song_generate(wd)
 
-    # Re-voice the finished track as a library voice (seed-vc). The engine's
+    # Re-voice the finished track with the style-selected converter. The engine's
     # own vocalist is kept as a version either way, so this is recoverable
     # from the Song tab.
     voice = auto["auto_song_voice"]

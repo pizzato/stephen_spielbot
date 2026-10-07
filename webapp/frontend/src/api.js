@@ -150,7 +150,7 @@ export const api = {
   // Extend an abrupt ending: the take's last seconds fade out into `seconds` of
   // tail. ffmpeg on the controller, so it answers directly (no polling).
   songExtend: (workDir, seconds) => req('POST', '/song/extend', { work_dir: workDir, seconds }),
-  // "Sing this as [voice]": re-voice the generated song with seed-vc.
+  // "Sing this as [voice]": re-voice using the style's selected SVC model.
   songConvert: async (workDir, voice) => {
     const { task_id } = await req('POST', '/song/convert', { work_dir: workDir, voice })
     for (;;) {
@@ -325,7 +325,7 @@ export const api = {
   listLocalizeLanguages: () => api.listTtsEngines().then((r) =>
     (r.engines || []).find((e) => e.key === 'chatterbox-multilingual')?.languages || {}),
   regenMusic: (body) => req('POST', '/remix/music', body),
-  // "Sing it as [voice]" on a finished song film: seed-vc re-voices the song
+  // "Sing it as [voice]" on a finished song film: the SVC model re-voices the song
   // and the final is re-muxed with it. Returns a film task to poll.
   revoiceSong: (workDir, voice) => req('POST', '/remix/song-voice', { work_dir: workDir, voice }),
   selectMusic: (workDir, versionId) => req('POST', '/remix/music-select', { work_dir: workDir, version_id: versionId }),

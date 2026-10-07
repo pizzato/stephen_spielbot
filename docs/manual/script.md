@@ -101,9 +101,10 @@ the format does to the render.
   in use was sung as: the re-voicing when there is one, else this voice, else the Vocalist.
 - **Save edits** keeps your typing (**Discard edits** throws it away); **Generate the
   song** renders the track on a worker, and **Sing this as [voice]** re-voices it with
-  seed-vc — always converting the sung
-  original, never a previous re-voicing. Every generation and re-voicing is kept as a
-  version — the one marked *In use* is the film's track and the one every operation
+  the style's **Singing voice conversion** engine — **SoulX-Singer SVC** by default,
+  or **Seed-VC** selected in [Settings → Styles → Narrator & audio](settings.md#narrator-audio).
+  It always converts the sung original, never a previous re-voicing. Every generation
+  and re-voicing is kept as a version — the one marked *In use* is the film's track and the one every operation
   works from: extending, re-generating longer and re-voicing all act on it (a
   re-voicing in use is converted from its own sung source, not from the newest take),
   and they travel with the film

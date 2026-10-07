@@ -290,6 +290,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
         /opt/seed-vc/requirements.txt > /tmp/svc-reqs.txt \
     && /opt/seed-vc/.venv/bin/pip install --no-cache-dir -r /tmp/svc-reqs.txt torchcodec
 
+# SoulX-Singer SVC (Apache-2.0) uses its own pinned environment. Reuse CUDA
+# torch read-only; prefetch SVC/RMVPE/Whisper so new workers can sing offline.
+COPY docker/comfyui/singing /opt/spielbot-singing-install
+RUN bash /opt/spielbot-singing-install/install_soulx.sh \
+    /opt/soulx-singer python3 --system-site-packages
+
 EXPOSE 8188
 
 # Models are mounted at /opt/ComfyUI/models by compose (not baked — ~49 GB).
