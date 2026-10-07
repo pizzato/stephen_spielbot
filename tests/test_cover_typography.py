@@ -311,6 +311,22 @@ class BuildCoverGenerationTests(unittest.TestCase):
         self.assertIn("EXACTLY as the character", prompt)  # reference-match note
         self.assertEqual(refs, [self.portrait])
 
+    def test_song_cover_uses_canonical_outfit_without_rewrite_instruction(self):
+        self.char["description"] = "a girl wearing a white t-shirt and blue overalls"
+        scenes = [{"image_prompt": "Amelia wears a red skirt and green sequined jacket",
+                   "metadata": {"mode": "silent", "singing": True,
+                                "cast": ["Amelia"], "setting": "an underwater parade"}}]
+        with mock.patch.object(app, "_job_characters", return_value=[self.char]):
+            prompt, refs = app.build_cover_generation(
+                None, self.cfg, "Docs", scenes=scenes,
+                engine={"t2i_ref_workflow": "flux2_t2i_ref.json"})
+        self.assertIn("Amelia — an underwater parade", prompt)
+        self.assertIn("white t-shirt and blue overalls", prompt)
+        self.assertNotIn("red skirt", prompt)
+        self.assertNotIn("green sequined jacket", prompt)
+        self.assertIn("Amelia appears EXACTLY", prompt)
+        self.assertEqual(refs, [self.portrait])
+
     def test_engines_without_reference_support_get_no_note(self):
         with mock.patch.object(app, "_job_characters", return_value=[self.char]):
             prompt, refs = app.build_cover_generation(
@@ -326,6 +342,56 @@ class BuildCoverGenerationTests(unittest.TestCase):
                 scenes=[{"image_prompt": "A lighthouse at night in heavy rain, long exposure"}])
         self.assertNotIn("red scarf", prompt)
         self.assertEqual(refs, [])
+
+    def test_outfit_instruction_overrides_character_and_reference_appearance(self):
+        self.char["description"] = "a girl with curly hair, a red jacket and red skirt"
+        instruction = "Amelia is wearing a white t-shirt and blue overalls."
+        for engine in (
+            {"key": "flux2-klein", "t2i_ref_workflow": "flux2_t2i_ref.json"},
+            {"family": "qwen-image", "t2i_ref_workflow": "qwen_ref.json"},
+            {"key": "flux1-schnell"},
+        ):
+            with self.subTest(engine=engine), \
+                 mock.patch.object(app, "_job_characters", return_value=[self.char]):
+                prompt, refs = app.build_cover_generation(
+                    None, self.cfg, "Docs", scenes=self.scenes,
+                    instruction=instruction, engine=engine)
+            self.assertTrue(prompt.startswith(instruction))
+            self.assertTrue(prompt.endswith(instruction))
+            self.assertIn("use only where consistent with the requested changes", prompt)
+            self.assertIn("curly hair", prompt)
+            self.assertNotIn("EXACTLY", prompt)
+            self.assertNotIn("only the pose and setting differ", prompt)
+            self.assertEqual(refs, [self.portrait])
+            if engine.get("t2i_ref_workflow"):
+                reference = ("<image1>" if engine.get("family") == "qwen-image"
+                             else "their provided reference image")
+                self.assertIn(f"Amelia: use {reference} for identity", prompt)
+                self.assertIn("even when they differ from the reference image", prompt)
+            else:
+                self.assertNotIn("for identity and unchanged features", prompt)
+        self.assertEqual(self.char["description"],
+                         "a girl with curly hair, a red jacket and red skirt")
+
+    def test_blank_instruction_keeps_exact_reference_matching(self):
+        engine = {"family": "qwen-image", "t2i_ref_workflow": "qwen_ref.json"}
+        with mock.patch.object(app, "_job_characters", return_value=[self.char]):
+            default = app.build_cover_generation(
+                None, self.cfg, "Docs", scenes=self.scenes, engine=engine)
+            blank = app.build_cover_generation(
+                None, self.cfg, "Docs", scenes=self.scenes, engine=engine,
+                instruction=" \n ")
+        self.assertEqual(default, blank)
+        self.assertIn("Amelia appears EXACTLY as the character in <image1>", blank[0])
+
+    def test_instruction_can_introduce_character_without_scene_hint(self):
+        with mock.patch.object(app, "_job_characters", return_value=[self.char]):
+            prompt, refs = app.build_cover_generation(
+                None, self.cfg, "Docs", instruction="Amelia in blue overalls",
+                engine={"t2i_ref_workflow": "flux2_t2i_ref.json"})
+        self.assertEqual(refs, [self.portrait])
+        self.assertIn("Amelia: use their provided reference image for identity", prompt)
+        self.assertNotIn("EXACTLY", prompt)
 
 
 class ApplyTests(unittest.TestCase):

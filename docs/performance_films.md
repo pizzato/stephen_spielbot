@@ -138,9 +138,12 @@ The pipeline changes in three places:
   singing voice, else the Vocalist line. Change the Vocalist (or the voice) to the other
   sex and a catalogue character cast at draft time is dropped rather than cast against the voice.
   A selected news subject keeps their identity when the audio voice changes;
-  the Song tab's **Lead singer** picker swaps in another character explicitly. Each video also dresses the singer in **one fresh outfit** chosen
-  for that film — described consistently across its scenes, different film to film — so
-  the catalogue portrait anchors the face, not an unchanging costume.
+  the Song tab's **Lead singer** picker swaps in another character explicitly.
+  Existing characters keep their **canonical outfit and colours** from their saved
+  description and portrait unless your directions or an assigned wardrobe explicitly
+  request a change. A newly invented performer gets one consistent outfit.
+  Song covers use the scenes' cast and setting together with the saved character
+  appearance, rather than copying conflicting outfits from legacy image prompts.
 - **The cast performs it.** Every scene is staged as a **performed silent take** —
   the same H3 Ref2VA path as [silent scenes, performed](#silent-scenes-performed),
   no style toggle needed — stamped `singing` in its metadata. Scenes with cast on screen

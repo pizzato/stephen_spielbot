@@ -374,6 +374,24 @@ class StoryEndpointTests(TempConfigCase):
         cfg = backend.gapp.load_config()
         return cfg, backend.gapp.style_settings(cfg, "Pop")
 
+    def test_existing_song_singer_keeps_canonical_wardrobe_by_default(self):
+        cfg, ss = self._singing_cfg()
+        note = backend._song_singer_story_note(
+            cfg, ss, {"singer": "Ada", "vocalist": "young female vocalist"})
+        self.assertIn("THE LEAD SINGER IS Ada", note)
+        self.assertIn("keep the existing character's canonical clothing and colours", note)
+        self.assertIn("Only change their clothes when the user's directions", note)
+        self.assertNotIn("do not fall back to their usual", note)
+        self.assertNotIn("fresh for THIS video", note)
+
+    def test_new_song_performer_still_gets_one_consistent_outfit(self):
+        cfg, ss = self._singing_cfg()
+        note = backend._song_singer_story_note(
+            cfg, ss, {"vocalist": "adult male vocalist, Australian"})
+        self.assertIn("invent this one performer", note)
+        self.assertIn("ONE distinctive outfit for this new performer", note)
+        self.assertNotIn("existing character's canonical clothing", note)
+
     def test_lead_singer_is_dropped_when_the_vocalist_line_changes_sex(self):
         cfg, ss = self._singing_cfg()
         # as drafted: Ada, described as herself — she stays
