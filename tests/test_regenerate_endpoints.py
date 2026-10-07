@@ -1,6 +1,7 @@
 """Tests for the issue #88 regenerate endpoints: comment reply drafting, Create
 brief improvement, and YouTube title regeneration. The LLM call is mocked so the
 tests assert prompt wiring and response shaping, not model output."""
+import json
 import os
 import tempfile
 import time
@@ -681,6 +682,57 @@ class InstructionSteeringTests(unittest.TestCase):
         self.assertNotIn("Key visual elements from the video:", steered)
         self.assertIn("only where they fit that direction", steered)
         self.assertIn("A woman walking through a rainy street", steered)
+
+    def test_cover_regeneration_payload_prioritizes_requested_outfit_over_reference(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        (wd / "script.json").write_text(json.dumps({"scenes": [{
+            "image_prompt": "Amelia leads the under the sea parade in a red jacket and red skirt."
+        }]}))
+        ref = wd / "characters" / "amelia.png"
+        ref.parent.mkdir()
+        ref.write_bytes(b"reference-image")
+        backend.gapp._write_script_characters(wd, [{
+            "name": "Amelia", "description": "A girl wearing a red jacket and red skirt",
+            "ref_image": ref.name,
+        }])
+        instruction = "Amelia is wearing a white t-shirt and blue overalls."
+        cfg = {"styles": [{"name": "Parade", "visual_style": "Animated underwater adventure"}],
+               "default_style": "Parade"}
+        store = self._store()
+        with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend.gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend, "_film_job_config", return_value={"style_name": "Parade"}), \
+             mock.patch.object(backend, "_film_dimensions", return_value=(1920, 1080)), \
+             mock.patch.object(backend, "_best_cover_comfy_url", return_value="http://worker:8188"), \
+             mock.patch.object(backend.threading, "Thread"), \
+             mock.patch.object(backend.gapp.engines, "resolve") as resolve:
+            for family in ("flux2", "qwen-image"):
+                with self.subTest(family=family):
+                    resolve.return_value = {"family": family, "t2i_ref_workflow": "references.json"}
+                    result = backend.yt_cover(backend.CoverBody(
+                        work_dir=str(wd), title="Under the Sea Parade", instruction=instruction))
+                    self.assertEqual(result["task_id"], store.create_task.call_args.args[0])
+                    self.assertEqual(store.create_task.call_args.args[2], "ui.cover.generate")
+                    payload = store.create_task.call_args.kwargs["payload"]
+                    prompt = payload["prompt"]
+                    self.assertEqual(payload["instruction"], instruction)
+                    self.assertEqual(payload["reference_images"], [str(ref)])
+                    self.assertTrue(prompt.startswith(instruction))
+                    self.assertNotIn("EXACTLY as the character", prompt)
+                    self.assertNotIn("only the pose and setting differ", prompt)
+                    self.assertTrue(prompt.endswith(f"Requested changes for this cover: {instruction}"))
+                    self.assertIn("Character appearance context (use only where consistent", prompt)
+                    self.assertIn("including clothing and colours, even when they differ", prompt)
+                    if family == "qwen-image":
+                        self.assertIn("Amelia: use <image1> for identity", prompt)
+
+                    # Clearing the guidance retains the ordinary exact-reference cover behavior.
+                    backend.yt_cover(backend.CoverBody(
+                        work_dir=str(wd), title="Under the Sea Parade", instruction="   "))
+                    default_payload = store.create_task.call_args.kwargs["payload"]
+                    self.assertEqual(default_payload["reference_images"], [str(ref)])
+                    self.assertIn("EXACTLY as the character", default_payload["prompt"])
+                    self.assertNotIn("Requested changes for this cover:", default_payload["prompt"])
 
     def test_rerender_film_scene_threads_instruction(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))

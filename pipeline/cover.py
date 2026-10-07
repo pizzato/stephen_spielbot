@@ -126,10 +126,15 @@ def _extract_scene_aspects(scenes) -> str:
         meta = (s.get("metadata") if isinstance(s, dict) else getattr(s, "metadata", {})) or {}
         ip_raw = (s.get("image_prompt") if isinstance(s, dict) else getattr(s, "image_prompt", "")) or ""
         ip = _strip_style_prefix(ip_raw)
-        if str(meta.get("mode") or "") in ("dialogue", "performance"):
+        mode = str(meta.get("mode") or "")
+        if mode in ("dialogue", "performance") or (
+            mode == "silent" and (meta.get("cast") or meta.get("setting"))
+        ):
             # An acted scene's subject is WHO is on screen and WHERE — its cast
-            # and setting. (Naming the cast is also what lets the cover pick up
-            # their reference portraits.) Its image_prompt is empty by design,
+            # and setting, including silent/singing performances. Naming the
+            # cast also lets the cover pick up their reference portraits.
+            # Ignore legacy image prompts with conflicting invented outfits.
+            # A dialogue image_prompt is empty by design,
             # and its title often paraphrases the film title, which the model
             # would happily paint into the "text-free" background.
             cast = ", ".join(str(c) for c in (meta.get("cast") or []) if str(c).strip())
