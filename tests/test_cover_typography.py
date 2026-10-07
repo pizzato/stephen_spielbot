@@ -311,6 +311,22 @@ class BuildCoverGenerationTests(unittest.TestCase):
         self.assertIn("EXACTLY as the character", prompt)  # reference-match note
         self.assertEqual(refs, [self.portrait])
 
+    def test_song_cover_uses_canonical_outfit_without_rewrite_instruction(self):
+        self.char["description"] = "a girl wearing a white t-shirt and blue overalls"
+        scenes = [{"image_prompt": "Amelia wears a red skirt and green sequined jacket",
+                   "metadata": {"mode": "silent", "singing": True,
+                                "cast": ["Amelia"], "setting": "an underwater parade"}}]
+        with mock.patch.object(app, "_job_characters", return_value=[self.char]):
+            prompt, refs = app.build_cover_generation(
+                None, self.cfg, "Docs", scenes=scenes,
+                engine={"t2i_ref_workflow": "flux2_t2i_ref.json"})
+        self.assertIn("Amelia — an underwater parade", prompt)
+        self.assertIn("white t-shirt and blue overalls", prompt)
+        self.assertNotIn("red skirt", prompt)
+        self.assertNotIn("green sequined jacket", prompt)
+        self.assertIn("Amelia appears EXACTLY", prompt)
+        self.assertEqual(refs, [self.portrait])
+
     def test_engines_without_reference_support_get_no_note(self):
         with mock.patch.object(app, "_job_characters", return_value=[self.char]):
             prompt, refs = app.build_cover_generation(

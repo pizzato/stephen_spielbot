@@ -451,8 +451,11 @@ isn't a scene:
 - **YouTube description** — written automatically when the script was generated;
   **Generate** rewrites it
 - **Cover image** — the thumbnail, with **Edit cover** for a masked inpaint.
+  Song covers use cast and setting with the saved character appearance; conflicting
+  outfits in old scene image prompts are ignored, so restoring the canonical outfit
+  does not require a rewrite instruction.
   **Re-generate** rerolls the artwork; its *tell it how* caret accepts a direction
-  such as "Amelia is wearing a white t-shirt and blue overalls". Press the
+  such as "Amelia is wearing a yellow raincoat". Press the
   **Re-generate** button inside that popover to apply it. The instruction takes
   priority over conflicting scene imagery, character descriptions and portrait
   clothing while the portrait still guides character identity. See
