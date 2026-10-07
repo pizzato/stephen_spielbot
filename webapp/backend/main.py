@@ -3794,7 +3794,33 @@ def _song_svc_info(wd: Path, cfg: dict | None = None, data: dict | None = None) 
             "svc_available": svc.available(engine)}
 
 
+_song_conversion_locks: dict[str, threading.RLock] = {}
+_song_conversion_locks_guard = threading.Lock()
+
+
+@contextmanager
+def _song_conversion_guard(wd: Path):
+    # Reentrant so a finished-film task holds the same lock through both the
+    # shared conversion helper and the final video remix.
+    with _song_conversion_locks_guard:
+        lock = _song_conversion_locks.setdefault(str(wd.resolve()), threading.RLock())
+    if not lock.acquire(blocking=False):
+        raise RuntimeError("Song re-voicing is already running for this film. Wait for it to finish.")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
+    with _song_conversion_guard(wd):
+        try:
+            return _convert_song_locked(wd, voice, track_op=track_op)
+        finally:
+            (wd / "background_music.staging.wav").unlink(missing_ok=True)
+
+
+def _convert_song_locked(wd: Path, voice: str, *, track_op: bool = True) -> dict:
     """Re-voice the approved song with its style-selected singing converter.
 
     Both sides of the conversion are kept: the sung original is captured into
@@ -9081,20 +9107,20 @@ def _run_song_revoice(task_id: str, wd: Path, voice: str) -> None:
     either one back."""
     started = _film_task_started_at(task_id) or time.time()
     try:
-        _film_checkpoint(task_id)
-        _film_tasks[task_id] = {"status": "running", "step": "revoice"}
-        result = _do_song_convert(wd, voice, track_op=False)
-        _film_checkpoint(task_id)
-        _film_tasks[task_id]["step"] = "mux"
-        final_path = _remux_with_current_music(wd)
-        _film_tasks[task_id] = {
-            "status": "done",
-            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
-            "sung_as": result.get("sung_as", voice),
-            "music_history": music_history.history(wd),
-        }
+        with _song_conversion_guard(wd):
+            _film_checkpoint(task_id)
+            _film_tasks[task_id] = {"status": "running", "step": "revoice"}
+            result = _do_song_convert(wd, voice, track_op=False)
+            _film_checkpoint(task_id)
+            _film_tasks[task_id]["step"] = "mux"
+            final_path = _remux_with_current_music(wd)
+            _film_tasks[task_id] = {
+                "status": "done",
+                "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+                "sung_as": result.get("sung_as", voice),
+                "music_history": music_history.history(wd),
+            }
     except Exception as e:
-        (wd / "background_music.staging.wav").unlink(missing_ok=True)
         _finish_film_task_error(task_id, e)
     finally:
         _record_film_task_activity(
@@ -9124,7 +9150,7 @@ def remix_song_voice(body: SongRevoiceBody) -> dict:
     if not svc.available(engine):
         raise HTTPException(503, f"{svc.ENGINE_LABELS[engine]} is not installed — "
                                  "run make install (or scripts/install_svc.sh).")
-    tid = f"song_revoice_{int(time.time())}"
+    tid = f"song_revoice_{uuid.uuid4().hex[:12]}"
     _film_tasks[tid] = {"status": "running", "step": "revoice"}
     # Its own component (not "music"): voice conversion is nothing like a
     # music generation, so it must not be labelled as one on Activity nor feed

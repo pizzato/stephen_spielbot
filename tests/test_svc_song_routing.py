@@ -77,3 +77,57 @@ class SongConverterRoutingTests(_SongFilmCase):
         cfg["svc_diffusion_steps"] = 45
         app.save_config(cfg)
         self.assertEqual(self._convert().call_args.kwargs["diffusion_steps"], 45)
+
+    def test_concurrent_revoice_cannot_delete_staging_or_replace_active_mix(self):
+        import threading
+
+        converting, finish_conversion = threading.Event(), threading.Event()
+        remixing, finish_remix = threading.Event(), threading.Event()
+        staged = self.wd / "background_music.staging.wav"
+
+        def convert(source, ref, output, **kwargs):
+            output.write_bytes(b"active-conversion")
+            converting.set()
+            if not finish_conversion.wait(5):
+                raise RuntimeError("test conversion timed out")
+
+        def remix(wd):
+            remixing.set()
+            if not finish_remix.wait(5):
+                raise RuntimeError("test remix timed out")
+            return wd / "combined.mp4"
+
+        with mock.patch("pipeline.svc.convert_song", side_effect=convert), \
+             mock.patch.object(backend, "_remux_with_current_music", side_effect=remix), \
+             mock.patch.object(backend, "_record_film_task_activity"):
+            worker = threading.Thread(target=backend._run_song_revoice,
+                                      args=("active_conversion", self.wd, "Nora"))
+            worker.start()
+            try:
+                self.assertTrue(converting.wait(3))
+                backend._run_song_revoice("duplicate_conversion", self.wd, "Nora")
+                self.assertEqual(backend._film_tasks["duplicate_conversion"]["status"], "error")
+                self.assertIn("already running", backend._film_tasks["duplicate_conversion"]["error"])
+                self.assertEqual(staged.read_bytes(), b"active-conversion")
+                finish_conversion.set()
+                self.assertTrue(remixing.wait(3))
+                with self.assertRaisesRegex(RuntimeError, "already running"):
+                    backend._do_song_convert(self.wd, "Nora")
+            finally:
+                finish_conversion.set()
+                finish_remix.set()
+                worker.join(5)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(backend._film_tasks["active_conversion"]["status"], "done")
+            self.assertFalse(staged.exists())
+        # The lock is released after the whole operation; another take can run.
+        self._convert()
+
+    def test_same_second_requests_have_distinct_task_ids(self):
+        with mock.patch("pipeline.svc.available", return_value=True), \
+             mock.patch.object(backend.threading, "Thread"), \
+             mock.patch.object(backend.time, "time", return_value=12345):
+            body = backend.SongRevoiceBody(work_dir=str(self.wd), voice="Nora")
+            first = backend.remix_song_voice(body)
+            second = backend.remix_song_voice(body)
+        self.assertNotEqual(first["task_id"], second["task_id"])

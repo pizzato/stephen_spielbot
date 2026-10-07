@@ -276,6 +276,8 @@ card becomes **The film's song**: the lyrics as sung (read-only here — the wor
 by default, or **Seed-VC** selected under [Settings → Styles → Narrator & audio](settings.md#narrator-audio).
 It converts the singer's timbre to a library voice while preserving the source song's
 melody, timing and words, then re-muxes the finished cut with the new vocals.
+Only one re-voicing can run per film at a time, including the final remix. A second
+request reports that the current one must finish first; it cannot overwrite that take.
 Two things make it safe to try:
 
 - **Nothing is thrown away.** The sung original and every re-voicing are kept side by

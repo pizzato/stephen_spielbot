@@ -103,6 +103,8 @@ the format does to the render.
   song** renders the track on a worker, and **Sing this as [voice]** re-voices it with
   the style's **Singing voice conversion** engine — **SoulX-Singer SVC** by default,
   or **Seed-VC** selected in [Settings → Styles → Narrator & audio](settings.md#narrator-audio).
+  Wait for the current re-voicing to finish before starting another for the same film,
+  including one started in the finished-film editor.
   It always converts the sung original, never a previous re-voicing. Every generation
   and re-voicing is kept as a version — the one marked *In use* is the film's track and the one every operation
   works from: extending, re-generating longer and re-voicing all act on it (a
