@@ -2968,7 +2968,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     # writer works to match the clips the renderer will actually shoot.
     plan = story.get("scene_plan") or brief.get("scene_plan") or {}
     # A song film's cast singer: read before the divide so the scene prompts
-    # cast them by name, in their per-video outfit, in every singing scene.
+    # cast them by name, preserving their outfit unless a change is requested.
     song_data: dict = {}
     if fmt == "song" and (wd / "song.json").exists():
         try:
@@ -3252,8 +3252,8 @@ def _song_singer_story_note(cfg: dict, ss: dict, song_data: dict,
 
     Whoever is singing (a news or catalogue character by name, else the song's own
     vocalist description — _song_lead_singer) must be the person the film
-    SHOWS singing — sex and age on camera matching the sung voice — and each
-    video dresses them fresh rather than repeating the catalogue look."""
+    SHOWS singing — sex and age on camera matching the sung voice. Existing
+    characters keep their saved outfit unless a wardrobe change is requested."""
     char, desc = _song_lead_singer(cfg, ss, song_data, work_dir)
     name = str((char or {}).get("name") or "").strip()
     if not (name or desc):
@@ -3272,14 +3272,18 @@ def _song_singer_story_note(cfg: dict, ss: dict, song_data: dict,
         if news_singer else
         "Their sex and age on camera must match that description, because the sung voice on the "
         "track is theirs; never show anyone else mouthing the song.")
+    wardrobe_note = (
+        "WARDROBE: keep the existing character's canonical clothing and colours from their "
+        "saved description and reference image. Do not invent a fresh outfit for the song's "
+        "theme. Only change their clothes when the user's directions or an assigned wardrobe "
+        "explicitly request it; keep that outfit consistent across scenes."
+        if name else
+        "WARDROBE: choose ONE distinctive outfit for this new performer and keep it "
+        "identical in every scene.")
     return (
         f"\n{who} as the film's one lead performer. The person shown singing "
         f"in EVERY performance shot must be this singer. {identity_note}\n"
-        "WARDROBE: dress the lead singer in ONE distinctive outfit chosen "
-        "fresh for THIS video — name it in the scene prompts (a change of "
-        "clothes is the one thing you may describe on a named character) and "
-        "keep it identical in every scene; do not fall back to their usual "
-        "look, and pick something a different video would not pick.")
+        f"{wardrobe_note}")
 
 
 def _song_lyrics_story_note(song_data: dict) -> str:

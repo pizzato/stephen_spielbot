@@ -450,7 +450,16 @@ isn't a scene:
   overrides a location reference deliberately.
 - **YouTube description** — written automatically when the script was generated;
   **Generate** rewrites it
-- **Cover image** — the thumbnail, with **Edit cover** for a masked inpaint
+- **Cover image** — the thumbnail, with **Edit cover** for a masked inpaint.
+  Song covers use cast and setting with the saved character appearance; conflicting
+  outfits in old scene image prompts are ignored, so restoring the canonical outfit
+  does not require a rewrite instruction.
+  **Re-generate** rerolls the artwork; its *tell it how* caret accepts a direction
+  such as "Amelia is wearing a yellow raincoat". Press the
+  **Re-generate** button inside that popover to apply it. The instruction takes
+  priority over conflicting scene imagery, character descriptions and portrait
+  clothing while the portrait still guides character identity. See
+  [Edit film → Cover image](edit-film.md#cover-image) for cover versions and editing.
 
 The page header carries **Save** and **Delete** here, alongside the **Brief** button that
 is on every view.

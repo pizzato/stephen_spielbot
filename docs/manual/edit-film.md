@@ -34,11 +34,18 @@ Press Enter in the box to force a line break on the cover.
 Saving the phrase re-draws the title on the cover instantly (the artwork is untouched),
 and **Re-apply title text** does the same after a typography tweak in Settings.
 
-**Re-generate** rerolls the artwork. Its *tell it how* caret steers the reroll — the
+**Re-generate** rerolls the artwork. The cover uses cast and setting for performed
+scenes, including songs, so stale scene
+image prompts cannot replace a character's saved outfit. Without an instruction,
+the saved character appearance and portrait apply. Its *tell it how* caret accepts
+an instruction for the reroll: the
 direction you type leads the prompt and outranks both the film's own scene imagery and the
-composition guidance, so "make it all robots" or "night, not day" actually changes the
-picture. The style's visual look and the no-text rule still hold, so the reroll stays part
-of the same production and the title is still drawn on afterwards.
+composition guidance. It also takes priority over conflicting character descriptions and
+portrait details: for example, "Amelia is wearing a yellow raincoat"
+can change her outfit while the portrait still guides her identity. Submit with the
+**Re-generate** button inside the popover to apply the instruction; the main button
+rerolls without one. The style's visual look and the no-text rule still hold, so the
+reroll stays part of the same production and the title is still drawn on afterwards.
 
 **Edit cover** opens a masked inpaint. The edit runs on the cover's text-free background
 and the title is re-drawn on top, so inpainting can't smear the lettering.
