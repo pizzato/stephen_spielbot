@@ -5,7 +5,7 @@ tick only *releases* from it: scheduled mode spaces releases on each
 channel/account cadence and is self-sufficient (no longer gated behind the
 immediate auto-post toggles); immediate mode posts the moment a film finishes;
 the two are mutually exclusive and schedule wins as a backstop. Publishing a
-film manually drops it from the queue.
+film manually retains each platform's history and cadence.
 """
 import json
 import os
@@ -94,26 +94,68 @@ class PublishModeTickTests(TempConfigCase):
         xp.assert_not_called()
 
 
-class DropFromPublishQueueTests(TempConfigCase):
-    """A manual publish removes the film's entry; auto/scheduled keep theirs."""
+class PublishSuccessHistoryTests(TempConfigCase):
+    """Manual posts preserve the sibling platform and its cadence anchor."""
 
     def setUp(self):
         super().setUp()
-        self.pq_path = Path(self._tmp.name) / "publish_queue.json"
-        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH", self.pq_path)
-        p.start()
-        self.addCleanup(p.stop)
+        patch = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH",
+                                  Path(self._tmp.name) / "publish_queue.json")
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.wd = self.output_dir / "film"
+        self.wd.mkdir()
+        (self.wd / "job.json").write_text('{"status": "done"}')
 
-    def test_drop_removes_only_the_named_entry(self):
-        backend.pq.add_item("/tmp/wd-a", title="A")
-        backend.pq.add_item("/tmp/wd-b", title="B")
-        backend._drop_from_publish_queue("/tmp/wd-a")
-        self.assertEqual([e["work_dir"] for e in backend.pq.load_queue()], ["/tmp/wd-b"])
+    def test_manual_x_keeps_youtube_clock_and_records_actual_account(self):
+        now = time.time()
+        youtube = {"enabled": True, "channel": "chan", "status": "done",
+                   "video_id": "v", "released_at": now - 60, "published_at": now - 60}
+        backend.pq.add_item(str(self.wd), title="T", youtube=youtube)
+        backend._record_publish_success(self.wd, "x", "tweet", "https://x.com/tweet", "acct")
+        entry = backend.pq.load_queue()[0]
+        self.assertEqual(entry["youtube"], youtube)
+        self.assertEqual(entry["x"]["status"], "done")
+        self.assertEqual(entry["x"]["account"], "acct")
+        self.assertEqual(entry["x"]["tweet_id"], "tweet")
+        last = backend._seed_last_releases([entry], {}, now)
+        self.assertEqual(last[("youtube", "chan")], now - 60)
+        self.assertLess(now - last[("youtube", "chan")], 48 * 3600)
 
-    def test_drop_is_noop_for_unqueued_film(self):
-        backend.pq.add_item("/tmp/wd-b", title="B")
-        backend._drop_from_publish_queue("/tmp/not-queued")  # must not raise
-        self.assertEqual(len(backend.pq.load_queue()), 1)
+    def test_manual_youtube_keeps_pending_x(self):
+        x = {"enabled": True, "account": "acct", "status": "pending"}
+        backend.pq.add_item(str(self.wd), title="T", x=x)
+        backend._record_publish_success(self.wd, "youtube", "v", "https://youtu.be/v", "chan")
+        entry = backend.pq.load_queue()[0]
+        self.assertEqual(entry["x"], x)
+        self.assertEqual(entry["youtube"]["status"], "done")
+
+    def test_manual_unqueued_post_does_not_schedule_sibling(self):
+        backend._record_publish_success(self.wd, "x", "tweet", "url", "acct")
+        entry = backend.pq.load_queue()[0]
+        self.assertEqual(entry["youtube"]["status"], "skipped")
+        self.assertTrue(entry["youtube"]["removed"])
+        self.assertEqual(entry["x"]["status"], "done")
+
+    def test_remove_keeps_published_clock_and_remembers_user_choice(self):
+        youtube = {"enabled": True, "channel": "chan", "status": "done",
+                   "video_id": "v", "released_at": time.time()}
+        entry = backend.pq.add_item(str(self.wd), title="T", youtube=youtube)
+        for platform in ("x", ""):
+            backend.publish_remove(backend.PublishItemBody(id=entry["id"], platform=platform))
+            with mock.patch.object(backend, "_x_account_for_work_dir", return_value="acct"):
+                backend._reconcile_publish_queue()
+            saved = backend.pq.load_queue()[0]
+            self.assertEqual(saved["youtube"], youtube)
+            self.assertTrue(saved["x"]["removed"])
+            self.assertEqual(saved["x"]["status"], "skipped")
+
+    def test_scheduled_completion_keeps_release_start(self):
+        released = time.time() - 90
+        backend.pq.add_item(str(self.wd), title="T", x={
+            "enabled": True, "account": "acct", "status": "publishing", "released_at": released})
+        backend._record_publish_success(self.wd, "x", "tweet", "url", "acct")
+        self.assertEqual(backend.pq.load_queue()[0]["x"]["released_at"], released)
 
 
 class StickyForceXTests(TempConfigCase):
@@ -427,6 +469,43 @@ class StalePublishTargetTests(TempConfigCase):
         with mock.patch.object(backend, "_channel_for_work_dir", return_value="new"):
             backend._reconcile_publish_queue()
         self.assertEqual(backend.pq.load_queue()[0]["youtube"]["channel"], "old")
+
+    def test_previously_unconfigured_x_picks_up_styles_account(self):
+        self.write_config({"default_style": "Spielbot Music",
+                           "styles": [{"name": "Spielbot Music", "x_account": "acct"}],
+                           "x_accounts": [{"id": "acct"}]})
+        (self.wd / "job_config.json").write_text('{"style_name": "Spielbot Music"}')
+        self._queue()
+        backend._reconcile_publish_queue()
+        sub = backend.pq.load_queue()[0]["x"]
+        self.assertTrue(sub["enabled"])
+        self.assertEqual(sub["account"], "acct")
+        self.assertEqual(sub["status"], "pending")
+
+    def test_unknown_style_does_not_opt_into_defaults_x_account(self):
+        self._queue()
+        (self.wd / "job_config.json").write_text('{"style_name": "Deleted Style"}')
+        with mock.patch.object(backend, "_x_account_for_work_dir", return_value="acct"):
+            backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue()[0]["x"]["status"], "skipped")
+
+    def test_legacy_explicit_skip_with_account_is_not_revived(self):
+        self._queue()
+        entry = backend.pq.load_queue()[0]
+        entry["x"]["account"] = "acct"
+        backend.pq.save_queue([entry])
+        with mock.patch.object(backend, "_x_account_for_work_dir", return_value="acct"):
+            backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue()[0]["x"]["status"], "skipped")
+
+    def test_skipped_x_with_published_id_is_history_not_reposted(self):
+        self._queue()
+        (self.wd / "job.json").write_text('{"status": "done", "x_tweet_id": "tweet"}')
+        with mock.patch.object(backend, "_x_account_for_work_dir", return_value="acct"):
+            backend._reconcile_publish_queue()
+        sub = backend.pq.load_queue()[0]["x"]
+        self.assertEqual(sub["status"], "done")
+        self.assertEqual(sub["tweet_id"], "tweet")
 
     def test_untargeted_platform_is_left_alone(self):
         self._queue(enabled=False, yt_status="skipped")

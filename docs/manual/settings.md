@@ -678,7 +678,7 @@ Global only.
 ### Publishing schedule
 
 Finished videos **always** collect in the publish queue
-([Publishing → Schedule](publishing.md#schedule)); publishing one manually removes it.
+([Publishing → Schedule](publishing.md#schedule)); a manual post completes only that platform and preserves the other platform’s schedule and publishing history.
 
 - **Publish on a schedule instead of the moment a film finishes** — releases them on each
   channel's and account's own **Videos per day** cadence. Mutually exclusive with the

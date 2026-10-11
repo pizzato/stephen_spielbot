@@ -12810,7 +12810,7 @@ class PostBody(BaseModel):
     privacy: str = "private"
     include_thumbnail: bool = True
     channel: str = ""   # channel key override; empty → the film's style's channel
-    auto: bool = False  # set by the auto-poster/scheduler; a manual post (False) drops the film from the publish queue on success
+    auto: bool = False  # set by the auto-poster/scheduler; successful posts retain per-platform publishing history
 
 
 def _completion_reply_text(title: str, url: str) -> str:
@@ -13098,7 +13098,8 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
 
     queue_item_id = ""
     try:
-        gapp._write_job_meta(wd, youtube_video_id=video_id, youtube_url=url, status="done")
+        gapp._write_job_meta(wd, youtube_video_id=video_id, youtube_url=url,
+                             youtube_published_at=time.time(), status="done")
     except Exception:
         pass
     try:
@@ -13110,10 +13111,7 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
     except Exception:
         pass
 
-    # A manual publish leaves the queue; the auto-poster/scheduler (auto=True)
-    # keeps its entry so reconciliation can record it as published.
-    if not body_dict.get("auto"):
-        _drop_from_publish_queue(wd)
+    _record_publish_success(wd, "youtube", video_id, url, channel)
 
     completion_reply = _post_completion_reply(queue_item_id, body_dict["title"], url)
     try:
@@ -13391,7 +13389,7 @@ class XPostBody(BaseModel):
     text: str = ""              # tweet text; defaults to the film title
     title: str = ""
     account: str = ""           # account key override; empty → the film's style's account
-    auto: bool = False          # set by the auto-poster/scheduler; a manual post (False) drops the film from the publish queue on success
+    auto: bool = False          # set by the auto-poster/scheduler; successful posts retain per-platform publishing history
 
 
 # In-memory store for background X post tasks {task_id -> {status, ...}}
@@ -13512,7 +13510,7 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
 
     tweet_id, url = result.get("tweet_id", ""), result.get("url", "")
     try:
-        gapp._write_job_meta(wd, x_tweet_id=tweet_id, x_url=url)
+        gapp._write_job_meta(wd, x_tweet_id=tweet_id, x_url=url, x_published_at=time.time())
     except Exception:
         pass
     try:
@@ -13522,9 +13520,7 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
     except Exception:
         pass
 
-    # A manual post leaves the queue; the auto-poster/scheduler keeps its entry.
-    if not body_dict.get("auto"):
-        _drop_from_publish_queue(wd)
+    _record_publish_success(wd, "x", tweet_id, url, body_dict.get("account", ""))
 
     msg = f"Posted to X — {url}" if url else "Posted to X."
     if result.get("fell_back_to_link"):
@@ -13830,16 +13826,17 @@ class PublishMoveBody(BaseModel):
 def publish_remove(body: PublishItemBody) -> dict:
     """Drop an entry (or just one platform target) from the publish queue. The
     work dir is remembered so a later scan won't re-add it."""
-    if body.platform in ("youtube", "x"):
-        e = next((x for x in pq.load_queue() if x.get("id") == body.id), None)
-        if e is None:
+    with pq.locked():
+        q = pq.load_queue()
+        entry = next((e for e in q if e.get("id") == body.id), None)
+        if entry is None:
             raise HTTPException(404, "Publish entry not found.")
-        sub = e.get(body.platform) or {}
-        sub.update(enabled=False, status="skipped")
-        pq.update_item(body.id, **{body.platform: sub})
-        return {"ok": True}
-    if not pq.remove_item(body.id):
-        raise HTTPException(404, "Publish entry not found.")
+        for plat in ([body.platform] if body.platform in ("youtube", "x") else ("youtube", "x")):
+            sub = entry.get(plat) or {}
+            if sub.get("status") in ("pending", "skipped"):
+                sub.update(enabled=False, status="skipped", removed=True)
+                entry[plat] = sub
+        pq.save_queue(q)
     return {"ok": True}
 
 
@@ -17318,13 +17315,15 @@ def _publish_targets_for_job(p: Path, meta: dict) -> tuple[dict, dict]:
         "enabled": not yt_done, "channel": channel,
         "status": "pending" if not yt_done else "done",
         "video_id": yt_done, "url": meta.get("youtube_url"),
-        "released_at": None, "published_at": None, "error": None,
+        "released_at": meta.get("youtube_published_at"),
+        "published_at": meta.get("youtube_published_at"), "error": None,
     }
     x = {
         "enabled": bool(acct) and not x_done, "account": acct,
         "status": ("pending" if (acct and not x_done) else ("done" if x_done else "skipped")),
         "tweet_id": x_done, "url": meta.get("x_url"),
-        "released_at": None, "published_at": None, "error": None,
+        "released_at": meta.get("x_published_at"),
+        "published_at": meta.get("x_published_at"), "error": None,
     }
     return youtube, x
 
@@ -17568,12 +17567,27 @@ def _reconcile_publish_queue_locked() -> None:
             if live and live != (sub.get(keyf) or ""):
                 sub[keyf] = live
                 changed = True
-        if yt_sub.get("status") in ("pending", "publishing") and meta.get("youtube_video_id"):
+        # Legacy entries with no X account were configuration skips, not user
+        # removals. Pick up a newly assigned account without reviving removals
+        # or retrying failed uploads. Published ids below always take precedence.
+        if (x_sub.get("status") == "skipped" and not x_sub.get("enabled")
+                and not x_sub.get("account") and not x_sub.get("removed")
+                and not meta.get("x_tweet_id") and meta.get("status") == "done"
+                and not _film_job_config(p).get("archived")):
+            name = _work_dir_style_name(p)
+            # An unknown historical name falls back to the default style for
+            # rendering. That fallback must not opt a film into a new account.
+            known_style = not name or any(s.get("name") == name for s in cfg.get("styles", []))
+            account = _x_account_for_work_dir(p) if known_style else ""
+            if account:
+                x_sub.update(enabled=True, account=account, status="pending")
+                changed = True
+        if yt_sub.get("status") != "done" and meta.get("youtube_video_id"):
             yt_sub.update(status="done", video_id=meta.get("youtube_video_id"),
                           url=meta.get("youtube_url"),
                           published_at=yt_sub.get("released_at") or time.time())
             changed = True
-        if x_sub.get("status") in ("pending", "publishing") and meta.get("x_tweet_id"):
+        if x_sub.get("status") != "done" and meta.get("x_tweet_id"):
             x_sub.update(status="done", tweet_id=meta.get("x_tweet_id"),
                          url=meta.get("x_url"),
                          published_at=x_sub.get("released_at") or time.time())
@@ -17666,17 +17680,33 @@ def _finalize_publish_entry_on_delete(work_dir) -> None:
         pass
 
 
-def _drop_from_publish_queue(work_dir) -> None:
-    """Remove a film's publish-queue entry — used when it's published manually,
-    so it leaves the queue. The auto-poster and the scheduled governor keep their
-    entry instead (reconciliation moves it to 'done' history); only manual posts
-    drop it. No-op if the film isn't queued."""
-    try:
-        entry = pq.item_by_work_dir(str(work_dir))
-        if entry:
-            pq.remove_item(entry["id"])
-    except Exception:
-        pass
+def _record_publish_success(work_dir: Path, platform: str, post_id: str,
+                            url: str, destination: str) -> None:
+    """Record one successful platform without discarding its sibling or clock."""
+    if not post_id:
+        return
+    # A manual-only film may not have been queued. Remember the selected
+    # platform without implicitly scheduling the other one.
+    youtube = {"enabled": False, "channel": "", "status": "skipped", "removed": True}
+    x = {"enabled": False, "account": "", "status": "skipped", "removed": True}
+    pq.add_item(str(work_dir), title=_video_title_for(work_dir), youtube=youtube, x=x)
+    with pq.locked():
+        q = pq.load_queue()
+        entry = next(e for e in q if e.get("work_dir") == str(work_dir))
+        sub = entry.get(platform) or {}
+        key, id_key = ("channel", "video_id") if platform == "youtube" else ("account", "tweet_id")
+        now = time.time()
+        # Preserve the scheduler's release time; an explicit re-publication or
+        # an upload to another destination consumes a fresh slot.
+        same_release = (sub.get(key) == destination and
+                        (sub.get("status") == "publishing" or sub.get(id_key) == post_id))
+        released = (sub.get("released_at") if same_release else None) or now
+        sub.update(enabled=True, status="done", url=url, released_at=released,
+                   published_at=now, error=None, removed=False, force=False)
+        sub[key], sub[id_key] = destination, post_id
+        entry[platform] = sub
+        entry["updated_at"] = now
+        pq.save_queue(q)
 
 
 def _interval_minutes_for(cfg: dict, listed: str, key: str) -> int:
