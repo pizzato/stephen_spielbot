@@ -71,7 +71,7 @@ still post immediately, and the times are UTC.
 ## Schedule
 
 The **publish queue** is always on. Every finished, unpublished film collects here —
-publishing one manually removes it.
+a manual post completes only that platform and preserves the other platform’s schedule and publishing history.
 
 What happens to the queue depends on
 [Settings → Automation](settings.md#publishing-schedule):
@@ -114,11 +114,13 @@ The queue in release order — top first, as each cadence allows.
   scheduler publishes each channel's top waiting item first); only the arrows disable
   while one is active
 - **Publish now** releases an entry immediately, ignoring the cadence
-- **Remove** drops it from the queue
+- **Remove** cancels waiting destinations and remembers the choice; published history and schedule timestamps are retained
 
 Each line shows the channel or account the film will publish to — its style's, looked up
 fresh each time the queue loads. Reassign a style to a different channel and everything
 still waiting moves with it; already-published entries keep the channel they went out on.
+Assigning an X account also activates queued destinations previously disabled because
+no account was configured. Destinations you explicitly removed stay removed.
 
 **Scan for unpublished** pulls in the backlog — every finished film that never made it into
 the queue. **Cadence settings** jumps to Settings.
