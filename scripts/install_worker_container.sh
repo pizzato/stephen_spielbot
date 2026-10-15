@@ -12,6 +12,7 @@
 # Usage: bash scripts/install_worker_container.sh <host>
 # Env:
 #   MODEL_SOURCE   host to rsync models from if <host> has none (set by install.sh)
+#   INSTALL_FLUX3  1 also checks/syncs the optional FLUX 3 bundle on existing workers
 #   GPU_MODE       "cdi" = modern CDI device injection (fixes cuInit 999 on new
 #                  drivers where the legacy --gpus path is broken); default is
 #                  the legacy path. Sticky: a host once deployed with cdi keeps
@@ -159,9 +160,8 @@ rsync -az          "$REPO_ROOT/.dockerignore" "$BUILD_DEST/.dockerignore"
 _sh "cat > ~/$REMOTE_BUILD_DIR/docker/.env" <<ENV
 MODELS_DIR=${REMOTE_MODELS}
 COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
-# Pinned ComfyUI release: v0.37.0 includes Qwen-Image 2.1
-# (v0.33.0 Music 3, v0.32.0 LTX 2.5, v0.31.0 the w4a8 loaders, v0.30.0 H3).
-COMFYUI_REF=v0.37.0
+# ComfyUI 0.41 development snapshot with native FLUX 3 (PR #17064).
+COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}
@@ -182,7 +182,13 @@ echo "[deploy] models mounted from $TARGET:$REMOTE_MODELS"
 # The container mounts the host's existing models (it does not download them).
 # If they're missing and a MODEL_SOURCE host is given, rsync them over (host↔host
 # via SSH agent forwarding); otherwise warn — the build works, but renders need them.
-if _sh "[[ -f '$REMOTE_MODELS/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors' && -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' && -f '$REMOTE_MODELS/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors' ]]" 2>/dev/null; then
+_flux3_models_present() {
+    _sh "[[ -f '$REMOTE_MODELS/diffusion_models/flux3_image_klein_sd_nvfp4.safetensors' &&
+            -f '$REMOTE_MODELS/text_encoders/qwen3vl_4b_int8_convrot.safetensors' &&
+            -f '$REMOTE_MODELS/vae/flux2-vae.safetensors' ]]"
+}
+if _sh "[[ -f '$REMOTE_MODELS/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors' && -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' && -f '$REMOTE_MODELS/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors' ]]" 2>/dev/null &&
+   { [[ "${INSTALL_FLUX3:-0}" != "1" ]] || _flux3_models_present; }; then
     echo "[deploy] models present on $TARGET"
 elif [[ -n "${MODEL_SOURCE:-}" && "$MODEL_SOURCE" != "$TARGET" ]]; then
     echo "[deploy] models missing on $TARGET — rsyncing from $MODEL_SOURCE (this can take a while) ..."
@@ -198,6 +204,10 @@ elif [[ -n "${MODEL_SOURCE:-}" && "$MODEL_SOURCE" != "$TARGET" ]]; then
 else
     echo "[deploy] WARNING: LTX models not found at $TARGET:$REMOTE_MODELS and no MODEL_SOURCE to sync from."
     echo "         Populate them before rendering: 'bash scripts/download_models.sh ~/github/ComfyUI' on $TARGET."
+fi
+if [[ "${INSTALL_FLUX3:-0}" == "1" ]] && ! _flux3_models_present; then
+    echo "ERROR: FLUX 3 model bundle incomplete on $TARGET. Retry make install INSTALL_FLUX3=1 with HF access."
+    exit 1
 fi
 
 # ── 4. Stop any pre-existing native ComfyUI so the container can claim :8188 ───

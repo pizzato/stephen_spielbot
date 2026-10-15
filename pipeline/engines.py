@@ -21,8 +21,9 @@ The bundled image engines:
   INT8 weights. Qwen Research License: non-commercial.
 - ``qwen-image-2.1-nvfp4`` — the same graph on Blackwell FP4 weights, the
   faster build for these GB10 workers. Same research license. Masked edits
-  stay on a FLUX engine. The worker image pins ComfyUI v0.37.0, which
-  includes this model's node.
+  stay on a FLUX engine.
+- ``flux3-klein-nvfp4`` — opt-in 16-step distilled FLUX 3, Blackwell only;
+  generation and character references, under the FLUX Kommunity License.
 """
 from __future__ import annotations
 
@@ -103,6 +104,54 @@ ENGINES: dict[str, dict] = {
                    "split_files/text_encoders/qwen_3_4b.safetensors", "models/text_encoders"),
             _model("Comfy-Org/vae-text-encorder-for-flux-klein-4b",
                    "split_files/vae/flux2-vae.safetensors", "models/vae"),
+        ],
+    },
+    "flux3-klein-nvfp4": {
+        "key": "flux3-klein-nvfp4",
+        "label": "FLUX 3 Image Klein NVFP4",
+        "sub": "16 steps · Blackwell only (GB10 / RTX 50) · character references",
+        "family": "flux3",
+        "can_generate": True,
+        # Reference editing does not preserve pixels outside a painted mask.
+        "can_edit": False,
+        "t2i_workflow": "flux3_t2i.json",
+        "t2i_ref_workflow": "flux3_t2i.json",
+        "steps": 16,
+        "timeout": 1800,
+        "commercial_ok": True,
+        "commercial_label": "commercial use subject to licence",
+        "license": "FLUX Kommunity License v1.0",
+        "license_note": (
+            "Commercial output generation is permitted for qualifying users below "
+            "US$5M gross annualised revenue, including affiliates, subject to the "
+            "FLUX Kommunity License. Content filtering or output review and legally "
+            "required AI disclosures apply. Other uses need separate licensing. "
+            "Accept the model's Hugging Face conditions before downloading. "
+            "Requires a Blackwell GPU; masked edits stay on FLUX.2."
+        ),
+        "model_file": "flux3_image_klein_sd_nvfp4.safetensors",
+        "clip_t5": "qwen3vl_4b_int8_convrot.safetensors",
+        "clip_l": None,
+        "vae": "flux2-vae.safetensors",
+        # The version alone is insufficient: early 0.41 development builds
+        # predate the native FLUX 3 loader. This node landed with that loader.
+        "requires_node": "Flux3LayoutPrompt",
+        "min_comfyui": (0, 41, 0),
+        "too_old_note": "its native FLUX 3 loader is not available there",
+        "probe": ("UNETLoader", "unet_name", "flux3_image_klein_sd_nvfp4.safetensors"),
+        "extra_probes": [
+            ("CLIPLoader", "clip_name", "qwen3vl_4b_int8_convrot.safetensors"),
+            ("VAELoader", "vae_name", "flux2-vae.safetensors"),
+        ],
+        "models": [
+            _model("black-forest-labs/flux-3-image-klein-comfy",
+                   "diffusion_models/flux3_image_klein_sd_nvfp4.safetensors",
+                   "models/diffusion_models", gated=True),
+            _model("black-forest-labs/flux-3-image-klein-comfy",
+                   "text_encoders/qwen3vl_4b_int8_convrot.safetensors",
+                   "models/text_encoders", gated=True),
+            _model("black-forest-labs/flux-3-image-klein-comfy",
+                   "vae/flux2-vae.safetensors", "models/vae", gated=True),
         ],
     },
     "qwen-image-2.1": {
@@ -242,6 +291,7 @@ def public_list(commercial_only: bool = False) -> list[dict]:
             "can_generate": e["can_generate"], "can_edit": e["can_edit"],
             "commercial_ok": e["commercial_ok"], "license": e["license"],
             "license_note": e.get("license_note"),
+            "commercial_label": e.get("commercial_label"),
         })
     return out
 

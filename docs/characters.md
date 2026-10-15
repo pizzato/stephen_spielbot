@@ -7,8 +7,8 @@ mechanisms work together:
    fed to the script LLM ([when the brief asks for them](#casting-is-opt-in-by-name))
    and deterministically re-injected into image prompts.
 2. **Visual consistency** — a character can carry a reference image; scenes featuring
-   that character are generated with FLUX.2 reference conditioning (`ReferenceLatent`),
-   so the output resembles the reference. FLUX.2-only; other engines ignore references.
+   that character use reference conditioning on FLUX.2 Klein, FLUX 3 Klein NVFP4
+   or Qwen-Image 2.1, so the output resembles the reference. FLUX.1 schnell ignores references.
 
 The video side needs no changes: LTX renders from the scene's first-frame still, so once
 the still is consistent, the motion clip inherits it.
@@ -129,7 +129,7 @@ placeholder with no UI.
 
 ## Reference-image path
 
-FLUX.2 Klein and Qwen-Image 2.1 both condition on character reference images.
+FLUX.2 Klein, FLUX 3 Klein NVFP4 and Qwen-Image 2.1 condition on character reference images.
 FLUX.1 schnell ignores them (logged, no crash).
 
 - `workflows/flux2_t2i_ref.json` is the FLUX.2 single-reference graph (`LoadImage` →
@@ -140,6 +140,11 @@ FLUX.1 schnell ignores them (logged, no crash).
   (`workflows/qwen_image_2_1_t2i.json`) with one `LoadImage` per reference wired
   into `TextEncodeQwenImage21` as `images.image_1`, `images.image_2`, …. The
   prompt cites each character as `<image1>`, `<image2>`.
+- FLUX 3 uses `workflows/flux3_t2i.json` with `ReferenceMultiLatent` and
+  ordered `images.image0`, `images.image1`, … inputs. Character names bind to
+  `<ref_image_0>`, `<ref_image_1>`, …. Up to 10 references are accepted by the
+  graph; the scene cap below remains two. Output keeps the requested scene canvas,
+  independent of portrait dimensions.
 - `generate_with_engine(..., reference_images=[...])` uploads each reference and runs
   the matching graph. Engines without reference support ignore the images (logged, no crash).
 - `_scene_reference_images()` in `app.py` maps a scene's matched characters to their
@@ -163,7 +168,7 @@ two fail in opposite directions:
 
 | Engine | How | Cost | Strength | Weakness |
 | --- | --- | --- | --- | --- |
-| **Image model** | The owning style's image engine paints the whole strip in one pass, with the reference as FLUX.2 reference conditioning | seconds | Clean layout, four distinct views every time | The face is a likeness, not the person; the back view is invented (a robot can grow human hair) |
+| **Image model** | The owning style's image engine paints the whole strip in one pass, using reference conditioning when supported (FLUX.2, FLUX 3 or Qwen-Image 2.1) | seconds | Clean layout, four distinct views every time | The face is a likeness, not the person; the back view is invented (a robot can grow human hair) |
 | **Camera orbit** | H3 Ref2VA films the character turning; the panels are frames of that clip | minutes on a worker | The face — and the real back of the head — survive the turn | Sometimes a lazy turn, occasional video artefacts, and the model may re-dress the character mid-clip |
 
 An orbit **keeps its clip**, so its panels can be re-picked afterwards: **Adjust frames**

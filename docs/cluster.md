@@ -94,6 +94,12 @@ Deploy or re-deploy every worker:
 make install WORKERS="s1 s2 s3"
 ```
 
+For FLUX 3 Klein NVFP4, use `make install INSTALL_FLUX3=1` after accepting
+BFL's Hugging Face conditions and exporting `HF_TOKEN`. It checks the optional
+bundle on existing workers as well as fresh installs, and syncs missing files from
+the model source. The worker pin is ComfyUI's 0.41 development snapshot `29e28e2b`
+with native FLUX 3 support. See [image engines](models.md#image-engines-per-style).
+
 Deploy a single host from the controller:
 
 ```bash

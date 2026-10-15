@@ -2259,6 +2259,45 @@ def _generate_qwen(engine: dict, prompt: str, output_path: Path, *,
                          timeout=int(engine.get("timeout") or 600))
 
 
+def _generate_flux3(engine: dict, prompt: str, output_path: Path, *,
+                    width: int, height: int, seed: int | None,
+                    refs: list[Path], comfy_url: str) -> Path:
+    # The native loader and this sentinel node landed together, after the
+    # development branch already reported 0.41.0. Check the actual capability.
+    if comfy_node_exists(comfy_url, engine["requires_node"]) is not True:
+        raise RuntimeError("FLUX 3 needs native ComfyUI FLUX 3 support — rebuild "
+                           f"the worker at {comfy_url} with make install.")
+    if len(refs) > 10:
+        logger.warning("[comfy] FLUX 3: trimmed references to 10 (model cap)")
+        refs = refs[:10]
+    workflow = _fill_template(_load_workflow(engine["t2i_workflow"]), {
+        "UNET": engine["model_file"], "CLIP": engine["clip_t5"], "VAE": engine["vae"],
+        "POSITIVE_PROMPT": prompt,
+        # EmptyFlux2LatentImage uses a 16-pixel spatial grid.
+        "WIDTH": max(16, int(width) // 16 * 16),
+        "HEIGHT": max(16, int(height) // 16 * 16),
+        "STEPS": int(engine["steps"]),
+        "SEED": seed if seed is not None else random.randint(0, 2**32 - 1),
+    })
+    if refs:
+        workflow["17"] = {"class_type": "ReferenceMultiLatent", "inputs": {
+            "positive": ["4", 0], "negative": ["5", 0], "vae": ["3", 0],
+            "resolution": "resize", "resolution.megapixels": 1.0,
+        }}
+        for i, path in enumerate(refs):
+            node = str(20 + i)
+            workflow[node] = {"class_type": "LoadImage", "inputs": {
+                "image": _upload_image(path, comfy_url=comfy_url),
+            }}
+            workflow["17"]["inputs"][f"images.image{i}"] = [node, 0]
+        workflow["7"]["inputs"]["positive"] = ["17", 0]
+        workflow["7"]["inputs"]["negative"] = ["17", 1]
+        # Keep the requested canvas; the reference node's empty latent uses
+        # the first reference's dimensions, which are often a square portrait.
+    return _run_and_save(workflow, output_path, comfy_url,
+                         timeout=int(engine["timeout"]))
+
+
 def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
                          width: int, height: int, seed: int | None = None,
                          reference_images: list[Path] | None = None,
@@ -2268,11 +2307,15 @@ def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
     flux1 reuses :func:`generate_scene_image`; flux2 runs ``flux2_t2i.json``, or
     ``flux2_t2i_ref.json`` when *reference_images* are given. Qwen-Image 2.1
     runs ``qwen_image_2_1_t2i.json`` and splices references into
-    ``TextEncodeQwenImage21``. flux1 ignores references."""
+    ``TextEncodeQwenImage21``. FLUX 3 uses ``ReferenceMultiLatent`` with its
+    own CLIP loader and sampler graph. flux1 ignores references."""
     if not engine.get("can_generate"):
         raise RuntimeError(f"Engine {engine.get('key')!r} cannot generate images.")
     check_engine_supported(engine, comfy_url)
     refs = [Path(p) for p in (reference_images or []) if p]
+    if engine.get("family") == "flux3":
+        return _generate_flux3(engine, prompt, output_path, width=width, height=height,
+                               seed=seed, refs=refs, comfy_url=comfy_url)
     if engine.get("family") == "qwen-image":
         return _generate_qwen(engine, prompt, output_path, width=width, height=height,
                               seed=seed, refs=refs, comfy_url=comfy_url)

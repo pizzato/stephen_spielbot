@@ -74,6 +74,7 @@ These are read by `make install` and the worker deploy scripts rather than by th
 | `WORKERS` | Space-separated worker hostnames, e.g. `make install WORKERS="s1 s2 s3"` |
 | `GPU_MODE` | `legacy` (default) or `cdi` — how containers get the GPU. See [Cluster & workers](cluster.md#gpu-injection-mode) |
 | `INSTALL_SERVICE` | `1` installs the macOS LaunchAgent without prompting |
+| `INSTALL_FLUX3` | `1` adds the gated FLUX 3 Klein NVFP4 bundle to `make install` or `make download-models`; requires Blackwell hardware and accepted BFL model conditions. Existing worker bundles are checked and repaired. See [image engines](models.md#image-engines-per-style) |
 | `INSTALL_FLUX1` | `1` also downloads the legacy FLUX.1 schnell models |
 | `SVC_PYTHON` | Python 3.10–3.12 interpreter for the controller singing-conversion installer (`scripts/install_svc.sh`); discovered automatically when unset. It installs Seed-VC/shared audio tools and the separate SoulX runtime — [song re-voicing](performance_films.md#singing-films-the-music-video-format) |
 | `SVC_CONTAINER` | Target ComfyUI container name for `make svc-install` (`scripts/install_svc_worker.sh`) |

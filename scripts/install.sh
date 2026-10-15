@@ -123,7 +123,18 @@ MODEL_SOURCE="${MODEL_SOURCE:-${FIRST_HOST:-}}"
 # sentinel.
 _models_present_on() {
     local host="$1"
-    if [[ "$host" == "localhost" ]]; then
+    if [[ "${INSTALL_FLUX3:-0}" == "1" ]]; then
+        if is_local_host "$host"; then
+            [[ -f "$COMFY_DIR/models/diffusion_models/flux3_image_klein_sd_nvfp4.safetensors" &&
+               -f "$COMFY_DIR/models/text_encoders/qwen3vl_4b_int8_convrot.safetensors" &&
+               -f "$COMFY_DIR/models/vae/flux2-vae.safetensors" ]] || return 1
+        else
+            ssh "$host" '[[ -f $HOME/github/ComfyUI/models/diffusion_models/flux3_image_klein_sd_nvfp4.safetensors &&
+                            -f $HOME/github/ComfyUI/models/text_encoders/qwen3vl_4b_int8_convrot.safetensors &&
+                            -f $HOME/github/ComfyUI/models/vae/flux2-vae.safetensors ]]' || return 1
+        fi
+    fi
+    if is_local_host "$host"; then
         [[ -f "$COMFY_DIR/models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors" ]] && \
         [[ -f "$COMFY_DIR/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors" ]] && \
         [[ -f "$COMFY_DIR/models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" ]] && \
@@ -141,9 +152,10 @@ _models_present_on() {
 _ask_hf_token() {
     if [[ -z "$HF_TOKEN" ]] && [[ -t 0 ]]; then
         echo ""
-        echo "Models (~49 GB total) need to be downloaded."
-        echo "A HuggingFace token speeds up downloads (optional — all models are public)."
-        read -rp "HuggingFace token (press Enter to skip): " HF_TOKEN
+        echo "Missing model files need to be downloaded."
+        echo "Gated models (including FLUX 3) need a read token with their HF conditions accepted."
+        read -rsp "HuggingFace token (press Enter to use existing CLI credentials): " HF_TOKEN
+        echo ""
     fi
 }
 
@@ -165,13 +177,14 @@ elif is_local_host "$MODEL_SOURCE"; then
         # never touched.
         touch "$COMFY_DIR/.spielbot_created"
     fi
-    HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
+    HF_TOKEN="$HF_TOKEN" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
 else
     _ask_hf_token
     echo "[models] Downloading models to $MODEL_SOURCE (first worker; others rsync from it during deploy)..."
     rsync -q "$REPO_ROOT/scripts/download_models.sh" "${MODEL_SOURCE}:/tmp/spielbot_download_models.sh"
+    printf -v _download_env 'HF_TOKEN=%q INSTALL_FLUX3=%q' "$HF_TOKEN" "${INSTALL_FLUX3:-0}"
     ssh "$MODEL_SOURCE" \
-        "HF_TOKEN='${HF_TOKEN}' bash /tmp/spielbot_download_models.sh \$HOME/github/ComfyUI"
+        "$_download_env bash /tmp/spielbot_download_models.sh \$HOME/github/ComfyUI"
 fi
 
 # ── 3b. Web UI (FastAPI backend deps + React frontend build) ──────────────────
@@ -239,7 +252,7 @@ fi
 
 for host in $HOSTS; do
     banner "Deploying container worker: $host"
-    MODEL_SOURCE="$MODEL_SOURCE" bash "$REPO_ROOT/scripts/install_worker_container.sh" "$host"
+    MODEL_SOURCE="$MODEL_SOURCE" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" bash "$REPO_ROOT/scripts/install_worker_container.sh" "$host"
 done
 
 # Point the config at the containers we just deployed:

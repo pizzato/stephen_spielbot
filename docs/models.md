@@ -112,9 +112,51 @@ inherit both like every other style field. Download an engine per worker from
 | Engine | Character | License |
 |---|---|---|
 | **FLUX.2 Klein 4B** (default) | 4 steps. Scene first frames, covers, and masked "Edit image" | Apache-2.0 |
+| **FLUX 3 Image Klein NVFP4** (opt-in, Blackwell only) | 16-step distilled model. Scenes, portraits, sheets, covers and character references; masked editing stays on FLUX.2 | FLUX Kommunity License; conditional commercial output use |
 | **FLUX.1 schnell** (opt-in) | The legacy 4-step path, including masked inpaint | Apache-2.0 |
 | **Qwen-Image 2.1** (opt-in) | 25 steps, official INT8 weights, character reference images (up to the scene cap of 2). Not offered for masked "Edit image" — that slot stays on FLUX | Qwen Research License |
 | **Qwen-Image 2.1 NVFP4** (opt-in, faster on GB10) | Same graph and 25 steps. FP4 diffusion plus the official W4A8 text encoder — the faster weight set on these Blackwell workers | Qwen Research License |
+
+FLUX 3 Image Klein NVFP4 notes:
+
+- Select `flux3-klein-nvfp4` under **Settings → Styles → Image model → Generation**.
+  FLUX.2 remains the default. The new engine uses the style's canvas, snapped down
+  to a multiple of 16, with 16 steps, Euler/simple sampling and CFG 1.
+- **Blackwell only** (including DGX Spark / GB10 and RTX 50-series). The official
+  [BFL ComfyUI package](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy)
+  supplies `flux3_image_klein_sd_nvfp4.safetensors` (5.3 GB),
+  `qwen3vl_4b_int8_convrot.safetensors` (4.9 GB) and `flux2-vae.safetensors`
+  (0.3 GB, shared with FLUX.2). About **10.5 GB on disk**, not a peak memory estimate.
+  The `_sd_` checkpoint is distilled; the base model and separate prompt upsampler
+  are not installed. Existing detailed scene prompts are passed through unchanged.
+- **Gated download:** accept the conditions on the BFL model page, then set a read
+  token in Settings before clicking **Download**. For the full installation path,
+  export `HF_TOKEN` and run `make install INSTALL_FLUX3=1`. This checks the complete
+  bundle even on existing installs, downloads on the model-source worker and syncs
+  missing files to the other configured workers. `make download-models INSTALL_FLUX3=1`
+  downloads the defaults plus FLUX 3 locally. Neither command selects it for styles.
+  Plain `make install` installs worker support but leaves these optional weights out.
+- The worker image pins ComfyUI's **0.41 development snapshot `29e28e2b`**, after
+  [native FLUX 3 support](https://github.com/Comfy-Org/ComfyUI/pull/17064) landed.
+  The exact pin is shared by Docker, Compose and `make install`; `make start`
+  rebuilds stale images. Settings checks the transformer, encoder, VAE and native
+  loader sentinel. Generation refuses workers without that native capability,
+  including earlier development builds reporting the same version number.
+- Character references retain their order and are named `<ref_image_0>`,
+  `<ref_image_1>`, etc. The workflow accepts up to 10; scene matching retains its
+  existing two-character cap. A portrait reference never changes the scene's output
+  dimensions. Reference editing is not painted-mask inpainting, so this engine is
+  excluded from **Edit (mask + prompt)**. There is no bounding-box editor in this integration.
+- **Commercial use subject to licence:** the
+  [FLUX Kommunity License v1.0](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md)
+  permits commercial output generation for qualifying users below **US$5M gross
+  annualised revenue including affiliates**, subject to its terms. Content filtering
+  or output review and legally required AI disclosures apply. Other uses need a
+  separate licence; the grant is revocable and restricts improving competing models.
+  The app displays these terms but does not determine eligibility or add a content filter.
+- Qualify the worker upgrade with image/reference renders and existing LTX/H3/music
+  workloads, including chained H3 continuation. Vendor speed/quality claims are not
+  measurements of your deployment.
 
 Qwen-Image 2.1 notes:
 
@@ -139,8 +181,8 @@ Qwen-Image 2.1 notes:
   is why this is the one to pick there. It has not been timed on a Spark in
   this project. There is no few-step distill of 2.1 yet, so both engines stay
   at 25 steps — the old Qwen-Image lightning LoRAs are a different model.
-- The worker image pins **ComfyUI v0.37.0**, which is the release that
-  includes `TextEncodeQwenImage21`. `make install` writes that pin, and
+- The worker image pins **ComfyUI 0.41 development snapshot `29e28e2b`**,
+  which includes `TextEncodeQwenImage21` (introduced in v0.37.0). `make install` writes that pin, and
   `make start` rebuilds a worker whose image is older. A render on an older
   image is refused up front.
 - Output size follows the style resolution, snapped to a multiple of 32 (scene
@@ -193,7 +235,7 @@ LTX 2.5 notes:
   automatically. The 2.3 checkpoint stays installed for the keyframed
   establishing shots and the film editor's upscalers.
 - Native support ships with **ComfyUI itself (≥ v0.32.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.37.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c`) if the engine shows
   "not installed" with the weights already downloaded. Older workers refuse the
   render rather than failing mid-graph.
 - Clips render at **24 fps** (2.3 ran at 25) through the same two-pass
@@ -210,7 +252,7 @@ MiniMax H3 notes:
   encoder, video + audio VAEs) from **Settings → Infrastructure → Video models** —
   it is *not* part of the bulk install.
 - Its nodes ship with **ComfyUI itself (≥ v0.30.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.37.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c`) if the engine shows
   "not installed" with the weights already downloaded.
 - Generation is capped at ~1 MP (768×1344-class); larger style resolutions render
   at the cap and are reframed back to the plan size. Clips run 4–15 s at 24 fps.
@@ -383,7 +425,7 @@ per worker from **Settings → Infrastructure → Music models**.
 MiniMax Music 3 notes:
 
 - Its nodes ship with **ComfyUI itself (≥ v0.33.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.37.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c`) if the engine shows
   "not installed" with the weights already downloaded. Renders are refused
   up-front on an older worker rather than failing mid-graph.
 - The film's **music description** becomes the model's *caption*. It reads best
@@ -504,7 +546,10 @@ file is a community quant of the official weights and inherits that license. Min
 [community license](#video-engines-per-style) — territory-restricted and
 attribution-bearing; review it before switching a publishing style over. MiniMax
 Music 3 is opt-in under a [separate community license](#music-engines-per-style)
-— no territory restriction, but it wants a visible "MiniMax-Music3" credit.
+— no territory restriction, but it wants a visible "MiniMax-Music3" credit. FLUX 3 Klein
+NVFP4 is opt-in under the [FLUX Kommunity terms](#image-engines-per-style), with
+conditional commercial output generation below US$5M gross annualised revenue
+including affiliates.
 
 Read [model licensing](tts_licensing.md) and
 [THIRD_PARTY_NOTICES.md](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)

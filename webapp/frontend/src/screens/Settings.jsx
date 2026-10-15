@@ -2208,7 +2208,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                           <span style={{ fontWeight: 600 }}>{e.label}</span>
                           {avail === true && <Chip tone="ok" dot>installed</Chip>}
                           {avail === false && <Chip tone="warn">not installed</Chip>}
-                          {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
+                          {(e.commercial_label || !e.commercial_ok) && <Chip tone="info">{e.commercial_label || 'non-commercial'}</Chip>}
                         </div>
                         <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
                         {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
@@ -2224,7 +2224,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   )
                 })}
               </div>
-              <div className="field__hint">Downloads run on every ComfyUI worker over SSH and can take a while (weights are several GB). FLUX.2 is authored from public templates and may need a workflow tweak on first use. Qwen-Image 2.1 is research-license only (the note on each row). INT8 is about 17 GB; NVFP4 is the faster build on these GB10 workers. Masked edits stay on FLUX.</div>
+              <div className="field__hint">Downloads run on every ComfyUI worker over SSH and can take a while (weights are several GB). FLUX.2 is authored from public templates and may need a workflow tweak on first use. Qwen-Image 2.1 is research-license only (the note on each row). INT8 is about 17 GB; NVFP4 is the faster build on these GB10 workers. FLUX 3 Klein NVFP4 requires Blackwell hardware and BFL model access; commercial use is conditional. Masked edits stay on FLUX.2.</div>
             </div>
           </Card>
 
@@ -2987,7 +2987,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <Field label="Generation">
                   <select className="select" value={eff.image_engine || 'flux1-schnell'} onChange={(e) => setStyleField('image_engine', e.target.value)}>
                     {(engineInfo.engines || []).filter((e) => e.can_generate).map((e) => (
-                      <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
+                      <option key={e.key} value={e.key}>{e.label}{e.commercial_label ? ` · ${e.commercial_label}` : e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}
                   </select>
                   <ParentVal k="image_engine" />
@@ -2999,7 +2999,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <Field label="Edit (mask + prompt)" hint="Model used for masked 'Edit image' inpaints.">
                   <select className="select" value={eff.edit_engine || 'flux1-schnell'} onChange={(e) => setStyleField('edit_engine', e.target.value)}>
                     {(engineInfo.engines || []).filter((e) => e.can_edit).map((e) => (
-                      <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
+                      <option key={e.key} value={e.key}>{e.label}{e.commercial_label ? ` · ${e.commercial_label}` : e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}
                   </select>
                   <ParentVal k="edit_engine" />

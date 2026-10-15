@@ -12,6 +12,8 @@
 #   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders
 #   FLUX.2 Klein 4B — diffusion model, Qwen-3 encoder, VAE
 # Opt-in (env flags): INSTALL_FLUX1=1 adds the legacy FLUX.1-schnell engine.
+# INSTALL_FLUX3=1 adds distilled FLUX 3 Klein NVFP4 (~10.5 GB, Blackwell only).
+# Accept https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy first.
 set -euo pipefail
 
 COMFY_DIR="${1:-$HOME/github/ComfyUI}"
@@ -348,6 +350,21 @@ else
         "Comfy-Org/vae-text-encorder-for-flux-klein-4b" \
         "split_files/vae/flux2-vae.safetensors" \
         "models/vae"
+fi
+
+# ── FLUX 3 Klein NVFP4 (optional generation + character references) ──────────
+if [[ "${INSTALL_FLUX3:-0}" == "1" ]]; then
+    echo ""
+    echo "--- FLUX 3 Klein NVFP4 (~10.5 GB; Blackwell GPU required) ---"
+    echo "    FLUX Kommunity License: commercial output generation is conditional."
+    echo "    Accept https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy"
+    echo "    and use HF_TOKEN or existing HF CLI credentials for gated downloads."
+    download "black-forest-labs/flux-3-image-klein-comfy" \
+        "diffusion_models/flux3_image_klein_sd_nvfp4.safetensors" "models/diffusion_models"
+    download "black-forest-labs/flux-3-image-klein-comfy" \
+        "text_encoders/qwen3vl_4b_int8_convrot.safetensors" "models/text_encoders"
+    download "black-forest-labs/flux-3-image-klein-comfy" \
+        "vae/flux2-vae.safetensors" "models/vae"
 fi
 
 # ── FLUX.1 schnell (legacy image engine) — OPT-IN ─────────────────────────────

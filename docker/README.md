@@ -82,13 +82,19 @@ keeps one render worker idle for it (issue #98), so no `ui_workers` list.
 A bare hostname in `tts_workers` is rejected — workers are HTTP containers, so
 the value must be an `http://host:8189` URL.
 
+FLUX 3 Klein NVFP4 is optional and requires Blackwell hardware. Run
+`make install INSTALL_FLUX3=1` with accepted BFL model conditions and `HF_TOKEN`
+to download and sync the full bundle, including on existing workers. Plain installs
+include loader support but omit these gated weights. See
+[model setup and licensing](../docs/models.md#image-engines-per-style).
+
 ## Configuration knobs (`docker/.env`)
 
 | Var | Default | Notes |
 |---|---|---|
 | `MODELS_DIR` | — (required) | Host path to the ComfyUI `models/` dir, mounted into the ComfyUI container |
 | `COMFYUI_INPUT_DIR` | `./input` | Host path mounted into `/opt/ComfyUI/input`; `make install` sets this to `~/github/ComfyUI/input` |
-| `COMFYUI_REF` | `v0.37.0` | Pin ComfyUI to a tag/branch/commit for reproducible workers. `make install` writes this pin. v0.37.0 is what this repo ships: it includes Qwen-Image 2.1, and it is past the Music 3 (v0.33.0), LTX 2.5 (v0.32.0) and H3 (v0.30.0) floors. `make start` rebuilds a worker whose image is older |
+| `COMFYUI_REF` | `29e28e2b488e7739c351c331d73da25aa435da5c` | ComfyUI 0.41 development snapshot containing native FLUX 3 (PR #17064), plus Qwen-Image 2.1 and existing video/music engines. Dockerfile, Compose and `make install` use the same pin; `make start` rebuilds stale worker images. Recheck chained H3 rendering when upgrading |
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
 | `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |
