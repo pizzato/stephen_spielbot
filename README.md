@@ -79,6 +79,10 @@ make start                        # start ComfyUI on all workers, then launch th
 Omit `WORKERS=...` for a single-machine (localhost) setup, or run `make install`
 with no args to be prompted. Then open [http://localhost:8001](http://localhost:8001).
 
+`make install` also installs SoulX-Singer SVC and Seed-VC on the controller and workers,
+plus the controller's shared re-voicing tools. Re-run it to repair missing runtimes or
+models; no separate re-voicing script needs to be run.
+
 ```bash
 make stop      # stop everything
 make status    # check health of the app and all workers

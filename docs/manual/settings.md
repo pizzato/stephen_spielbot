@@ -342,7 +342,7 @@ conversion, independently of the music model and narration voice model. See
 [music videos](../performance_films.md#singing-films-the-music-video-format) only: at
 divide time the lyric sheet is whisper-aligned against the song's separated vocal stem,
 so every scene names and cuts on the words actually sung under it. It needs the
-re-voicing install (`scripts/install_svc.sh`); without it — or when the alignment can't
+re-voicing tools included in `make install`; without them — or when the alignment can't
 be trusted — the energy measurement is used instead, so it is safe to leave on.
 
 **Cadence** replaces the old voice-speed multiplier: it is the narrator's speaking pace in

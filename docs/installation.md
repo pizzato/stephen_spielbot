@@ -92,10 +92,11 @@ The worker copies live at `/opt/seed-vc` and `/opt/soulx-singer` inside ComfyUI'
 container, with persistent model storage. Keep the Seed-VC environment even when
 using SoulX: the shared Demucs separator and lyric aligner use it.
 
-To repair or update an existing installation without rebuilding the application:
+Run `make install` on the controller to install or repair the application, including
+both re-voicing engines and their models. No separate script is needed.
+For a repair limited to re-voicing, without rebuilding the application:
 
 ```bash
-bash scripts/install_svc.sh     # controller: both engines and shared audio tools
 make svc-install               # controller + workers; W=s2 limits the worker side
 ```
 

@@ -5,11 +5,44 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+
+
+@pytest.mark.parametrize("svc_exit", [0, 17])
+def test_make_install_includes_controller_revoicing_and_propagates_failure(tmp_path, svc_exit):
+    # Run the public entry point on an existing install, with downloads and
+    # package managers stubbed so this cannot change the real controller.
+    root = Path(__file__).parents[1]
+    (tmp_path / "scripts").mkdir()
+    shutil.copy2(root / "Makefile", tmp_path / "Makefile")
+    shutil.copy2(root / "scripts/install.sh", tmp_path / "scripts/install.sh")
+    (tmp_path / "config.yaml").write_text("comfy_workers: []\n")
+    (tmp_path / "scripts/_config.sh").write_text(
+        'CONFIG_YAML="$REPO_ROOT/config.yaml"\nremote_hosts() { :; }\n')
+    (tmp_path / "scripts/install_svc.sh").write_text(
+        f'touch "$(dirname "$0")/../svc-ran"\nexit {svc_exit}\n')
+    for name in (".venv/bin/python", ".venv/bin/pip", "bin/npm"):
+        command = tmp_path / name
+        command.parent.mkdir(parents=True, exist_ok=True)
+        command.write_text("#!/bin/sh\nexit 0\n")
+        command.chmod(0o755)
+    (tmp_path / "webapp/frontend").mkdir(parents=True)
+
+    result = subprocess.run(
+        ["make", "install"], cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        env={**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+             "INSTALL_SERVICE": "0"},
+    )
+
+    assert (tmp_path / "svc-ran").exists(), result.stdout + result.stderr
+    assert (result.returncode == 0) == (svc_exit == 0), result.stdout + result.stderr
+    assert ("Setting up web UI" in result.stdout) == (svc_exit == 0)
 
 
 def test_dependency_pin_matches_the_installers_validated_transformers_version():

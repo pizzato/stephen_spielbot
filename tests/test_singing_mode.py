@@ -398,7 +398,7 @@ class SvcTests(unittest.TestCase):
     def test_missing_install_is_a_clear_error(self):
         from pipeline import svc
         with unittest.mock.patch.object(svc, "available", return_value=False):
-            with self.assertRaisesRegex(RuntimeError, "install_svc"):
+            with self.assertRaisesRegex(RuntimeError, "run make install on the controller first"):
                 svc.convert_song(Path("/x"), Path("/y"), Path("/z"))
 
     def test_any_worker_can_take_it_least_busy_first(self):

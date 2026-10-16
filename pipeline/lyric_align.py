@@ -49,12 +49,12 @@ def word_times(stem: Path, language: str = "") -> list[tuple[str, float, float]]
     """The stem's words with their sung times, or None when whisper cannot run.
 
     Invokes scripts/whisper_words.py with the seed-vc venv's python — the one
-    place faster-whisper is installed (scripts/install_svc.sh)."""
+    place faster-whisper is installed (by make install)."""
     from pipeline import svc
     python = svc.SVC_DIR / ".venv" / "bin" / "python"
     if not python.exists():
         logger.info("No seed-vc venv — lyric alignment unavailable "
-                    "(scripts/install_svc.sh installs it)")
+                    "(run make install on the controller)")
         return None
     proc = subprocess.run(
         [str(python), str(_RUNNER), str(stem)] + ([language] if language else []),

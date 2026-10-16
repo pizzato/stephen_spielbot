@@ -3925,7 +3925,7 @@ def song_convert(body: SongConvertBody) -> dict:
     engine = _song_svc_engine(wd)
     if not svc.available(engine):
         raise HTTPException(503, f"{svc.ENGINE_LABELS[engine]} is not installed — "
-                                 "run make install (or scripts/install_svc.sh).")
+                                 "run make install on the controller.")
     task_id = uuid.uuid4().hex[:12]
     _script_tasks[task_id] = {"status": "running"}
     threading.Thread(target=_run_song_convert_task,
@@ -9162,7 +9162,7 @@ def remix_song_voice(body: SongRevoiceBody) -> dict:
     engine = _song_svc_engine(wd)
     if not svc.available(engine):
         raise HTTPException(503, f"{svc.ENGINE_LABELS[engine]} is not installed — "
-                                 "run make install (or scripts/install_svc.sh).")
+                                 "run make install on the controller.")
     tid = f"song_revoice_{uuid.uuid4().hex[:12]}"
     _film_tasks[tid] = {"status": "running", "step": "revoice"}
     # Its own component (not "music"): voice conversion is nothing like a
