@@ -101,7 +101,10 @@ cache and audit-log files.
 The **Hugging Face token** used to auto-download gated engine weights onto the workers,
 then every image engine with its licence and an install state — **Download** pushes the
 weights to every ComfyUI worker over SSH. Per-style engine choice lives in the
-[Styles](#styles) tab.
+[Styles](#styles) tab. FLUX 3 Klein NVFP4 requires Blackwell hardware and accepted
+BFL model conditions. Its **commercial use subject to licence** label accompanies
+the terms shown on the row; **installed** requires its transformer, encoder, VAE
+and native ComfyUI loader support.
 
 ### Video file metadata
 
@@ -364,7 +367,10 @@ FLUX.2 Klein for both. **Qwen-Image 2.1** and **Qwen-Image 2.1 NVFP4** are opt-i
 under the research license. NVFP4 is the faster one on the GB10 workers. The
 worker image for this version of the app includes the ComfyUI release they
 need. Neither appears in the edit picker — masked inpaint stays on FLUX. The
-licence note under the picker is the same restriction. See
+licence note under the picker is the same restriction. **FLUX 3 Image Klein NVFP4**
+is another optional generation engine for Blackwell, with 16 steps and character
+references. Its commercial-output permission is conditional under the FLUX Kommunity
+License; read the note beneath the picker. It also stays out of the masked edit picker. See
 [Models → Image engines](../models.md#image-engines-per-style).
 
 ### Size presets

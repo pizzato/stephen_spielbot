@@ -42,6 +42,19 @@ make start                        # start the workers, then launch the app
 
 Then open [http://localhost:8001](http://localhost:8001).
 
+For optional **FLUX 3 Image Klein NVFP4** on Blackwell workers, accept the
+[BFL model conditions](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy),
+export a Hugging Face read token as `HF_TOKEN`, then run:
+
+```bash
+make install INSTALL_FLUX3=1
+```
+
+This also repairs missing FLUX 3 files on existing workers. Select it afterwards
+under **Settings → Styles → Image model → Generation**. Plain `make install`
+installs the supporting ComfyUI snapshot without downloading the optional weights.
+See [model requirements and licence](models.md#image-engines-per-style).
+
 Omit `WORKERS=...` for a single-machine (localhost) setup, or run `make install` with no
 arguments and it prompts once. An existing `config.yaml` is never overwritten.
 

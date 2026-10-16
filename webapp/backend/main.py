@@ -6456,6 +6456,9 @@ def list_engines() -> dict:
         if not probe_url:
             return None
         ok = engine_model_present(probe_url, e.get("probe"))
+        for probe in e.get("extra_probes", []):
+            if ok:
+                ok = engine_model_present(probe_url, probe)
         node = e.get("requires_node")
         if ok and node:
             has_node = comfy_node_exists(probe_url, node)

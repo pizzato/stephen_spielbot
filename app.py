@@ -3488,6 +3488,9 @@ _REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in their provided re
 _QWEN_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <image{n}> — "
                         "identical face, head, materials and colours; only the pose "
                         "and setting differ.")
+_FLUX3_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <ref_image_{n}> — "
+                        "identical face, head, materials and colours; only the pose "
+                        "and setting differ.")
 
 
 def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_name: str,
@@ -3499,8 +3502,8 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
     Injects each featured character's canonical appearance (_inject_characters),
     gathers their reference images, and — only when the engine actually
     conditions on references (it has a t2i_ref_workflow — FLUX.2 or
-    Qwen-Image 2.1) — appends a per-character note tying the name to its
-    attached image. Qwen cites the slot (``<image1>``).
+    Qwen-Image 2.1 or FLUX 3) — appends a per-character note tying the name to
+    its attached image. Qwen cites ``<image1>``; FLUX 3 cites ``<ref_image_0>``.
     Engines without reference support get the plain injected prompt. Guided
     covers can allow appearance overrides: descriptions and portraits then
     supply identity and unchanged features, not an immutable outfit."""
@@ -3514,6 +3517,7 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
             notes = " ".join(
                 f"{c['name'].strip()}: use "
                 + (f"<image{i}>" if engine.get("family") == "qwen-image"
+                   else f"<ref_image_{i - 1}>" if engine.get("family") == "flux3"
                    else "their provided reference image")
                 + " for identity and unchanged features. Apply the requested changes, "
                   "including clothing and colours, even when they differ from the reference image."
@@ -3523,6 +3527,11 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
             notes = " ".join(
                 _QWEN_REF_MATCH_NOTE.format(name=c.get("name", "").strip(), n=i)
                 for i, (c, _p) in enumerate(pairs, start=1)
+                if (c.get("name") or "").strip())
+        elif engine.get("family") == "flux3":
+            notes = " ".join(
+                _FLUX3_REF_MATCH_NOTE.format(name=c.get("name", "").strip(), n=i)
+                for i, (c, _p) in enumerate(pairs)
                 if (c.get("name") or "").strip())
         else:
             notes = " ".join(_REF_MATCH_NOTE.format(name=c.get("name", "").strip())

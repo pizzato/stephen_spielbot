@@ -14,6 +14,8 @@
 # FLASHVSR_NODES_REF set empty), drop its lines here too.
 
 TextEncodeQwenImage21            # ComfyUI core (>= v0.37.0, Qwen-Image 2.1)
+Flux3LayoutPrompt               # ComfyUI core native FLUX 3 loader sentinel (PR #17064)
+ReferenceMultiLatent            # ComfyUI core (FLUX 3 character references)
 VHS_LoadVideoFFmpeg              # ComfyUI-VideoHelperSuite
 VHS_VideoCombine                 # ComfyUI-VideoHelperSuite
 LTXICLoRALoaderModelOnly         # ComfyUI-LTXVideo (IC-LoRA spatial upscaler)
