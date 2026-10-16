@@ -106,6 +106,13 @@ BFL model conditions. Its **commercial use subject to licence** label accompanie
 the terms shown on the row; **installed** requires its transformer, encoder, VAE
 and native ComfyUI loader support.
 
+**Model files downloaded** confirms the download only. If the files are present
+but ComfyUI lacks the engine's native nodes, the row shows **worker update required**
+and identifies the checked worker. Run `make start` on the controller to rebuild
+outdated workers, then refresh Settings. The button reads **Downloaded** while an
+update is required, so it does not repeat an already successful download. These
+states also apply to the video, acted-scene and music model lists.
+
 ### Video file metadata
 
 Under **Settings → Styles**, **Embed attribution in video metadata** controls the

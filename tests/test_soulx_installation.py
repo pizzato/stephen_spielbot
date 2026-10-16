@@ -4,11 +4,19 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+
+
+def test_dependency_pin_matches_the_installers_validated_transformers_version():
+    root = Path(__file__).parents[1] / "docker/comfyui/singing"
+    script = (root / "install_soulx.sh").read_text()
+    version = re.search(r'transformers\.__version__ == "([^"]+)"', script).group(1)
+    assert f"transformers=={version}" in (root / "requirements-soulx.txt").read_text().splitlines()
 
 
 @pytest.fixture

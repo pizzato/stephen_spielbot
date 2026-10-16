@@ -111,6 +111,33 @@ def test_settings_requires_the_entire_model_bundle(missing):
         assert web.list_engines()["availability"][KEY] is (missing is None)
 
 
+@pytest.mark.parametrize("node,missing,available,update", [
+    (False, None, False, True),
+    (True, None, True, False),
+    (None, None, None, False),
+    (False, ENGINE["clip_t5"], False, False),
+])
+def test_settings_distinguishes_downloaded_models_from_worker_update(node, missing, available, update):
+    from webapp.backend import main as web
+    url = "http://worker:8188"
+    with mock.patch.object(web.gapp, "load_config", return_value={"comfy_workers": [url]}), \
+         mock.patch("pipeline.worker_pool.queue_depth", return_value=0), \
+         mock.patch.object(comfyui, "engine_model_present", side_effect=lambda u, p: p[2] != missing), \
+         mock.patch.object(comfyui, "comfy_node_exists", return_value=node):
+        result = web.list_engines()
+    assert result["availability"][KEY] is available
+    assert result["worker_updates"].get(KEY) == (url if update else None)
+
+
+def test_settings_does_not_report_offline_worker_as_needing_update():
+    from webapp.backend import main as web
+    with mock.patch.object(web.gapp, "load_config", return_value={"comfy_workers": ["http://worker:8188"]}), \
+         mock.patch("pipeline.worker_pool.queue_depth", return_value=-1):
+        result = web.list_engines()
+    assert result["availability"][KEY] is None
+    assert result["worker_updates"] == {}
+
+
 def test_gated_download_requires_a_token_before_starting_a_task():
     from fastapi import HTTPException
     from webapp.backend import main as web
