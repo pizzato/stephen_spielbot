@@ -265,7 +265,7 @@ the takes are shot with nothing to sing to and the windows are timed against an 
 
 **The lyrics are placed where the singing is.** Once the track exists, the divide step
 *measures* it — on the separated **vocal stem** when demucs is installed (it comes with
-the re-voicing install, `scripts/install_svc.sh`, and the
+`make install`, and the
 first divide against a track separates and caches the stem): on a stem, an intro, a solo
 and an outro are real silence, so the measurement stays exact however loud the
 arrangement is — a distorted-guitar intro used to read as singing on the mix-level
@@ -311,7 +311,7 @@ default). Level measurement knows *where* singing is but never *which* line is b
 sung, so line times are otherwise estimated by pacing the lines evenly through the
 singing — close, but a line can smear across a phrase gap into the neighbouring scene.
 With the option on, the divide transcribes the vocal stem with word timestamps
-(faster-whisper, installed by the same `scripts/install_svc.sh` beside demucs) and
+(faster-whisper, included in `make install` beside demucs) and
 matches the transcript against the lyric sheet it already knows — alignment, not
 transcription, so the fixed line order disambiguates a chorus sung four times, a garbled
 word interpolates from its neighbours, and words "heard" outside the measured singing

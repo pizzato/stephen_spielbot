@@ -136,14 +136,14 @@ def convert_song(source: Path, voice_ref: Path, output: Path,
     if not available(engine):
         raise RuntimeError(
             f"{ENGINE_LABELS[engine]} is not installed — run make install "
-            "(or scripts/install_svc.sh) on the controller first.")
+            "on the controller first.")
     with tempfile.TemporaryDirectory() as td:
         work = Path(td)
         stems = _separate_stems(source, work)
         if stems is None:
             if engine == "soulx-svc":
                 raise RuntimeError("SoulX-SVC requires Demucs vocal separation — "
-                                   "run make install (or scripts/install_svc.sh).")
+                                   "run make install on the controller.")
             logger.warning("[svc] demucs unavailable — converting the WHOLE "
                            "mix (instruments will smear; fine only for "
                            "a-cappella-leaning tracks)")
@@ -171,7 +171,7 @@ def separate_vocals(source: Path, output: Path) -> Path | None:
     TIMING can be measured on the stem — on a separated stem silence is real
     silence, where the full mix cannot tell a loud instrument from a voice.
     Runs on the controller like every separation here (it is the cheap part).
-    Returns None when demucs is not installed (scripts/install_svc.sh lays it
+    Returns None when demucs is not installed (make install lays it
     down beside seed-vc)."""
     with tempfile.TemporaryDirectory() as td:
         stems = _separate_stems(source, Path(td))

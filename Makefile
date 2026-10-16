@@ -15,6 +15,7 @@ W ?=
 ## Install everything: local deps, models, workers, config.yaml, AND the web UI
 ## (backend deps + React build). First run seeds config.yaml; set workers
 ## non-interactively: make install WORKERS="s1 s2 s3"
+## Includes SoulX-Singer SVC, Seed-VC and shared re-voicing/lyric-alignment tools.
 ## The macOS login service is opt-in: INSTALL_SERVICE=1 installs it without asking.
 ## Add INSTALL_FLUX3=1 to download FLUX 3 Klein NVFP4 (Blackwell; gated HF repo).
 install:
@@ -214,6 +215,7 @@ help:
 	@echo "Usage: make <target> [W=<worker>]"
 	@echo ""
 	@echo "  install         Install everything: deps, models, workers, web UI (backend+React build)"
+	@echo "                  Includes SoulX-Singer SVC + Seed-VC re-voicing on controller and workers"
 	@echo "                  (first run seeds config.yaml — set hosts: make install WORKERS=\"s1 s2 s3\")"
 	@echo "                  INSTALL_FLUX3=1 adds FLUX 3 Klein NVFP4 (Blackwell; accept BFL terms + set HF_TOKEN)"
 	@echo "  uninstall       Stop everything + remove the service and worker container stacks"

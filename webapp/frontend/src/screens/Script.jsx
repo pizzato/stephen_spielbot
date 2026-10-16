@@ -1648,7 +1648,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <p className="muted" style={{ fontSize: 12.5 }}>
                   {song.svc_available
                     ? <>Re-voicing uses <strong>{song.svc_engine_label || (song.svc_engine === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC')}</strong>, selected in Settings → Styles → Narrator &amp; audio. It always converts the sung original, and keeps both versions.</>
-                    : <>{song.svc_engine_label || (song.svc_engine === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC')} is not installed on the controller. Run <code>scripts/install_svc.sh</code> to enable re-voicing.</>}
+                    : <>{song.svc_engine_label || (song.svc_engine === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC')} is not installed on the controller. Run <code>make install</code> on the controller to install re-voicing and its models.</>}
                 </p>
               )}
               {song.song_url && (

@@ -159,17 +159,18 @@ localization, or a hand-burnt cover — the sweep never touches it: press
 ### The re-voice button is disabled or reports missing models
 
 Check **Settings → Styles → Narrator & audio → Singing voice conversion** for the
-selected engine, then repair its installation:
+selected engine, then re-run the installer on the controller:
 
 ```bash
-make svc-install          # controller and workers; W=s2 limits the worker side
+make install             # includes re-voicing runtimes and models on controller and workers
 ```
 
 Both SoulX-Singer SVC and Seed-VC must have their own runtime; the selected engine
 must be installed on the controller even when workers handle conversion. Keep the
 controller's Seed-VC environment: it also supplies Demucs and lyric alignment for
-SoulX. On an older worker stack, run `make install` first so both persistent runtime
-volumes exist. See [installation](installation.md#song-voice-conversion).
+SoulX. For a repair limited to re-voicing on an already deployed worker stack, use
+`make svc-install` (`W=s2` limits the worker side). See
+[installation](installation.md#song-voice-conversion).
 
 ### Re-voicing is unexpectedly slow
 

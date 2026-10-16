@@ -60,17 +60,20 @@ class SongConverterRoutingTests(_SongFilmCase):
                 self.assertTrue(data["svc_available"])
 
     def test_both_entry_points_report_the_selected_missing_install(self):
-        self._styles([_style("Default"), _style("Hero", svc_engine="seed-vc")])
-        with mock.patch("pipeline.svc.available", return_value=False) as available:
-            for endpoint, body in (
-                (backend.song_convert, backend.SongConvertBody),
-                (backend.remix_song_voice, backend.SongRevoiceBody),
-            ):
-                with self.assertRaises(HTTPException) as error:
-                    endpoint(body(work_dir=str(self.wd), voice="Nora"))
-                self.assertEqual(error.exception.status_code, 503)
-                self.assertIn("Seed-VC", error.exception.detail)
-                available.assert_called_with("seed-vc")
+        for engine, label in (("soulx-svc", "SoulX-SVC"), ("seed-vc", "Seed-VC")):
+            self._styles([_style("Default"), _style("Hero", svc_engine=engine)])
+            with self.subTest(engine=engine), \
+                 mock.patch("pipeline.svc.available", return_value=False) as available:
+                for endpoint, body in (
+                    (backend.song_convert, backend.SongConvertBody),
+                    (backend.remix_song_voice, backend.SongRevoiceBody),
+                ):
+                    with self.assertRaises(HTTPException) as error:
+                        endpoint(body(work_dir=str(self.wd), voice="Nora"))
+                    self.assertEqual(error.exception.status_code, 503)
+                    self.assertEqual(error.exception.detail,
+                                     f"{label} is not installed — run make install on the controller.")
+                    available.assert_called_with(engine)
 
     def test_explicit_global_step_override_is_retained(self):
         cfg = app.load_config()

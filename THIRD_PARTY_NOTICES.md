@@ -86,7 +86,7 @@ accepting BFL's conditions; no weights or prompt upsampler are bundled in this r
   are not dependencies of the application.
 - **Seed-VC** (alternative singing-voice conversion engine) —
   [GPL-3.0](https://github.com/Plachtaa/seed-vc/blob/main/LICENSE). Installed on the
-  controller by `scripts/install_svc.sh` and inside worker ComfyUI containers by
+  controller and inside worker ComfyUI containers by
   `make install` or `make svc-install`, in an environment separate from SoulX.
   It is invoked as a **separate process** (`pipeline/svc.py`), never imported into
   the application process; its model weights download from Hugging Face on first use. Selecting

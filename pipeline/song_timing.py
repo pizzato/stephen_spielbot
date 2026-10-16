@@ -172,7 +172,7 @@ def vocal_stem(track: Path) -> Path | None:
         out = svc.separate_vocals(track, stem)
         if out is None:
             logger.info("demucs is not installed — vocal timing will be "
-                        "measured on the mix (scripts/install_svc.sh adds it)")
+                        "measured on the mix (run make install on the controller)")
         return out
     except Exception:  # noqa: BLE001 — a failed separation must not fail the divide
         logger.warning("Vocal stem separation failed for %s — measuring the mix",
