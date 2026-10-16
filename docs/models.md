@@ -478,6 +478,10 @@ commands and [cluster deployment](cluster.md#song-re-voicing-rides-along-in-the-
 for persistent storage. Worker fallback keeps the selected engine; no automatic
 SoulX-to-Seed or Seed-to-SoulX substitution occurs.
 
+The isolated SoulX runtime retains its validated Transformers 4.41.2 dependency
+set. Upgrading that pin independently of its tokenizer, Hugging Face Hub and
+installer checks prevents the entire ComfyUI worker image from building.
+
 ## Gated weights
 
 Some Hugging Face repos require accepting a license. Set a **Hugging Face token** in
