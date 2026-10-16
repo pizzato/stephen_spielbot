@@ -6449,6 +6449,7 @@ def list_engines() -> dict:
     from pipeline.worker_pool import queue_depth
     cfg = gapp.load_config()
     probe_url = next((u for u in (cfg.get("comfy_workers") or []) if queue_depth(u, timeout=3) >= 0), None)
+    worker_updates: dict[str, str] = {}
 
     def _video_avail(e: dict) -> bool | None:
         """Model file present AND (when the engine needs newer ComfyUI nodes)
@@ -6459,11 +6460,6 @@ def list_engines() -> dict:
         for probe in e.get("extra_probes", []):
             if ok:
                 ok = engine_model_present(probe_url, probe)
-        node = e.get("requires_node")
-        if ok and node:
-            has_node = comfy_node_exists(probe_url, node)
-            if has_node is not True:
-                return has_node
         # The probe names the engine's UNET, which LoRA engines share with their
         # non-LoRA siblings — so a missing LoRA file (e.g. the converted LightX2V
         # one that only the installer writes) would still read "installed" and
@@ -6474,6 +6470,15 @@ def list_engines() -> dict:
                 probe_url, ("LoraLoaderModelOnly", "lora_name", e["lora"]))
             if has_lora is not True:
                 return has_lora
+        node = e.get("requires_node")
+        if ok and node:
+            has_node = comfy_node_exists(probe_url, node)
+            if has_node is False:
+                # The weights are already there. Downloading them again cannot
+                # add native nodes to an older running ComfyUI container.
+                worker_updates[e["key"]] = probe_url
+            if has_node is not True:
+                return has_node
         return ok
 
     return {
@@ -6494,6 +6499,7 @@ def list_engines() -> dict:
         "music_engines": eng.public_list_music(),
         "music_availability": {k: _video_avail(e) for k, e in eng.MUSIC_ENGINES.items()},
         "default_music_engine": eng.DEFAULT_MUSIC_ENGINE,
+        "worker_updates": worker_updates,
         "hf_token_set": bool((cfg.get("hf_token") or "").strip()),
         "probed": probe_url,
     }

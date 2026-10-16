@@ -136,6 +136,9 @@ FLUX 3 Image Klein NVFP4 notes:
   missing files to the other configured workers. `make download-models INSTALL_FLUX3=1`
   downloads the defaults plus FLUX 3 locally. Neither command selects it for styles.
   Plain `make install` installs worker support but leaves these optional weights out.
+  Settings' **Download** installs model files only. If it shows **worker update
+  required**, run `make start` on the controller to rebuild outdated ComfyUI
+  containers, then refresh Settings; downloading again does not upgrade the worker.
 - The worker image pins ComfyUI's **0.41 development snapshot `29e28e2b`**, after
   [native FLUX 3 support](https://github.com/Comfy-Org/ComfyUI/pull/17064) landed.
   The exact pin is shared by Docker, Compose and `make install`; `make start`

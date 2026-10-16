@@ -6,6 +6,14 @@ import { NEWS_CHECK_MODES, NEWS_RESEARCH_PROVIDERS, newsCheckLabel, newsProvider
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
   globalAutomation, resolveAutomation, automationSource } from '../styleUtils.js'
 
+function WorkerUpdateNotice({ url }) {
+  if (!url) return null
+  return <div style={{ color: 'var(--warn)', fontSize: 12 }}>
+    Model files are downloaded. ComfyUI on {url} needs an update.
+    Run <code>make start</code> on the controller to rebuild outdated workers, then refresh this page.
+  </div>
+}
+
 // ── Character turnaround sheet ───────────────────────────────────────────────
 // Several views of one character in one strip. The engine is picked HERE, per
 // generation, because the two trade off against each other: the image model
@@ -2199,6 +2207,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
                 {(engineInfo?.engines || []).map((e) => {
                   const avail = engineInfo?.availability?.[e.key]
+                  const updateWorker = engineInfo?.worker_updates?.[e.key]
                   const ins = engInstall[e.key]
                   const running = ins?.status === 'running'
                   return (
@@ -2207,18 +2216,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                         <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 600 }}>{e.label}</span>
                           {avail === true && <Chip tone="ok" dot>installed</Chip>}
-                          {avail === false && <Chip tone="warn">not installed</Chip>}
+                          {avail === false && <Chip tone="warn">{updateWorker ? 'worker update required' : 'not installed'}</Chip>}
                           {(e.commercial_label || !e.commercial_ok) && <Chip tone="info">{e.commercial_label || 'non-commercial'}</Chip>}
                         </div>
                         <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
                         {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
                         {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
-                        {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                        {ins?.status === 'done' && !updateWorker && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Model files downloaded</div>}
+                        <WorkerUpdateNotice url={updateWorker} />
                       </div>
                       <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
-                        disabled={running || avail === true}
+                        disabled={running || avail === true || !!updateWorker}
                         onClick={() => installEngine(e.key)}>
-                        {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                        {running ? 'Downloading…' : avail === true ? 'Installed' : updateWorker ? 'Downloaded' : 'Download'}
                       </Button>
                     </div>
                   )
@@ -2238,6 +2248,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {(engineInfo?.video_engines || []).map((e) => {
                 const avail = engineInfo?.video_availability?.[e.key]
+                const updateWorker = engineInfo?.worker_updates?.[e.key]
                 const ins = engInstall[e.key]
                 const running = ins?.status === 'running'
                 return (
@@ -2246,19 +2257,20 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 600 }}>{e.label}</span>
                         {avail === true && <Chip tone="ok" dot>installed</Chip>}
-                        {avail === false && <Chip tone="warn">not installed</Chip>}
+                        {avail === false && <Chip tone="warn">{updateWorker ? 'worker update required' : 'not installed'}</Chip>}
                         {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
                       </div>
                       <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
                       {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
                       {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
-                      {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                      {ins?.status === 'done' && !updateWorker && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Model files downloaded</div>}
+                      <WorkerUpdateNotice url={updateWorker} />
                     </div>
                     {e.downloadable && (
                       <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
-                        disabled={running || avail === true}
+                        disabled={running || avail === true || !!updateWorker}
                         onClick={() => installEngine(e.key)}>
-                        {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                        {running ? 'Downloading…' : avail === true ? 'Installed' : updateWorker ? 'Downloaded' : 'Download'}
                       </Button>
                     )}
                   </div>
@@ -2278,6 +2290,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {(engineInfo?.reference_engines || []).map((e) => {
                 const avail = engineInfo?.video_availability?.[e.key]
+                const updateWorker = engineInfo?.worker_updates?.[e.key]
                 const ins = engInstall[e.key]
                 const running = ins?.status === 'running'
                 return (
@@ -2286,19 +2299,20 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 600 }}>{e.label}</span>
                         {avail === true && <Chip tone="ok" dot>installed</Chip>}
-                        {avail === false && <Chip tone="warn">not installed</Chip>}
+                        {avail === false && <Chip tone="warn">{updateWorker ? 'worker update required' : 'not installed'}</Chip>}
                         {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
                       </div>
                       <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
                       {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
                       {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
-                      {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                      {ins?.status === 'done' && !updateWorker && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Model files downloaded</div>}
+                      <WorkerUpdateNotice url={updateWorker} />
                     </div>
                     {e.downloadable && (
                       <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
-                        disabled={running || avail === true}
+                        disabled={running || avail === true || !!updateWorker}
                         onClick={() => installEngine(e.key)}>
-                        {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                        {running ? 'Downloading…' : avail === true ? 'Installed' : updateWorker ? 'Downloaded' : 'Download'}
                       </Button>
                     )}
                   </div>
@@ -2318,6 +2332,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {(engineInfo?.music_engines || []).map((e) => {
                 const avail = engineInfo?.music_availability?.[e.key]
+                const updateWorker = engineInfo?.worker_updates?.[e.key]
                 const ins = engInstall[e.key]
                 const running = ins?.status === 'running'
                 return (
@@ -2326,18 +2341,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 600 }}>{e.label}</span>
                         {avail === true && <Chip tone="ok" dot>installed</Chip>}
-                        {avail === false && <Chip tone="warn">not installed</Chip>}
+                        {avail === false && <Chip tone="warn">{updateWorker ? 'worker update required' : 'not installed'}</Chip>}
                       </div>
                       <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
                       {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
                       {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
-                      {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                      {ins?.status === 'done' && !updateWorker && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Model files downloaded</div>}
+                      <WorkerUpdateNotice url={updateWorker} />
                     </div>
                     {e.downloadable && (
                       <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
-                        disabled={running || avail === true}
+                        disabled={running || avail === true || !!updateWorker}
                         onClick={() => installEngine(e.key)}>
-                        {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                        {running ? 'Downloading…' : avail === true ? 'Installed' : updateWorker ? 'Downloaded' : 'Download'}
                       </Button>
                     )}
                   </div>
