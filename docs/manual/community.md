@@ -8,6 +8,10 @@ video turned into queue items.
 Switch between **YouTube** and **X** at the top. With several accounts connected, a chip
 shows how many, and each card is tagged with the channel it came from.
 
+YouTube cards offer **View video** and **View comment** links to open the original
+video or jump to the comment on YouTube. X cards offer **View mention** to open the
+original post. Links open in a new tab and appear when the required IDs are available.
+
 Next to the platform toggle, a status filter and a **channel/account** dropdown narrow the
 cards: **Needs action** (requests awaiting a decision, reply drafts awaiting a send),
 **Requests**, **Approved**, **Rejected**, **Replied** — each with a count, and a comment

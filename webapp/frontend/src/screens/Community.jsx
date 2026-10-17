@@ -223,6 +223,13 @@ export default function Community() {
               {c.is_request ? <Chip tone="ok"><Icon name="check" style={{ fontSize: 10 }} /> Request</Chip> : <Chip tone="neutral">Not a request</Chip>}
             </div>
             <p className="body-1" style={{ fontSize: 14, margin: '10px 0 0' }}>{c.text}</p>
+            <div className="row gap-10 row--wrap mt-10" style={{ fontSize: 13 }}>
+              {platform === 'youtube' && c.video_id && <>
+                <a href={`https://www.youtube.com/watch?v=${encodeURIComponent(c.video_id)}`} target="_blank" rel="noopener noreferrer">View video ↗</a>
+                {c.comment_id && <a href={`https://www.youtube.com/watch?v=${encodeURIComponent(c.video_id)}&lc=${encodeURIComponent(c.comment_id)}`} target="_blank" rel="noopener noreferrer">View comment ↗</a>}
+              </>}
+              {platform === 'x' && c.comment_id && <a href={`https://x.com/i/status/${encodeURIComponent(c.comment_id)}`} target="_blank" rel="noopener noreferrer">View mention ↗</a>}
+            </div>
 
             {(c.replies?.length > 0) && (
               <div className="stack gap-6" style={{ marginTop: 10, paddingLeft: 12, borderLeft: '2px solid var(--line)' }}>
