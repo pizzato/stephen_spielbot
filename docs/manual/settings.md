@@ -703,6 +703,13 @@ Finished videos **always** collect in the publish queue
   releases them on cadence while they still show as unapproved. Turning it back off
   re-holds anything not yet published
 
+YouTube and X keep separate publishing clocks. To align upcoming releases, use the
+same **Videos per day** and **Publishing clock → Reset clock** time on the channel and
+account cards. First let any film already published on only one platform catch up on the
+other; otherwise the aligned slots can release different films. X waits for its film's
+YouTube upload to finish, so matching clocks allow the same release window rather than
+guaranteeing simultaneous posts. Subsequent intervals run from the actual release times.
+
 !!! danger "Automation posts to real channels"
     There is no dry-run mode. Turn the toggles on one at a time, with **Default privacy**
     on `private` until you trust the loop.

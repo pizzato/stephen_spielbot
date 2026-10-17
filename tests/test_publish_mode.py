@@ -329,6 +329,82 @@ class ApprovalGateTests(TempConfigCase):
         self.assertEqual(out, {"youtube": ["e1"]})
 
 
+class PublishQueueProjectionTests(TempConfigCase):
+    """Only destinations ready to release consume a projected cadence slot."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH",
+                              Path(self._tmp.name) / "publish_queue.json")
+        p.start()
+        self.addCleanup(p.stop)
+        for name, value in [("_reconcile_publish_queue", None),
+                            ("_publish_entry_scores", (0, None))]:
+            p = mock.patch.object(backend, name, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.write_config({"publish_require_approval": True,
+                           "youtube_channels": [{"id": "chan", "publish_per_day": 0.5}],
+                           "x_accounts": [{"id": "acct", "publish_per_day": 0.5}]})
+        self.next_at = time.time() + 3600
+        backend.pq.reset_clock("x", "acct", self.next_at)
+
+    def _entry(self, eid, yt_status="done", **over):
+        entry = {"id": eid, "work_dir": f"/tmp/{eid}", "title": eid,
+                 "source": "manual", "created_at": 1, "approved": True,
+                 "youtube": {"enabled": True, "channel": "chan", "status": yt_status},
+                 "x": {"enabled": True, "account": "acct", "status": "pending"}}
+        entry.update(over)
+        return entry
+
+    def test_youtube_wait_does_not_push_ready_x_behind_backlog(self):
+        backend.pq.save_queue([
+            self._entry("older", yt_status="pending"), self._entry("ready"),
+            self._entry("later")])
+        rows = backend.publish_queue_list()["items"]
+        self.assertTrue(rows[0]["x"]["waiting_for_youtube"])
+        self.assertNotIn("projected_at", rows[0]["x"])
+        self.assertNotIn("position", rows[0]["x"])
+        self.assertEqual(rows[1]["x"]["projected_at"], self.next_at)
+        self.assertEqual(rows[1]["x"]["position"], 1)
+        self.assertEqual(rows[2]["x"]["projected_at"], self.next_at + 48 * 3600)
+        self.assertEqual(rows[2]["x"]["position"], 2)
+        self.assertNotIn("waiting_for_youtube", backend.pq.load_queue()[0]["x"])
+
+    def test_uploading_youtube_waits_even_when_x_is_forced(self):
+        waiting = self._entry("waiting", yt_status="publishing")
+        waiting["x"]["force"] = True
+        backend.pq.save_queue([waiting, self._entry("ready")])
+        rows = backend.publish_queue_list()["items"]
+        self.assertTrue(rows[0]["x"]["waiting_for_youtube"])
+        self.assertNotIn("projected_at", rows[0]["x"])
+        self.assertTrue(rows[1]["is_next"])
+
+    def test_x_only_film_does_not_wait_for_youtube(self):
+        backend.pq.save_queue([self._entry(
+            "x-only", youtube={"enabled": False, "status": "skipped"})])
+        row = backend.publish_queue_list()["items"][0]
+        self.assertEqual(row["x"]["projected_at"], self.next_at)
+        self.assertNotIn("waiting_for_youtube", row["x"])
+
+    def test_held_or_disabled_destinations_do_not_take_a_slot(self):
+        disabled = self._entry("disabled", yt_status="pending")
+        disabled["x"]["enabled"] = False
+        backend.pq.save_queue([
+            self._entry("unapproved", approved=False), disabled, self._entry("ready")])
+        rows = backend.publish_queue_list()["items"]
+        self.assertNotIn("projected_at", rows[0]["x"])
+        self.assertNotIn("projected_at", rows[1]["x"])
+        self.assertEqual(rows[2]["x"]["position"], 1)
+
+    def test_ready_sticky_force_projects_now(self):
+        forced = self._entry("forced")
+        forced["x"]["force"] = True
+        backend.pq.save_queue([forced])
+        out = backend.publish_queue_list()
+        self.assertEqual(out["items"][0]["x"]["projected_at"], out["now"])
+
+
 class ClockResetTests(TempConfigCase):
     """A publishing-clock reset (pq.reset_clock) re-anchors a channel/account's
     cadence: releases made before the reset stop counting, the next release is
@@ -512,6 +588,45 @@ class StalePublishTargetTests(TempConfigCase):
         with mock.patch.object(backend, "_channel_for_work_dir", return_value="new"):
             backend._reconcile_publish_queue()
         self.assertEqual(backend.pq.load_queue()[0]["youtube"]["channel"], "old")
+
+    def test_pending_x_is_disabled_when_parent_style_removes_account(self):
+        cfg = {"default_style": "Parent", "x_account": "acct",
+               "styles": [{"name": "Parent", "x_account": ""},
+                          {"name": "Child", "parent": "Parent"}],
+               "x_accounts": [{"id": "acct"}]}
+        self.write_config(cfg)
+        (self.wd / "job_config.json").write_text('{"style_name": "Child"}')
+        self._queue()
+        entry = backend.pq.load_queue()[0]
+        entry["x"] = {"enabled": True, "account": "acct", "status": "pending"}
+        backend.pq.save_queue([entry])
+        backend._reconcile_publish_queue()
+        sub = backend.pq.load_queue()[0]["x"]
+        self.assertEqual(sub["status"], "skipped")
+        self.assertFalse(sub["enabled"])
+        self.assertEqual(sub["account"], "")
+        self.assertFalse(sub.get("removed"))
+        # This is a configuration skip, so assigning an account again restores it.
+        cfg["styles"][0]["x_account"] = "acct"
+        self.write_config(cfg)
+        backend._reconcile_publish_queue()
+        sub = backend.pq.load_queue()[0]["x"]
+        self.assertEqual(sub["status"], "pending")
+        self.assertTrue(sub["enabled"])
+        self.assertEqual(sub["account"], "acct")
+
+    def test_removing_account_preserves_inflight_and_published_x(self):
+        for status in ("publishing", "done"):
+            with self.subTest(status=status):
+                self._queue()
+                entry = backend.pq.load_queue()[0]
+                sub = {"enabled": True, "account": "acct", "status": status,
+                       "released_at": time.time()}
+                entry["x"] = sub
+                backend.pq.save_queue([entry])
+                with mock.patch.object(backend, "_x_account_for_work_dir", return_value=""):
+                    backend._reconcile_publish_queue()
+                self.assertEqual(backend.pq.load_queue()[0]["x"], sub)
 
 
 class ErroredReleaseCadenceTests(TempConfigCase):
