@@ -150,6 +150,7 @@ export default function PublishSchedule({ go, meta = {}, showHistory, showApprov
         <Icon name={icon} brand style={{ width: 16, color: 'var(--ink-3)' }} />
         <span className="muted" style={{ minWidth: 90 }}>{target}</span>
         <Chip tone={tone}>{label}</Chip>
+        {sub.waiting_for_youtube && <span className="muted">Waiting for YouTube upload</span>}
         {when && <span className="muted"><Icon name="clock" style={{ fontSize: 10 }} /> {when}{sub.position > 1 ? ` · #${sub.position} in line` : ''}{cad.count_today ? ` · ${cad.count_today} today` : ''}</span>}
         {sub.url && <a href={sub.url} target="_blank" rel="noopener" className="muted">view ↗</a>}
         {sub.error && <span style={{ color: 'var(--danger)' }}>{sub.error}</span>}

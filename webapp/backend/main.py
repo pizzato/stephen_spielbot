@@ -13723,10 +13723,10 @@ def publish_queue_list() -> dict:
             and not cfg.get("publish_auto_publish_unapproved")
             and not (skip_comment and e.get("source") == "comment")
             and not e.get("approved"))
-    # Project a concrete release time per waiting target: the j-th still-waiting
-    # entry for a channel/account posts j cadence-steps after that key's next
-    # eligible time. Comment requests that bypass the schedule go on the next
-    # tick. Tag the single earliest entry as the next to publish. These fields are
+    # Project release times for targets ready to post. X still waiting for its
+    # YouTube link takes no slot: the governor skips it and can release a later
+    # ready film. Upload completion is unknown, so show that dependency instead
+    # of inventing an ETA. Tag the earliest ready target as next. These fields are
     # response-only (added to the in-memory copy, never saved).
     cad = {("youtube", k): v for k, v in chans.items()}
     cad.update({("x", k): v for k, v in accts.items()})
@@ -13738,7 +13738,11 @@ def publish_queue_list() -> dict:
         bypass = skip_comment and e.get("source") == "comment"
         for plat, keyf in (("youtube", "channel"), ("x", "account")):
             sub = e.get(plat) or {}
-            if sub.get("status") != "pending":
+            if not sub.get("enabled") or sub.get("status") != "pending":
+                continue
+            yt_sub = e.get("youtube") or {}
+            if plat == "x" and yt_sub.get("enabled") and yt_sub.get("status") != "done":
+                sub["waiting_for_youtube"] = True
                 continue
             k = (plat, sub.get(keyf) or "")
             info = cad.get(k) or {}
@@ -13746,7 +13750,8 @@ def publish_queue_list() -> dict:
             base = info.get("next_eligible") or now
             j = counters.get(k, 0)
             counters[k] = j + 1
-            proj = now if bypass else (base + j * iv * 60)
+            force = bypass or (plat == "x" and sub.get("force"))
+            proj = now if force else (base + j * iv * 60)
             sub["projected_at"] = proj
             sub["position"] = j + 1
             if best is None or proj < best[0]:
@@ -17575,6 +17580,13 @@ def _reconcile_publish_queue_locked() -> None:
             live = resolve(p)
             if live and live != (sub.get(keyf) or ""):
                 sub[keyf] = live
+                changed = True
+            elif (keyf == "account" and not live and sub.get("status") == "pending"
+                  and not meta.get("x_tweet_id")):
+                # A style can opt out of X after this entry was queued. Retire
+                # the stale destination without marking it as a user removal;
+                # assigning an account again can restore it below.
+                sub.update(enabled=False, account="", status="skipped", force=False)
                 changed = True
         # Legacy entries with no X account were configuration skips, not user
         # removals. Pick up a newly assigned account without reviving removals

@@ -116,11 +116,19 @@ The queue in release order — top first, as each cadence allows.
 - **Publish now** releases an entry immediately, ignoring the cadence
 - **Remove** cancels waiting destinations and remembers the choice; published history and schedule timestamps are retained
 
+Release estimates and positions count destinations ready to publish. When a film is
+also going to YouTube, its X row shows **Waiting for YouTube upload** until the link is
+available, including after **Publish now**. It does not reserve an X slot or delay a
+later film whose YouTube upload is already complete. The X estimate appears once that
+dependency clears; ready forced posts show **now**.
+
 Each line shows the channel or account the film will publish to — its style's, looked up
 fresh each time the queue loads. Reassign a style to a different channel and everything
 still waiting moves with it; already-published entries keep the channel they went out on.
 Assigning an X account also activates queued destinations previously disabled because
-no account was configured. Destinations you explicitly removed stay removed.
+no account was configured. Clearing a style's X account cancels its pending X destinations;
+uploads already in progress and published history are retained. Destinations you explicitly
+removed stay removed.
 
 **Scan for unpublished** pulls in the backlog — every finished film that never made it into
 the queue. **Cadence settings** jumps to Settings.
