@@ -445,9 +445,15 @@ Scheduled monitoring runs only while the backend is running. A disabled monitor 
 
 ### Characters
 
-A read-only summary of the cast this style inherits: every **global** character, plus
+A summary of the cast available to this style: by default every **global** character, plus
 the ones that belong to this style or a style above it in the hierarchy. Manage (and
 move) them on the **Characters** tab.
+
+Enable **Do not inherit parent and global characters** to use only library characters
+owned by this style. Save settings to apply it to singer selection, script casting,
+and rendering. Film-specific characters still work, and assets are unaffected. The
+toggle defaults to off and applies only to the selected style; children do not inherit
+the toggle. Turning it off restores the global and ancestor cast.
 
 ---
 
@@ -456,9 +462,10 @@ move) them on the **Characters** tab.
 The character library, browsed by home. A picker mirroring the **Styles** tree sits on
 top — **Global** first, then the style hierarchy, each pill counting the characters that
 live there — and clicking a pill lists that home's characters. **Global characters** are
-inherited by every style automatically; a character that **belongs to a style** is used
+inherited by every style unless it enables **Do not inherit parent and global characters**;
+a character that **belongs to a style** is used
 only by that style and the styles under it — so a parent style's cast flows to all its
-children. Each card has **name**, **also known as**, **appearance**, **sex**, **age**,
+children unless they enable that toggle. Each card has **name**, **also known as**, **appearance**, **sex**, **age**,
 **background** (nationality, language, accent — free text), **voice**, an enabled
 switch, and a **Belongs to** picker to move it between the global pool and any style.
 Sex and age drive the library-voice auto-cast; together with background they also define
@@ -484,7 +491,8 @@ See [Characters](../characters.md) for how consistency is enforced across scenes
 ## Assets
 
 The location and wardrobe **catalogue** — reference images that outlive one film, scoped
-to styles exactly like characters (global pool + per-style, children inherit). A film's
+to styles (global pool + per-style, children inherit). The character inheritance
+toggle does not affect assets. A film's
 [Characters & Artifacts](script.md#characters-artifacts) wall shows the catalogue entries it
 actually uses, read-only; a film's own visual of the same name shadows the catalogue one.
 Each asset has a name, kind, description, an owning style, and a reference image —

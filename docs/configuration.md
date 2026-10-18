@@ -42,6 +42,13 @@ Two rules matter:
 - **Child styles are stored sparse.** A style with a `parent` only stores what it
   overrides; the rest resolves through the chain at read time.
 
+Character inheritance can be disabled per style with
+`exclude_inherited_characters: true`, exposed as **Do not inherit parent and global
+characters** under **Settings → Styles → Characters**. That style then uses only its
+own library characters, plus film-specific characters. The option defaults to false
+and is not inherited by child styles. Other style settings and assets keep their
+normal inheritance.
+
 A style can also automate itself differently from the rest of the studio. Its
 [automation](manual/settings.md#scope-global-then-per-style) overrides live in a sparse
 `automation` block on the style — only the flags it changes — over the global baseline in
