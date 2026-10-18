@@ -160,8 +160,8 @@ rsync -az          "$REPO_ROOT/.dockerignore" "$BUILD_DEST/.dockerignore"
 _sh "cat > ~/$REMOTE_BUILD_DIR/docker/.env" <<ENV
 MODELS_DIR=${REMOTE_MODELS}
 COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
-# ComfyUI 0.41 development snapshot with native FLUX 3 (PR #17064).
-COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c
+# ComfyUI 0.41.3 release with native FLUX 3 (PR #17064).
+COMFYUI_REF=8713616fcc321624e306bbd36be5906203dcb0dc
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}
@@ -183,8 +183,9 @@ echo "[deploy] models mounted from $TARGET:$REMOTE_MODELS"
 # If they're missing and a MODEL_SOURCE host is given, rsync them over (host↔host
 # via SSH agent forwarding); otherwise warn — the build works, but renders need them.
 _flux3_models_present() {
-    _sh "[[ -f '$REMOTE_MODELS/diffusion_models/flux3_image_klein_sd_nvfp4.safetensors' &&
+    _sh "[[ -f '$REMOTE_MODELS/diffusion_models/flux3-image-klein-nvfp4.safetensors' &&
             -f '$REMOTE_MODELS/text_encoders/qwen3vl_4b_int8_convrot.safetensors' &&
+            -f '$REMOTE_MODELS/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors' &&
             -f '$REMOTE_MODELS/vae/flux2-vae.safetensors' ]]"
 }
 if _sh "[[ -f '$REMOTE_MODELS/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors' && -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' && -f '$REMOTE_MODELS/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors' ]]" 2>/dev/null &&

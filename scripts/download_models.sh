@@ -355,16 +355,18 @@ fi
 # ── FLUX 3 Klein NVFP4 (optional generation + character references) ──────────
 if [[ "${INSTALL_FLUX3:-0}" == "1" ]]; then
     echo ""
-    echo "--- FLUX 3 Klein NVFP4 (~10.5 GB; Blackwell GPU required) ---"
+    echo "--- FLUX 3 Klein NVFP4 + prompt upsampler (~17.2 GB; Blackwell GPU required) ---"
     echo "    FLUX Kommunity License: commercial output generation is conditional."
     echo "    Accept https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy"
     echo "    and use HF_TOKEN or existing HF CLI credentials for gated downloads."
     download "black-forest-labs/flux-3-image-klein-comfy" \
-        "diffusion_models/flux3_image_klein_sd_nvfp4.safetensors" "models/diffusion_models"
+        "diffusion_models/flux3-image-klein-nvfp4.safetensors" "models/diffusion_models"
     download "black-forest-labs/flux-3-image-klein-comfy" \
         "text_encoders/qwen3vl_4b_int8_convrot.safetensors" "models/text_encoders"
     download "black-forest-labs/flux-3-image-klein-comfy" \
         "vae/flux2-vae.safetensors" "models/vae"
+    download "black-forest-labs/flux-3-image-klein-comfy" \
+        "text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors" "models/text_encoders"
 fi
 
 # ── FLUX.1 schnell (legacy image engine) — OPT-IN ─────────────────────────────

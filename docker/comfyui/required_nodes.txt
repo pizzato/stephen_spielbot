@@ -16,6 +16,9 @@
 TextEncodeQwenImage21            # ComfyUI core (>= v0.37.0, Qwen-Image 2.1)
 Flux3LayoutPrompt               # ComfyUI core native FLUX 3 loader sentinel (PR #17064)
 ReferenceMultiLatent            # ComfyUI core (FLUX 3 character references)
+TextGenerate                    # ComfyUI core (local prompt upsampling)
+BatchImagesNode                 # ComfyUI core (upsampler reference images)
+ModelSamplingFlux               # ComfyUI core (explicit timestep shift)
 VHS_LoadVideoFFmpeg              # ComfyUI-VideoHelperSuite
 VHS_VideoCombine                 # ComfyUI-VideoHelperSuite
 LTXICLoRALoaderModelOnly         # ComfyUI-LTXVideo (IC-LoRA spatial upscaler)

@@ -6445,15 +6445,17 @@ def list_engines() -> dict:
     """Engine registry for the Settings picker, plus best-effort availability
     (probed on a representative reachable worker via ComfyUI /object_info)."""
     from pipeline import engines as eng
-    from pipeline.comfyui import comfy_node_exists, engine_model_present
+    from pipeline.comfyui import comfy_node_exists, comfyui_version, engine_model_present
     from pipeline.worker_pool import queue_depth
     cfg = gapp.load_config()
     probe_url = next((u for u in (cfg.get("comfy_workers") or []) if queue_depth(u, timeout=3) >= 0), None)
     worker_updates: dict[str, str] = {}
+    worker_version = None
 
     def _video_avail(e: dict) -> bool | None:
         """Model file present AND (when the engine needs newer ComfyUI nodes)
         the node class registered — False pinpoints "worker needs an update"."""
+        nonlocal worker_version
         if not probe_url:
             return None
         ok = engine_model_present(probe_url, e.get("probe"))
@@ -6470,8 +6472,9 @@ def list_engines() -> dict:
                 probe_url, ("LoraLoaderModelOnly", "lora_name", e["lora"]))
             if has_lora is not True:
                 return has_lora
-        node = e.get("requires_node")
-        if ok and node:
+        for node in [e.get("requires_node"), *e.get("extra_nodes", [])]:
+            if not ok or not node:
+                continue
             has_node = comfy_node_exists(probe_url, node)
             if has_node is False:
                 # The weights are already there. Downloading them again cannot
@@ -6479,6 +6482,14 @@ def list_engines() -> dict:
                 worker_updates[e["key"]] = probe_url
             if has_node is not True:
                 return has_node
+        if ok and e.get("min_comfyui"):
+            if worker_version is None:
+                worker_version = comfyui_version(probe_url)
+            if not worker_version:
+                return None
+            if worker_version < tuple(e["min_comfyui"]):
+                worker_updates[e["key"]] = probe_url
+                return False
         return ok
 
     return {

@@ -143,8 +143,9 @@ FLUX.1 schnell ignores them (logged, no crash).
 - FLUX 3 uses `workflows/flux3_t2i.json` with `ReferenceMultiLatent` and
   ordered `images.image0`, `images.image1`, … inputs. Character names bind to
   `<ref_image_0>`, `<ref_image_1>`, …. Up to 10 references are accepted by the
-  graph; the scene cap below remains two. Output keeps the requested scene canvas,
-  independent of portrait dimensions.
+  graph; the scene cap below remains two. The same ordered images also feed BFL's
+  local prompt upsampler. FLUX 3 samples at approximately 2 megapixels and resizes
+  to the requested scene canvas, independent of portrait dimensions.
 - `generate_with_engine(..., reference_images=[...])` uploads each reference and runs
   the matching graph. Engines without reference support ignore the images (logged, no crash).
 - `_scene_reference_images()` in `app.py` maps a scene's matched characters to their

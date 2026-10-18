@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import random
 import re
 import shutil
@@ -2262,34 +2263,51 @@ def _generate_qwen(engine: dict, prompt: str, output_path: Path, *,
 def _generate_flux3(engine: dict, prompt: str, output_path: Path, *,
                     width: int, height: int, seed: int | None,
                     refs: list[Path], comfy_url: str) -> Path:
-    # The native loader and this sentinel node landed together, after the
-    # development branch already reported 0.41.0. Check the actual capability.
-    if comfy_node_exists(comfy_url, engine["requires_node"]) is not True:
-        raise RuntimeError("FLUX 3 needs native ComfyUI FLUX 3 support — rebuild "
-                           f"the worker at {comfy_url} with make install.")
+    for node in [engine["requires_node"], *engine.get("extra_nodes", [])]:
+        if comfy_node_exists(comfy_url, node) is not True:
+            raise RuntimeError(f"FLUX 3 needs ComfyUI node {node} — rebuild "
+                               f"the worker at {comfy_url} with make install.")
     if len(refs) > 10:
         logger.warning("[comfy] FLUX 3: trimmed references to 10 (model cap)")
         refs = refs[:10]
+    # BFL's revised workflow targets 2 * 1024**2 pixels on a 16-pixel grid.
+    # Keep the caller's existing output canvas; only this engine samples larger.
+    width, height = max(16, int(width) // 16 * 16), max(16, int(height) // 16 * 16)
+    scale = max(1.0, math.sqrt(2 * 1024**2 / (width * height)))
+    gen_width = round(width * scale / 16) * 16
+    gen_height = round(height * scale / 16) * 16
+    seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+    prompts = json.loads(_load_workflow("prompts/flux3.json"))
+    request = f"TARGET CANVAS: {width}:{height}\n{prompt}"
+    if refs:
+        references = ", ".join(f"<ref_image_{i}>" for i in range(len(refs)))
+        request = (f"Reference images follow in attachment order: {references}.\n"
+                   f"User request: {request}\nOutput the caption.")
     workflow = _fill_template(_load_workflow(engine["t2i_workflow"]), {
         "UNET": engine["model_file"], "CLIP": engine["clip_t5"], "VAE": engine["vae"],
-        "POSITIVE_PROMPT": prompt,
-        # EmptyFlux2LatentImage uses a 16-pixel spatial grid.
-        "WIDTH": max(16, int(width) // 16 * 16),
-        "HEIGHT": max(16, int(height) // 16 * 16),
+        "UPSAMPLER": engine["prompt_upsampler"], "POSITIVE_PROMPT": request,
+        "SYSTEM_PROMPT": prompts["i2i" if refs else "t2i"],
+        "PRESENCE_PENALTY": 0.0 if refs else 1.5,
+        "WIDTH": gen_width, "HEIGHT": gen_height,
+        "OUTPUT_WIDTH": width, "OUTPUT_HEIGHT": height,
+        "SHIFT": math.log(16.0),
         "STEPS": int(engine["steps"]),
-        "SEED": seed if seed is not None else random.randint(0, 2**32 - 1),
+        "SEED": seed,
     })
     if refs:
         workflow["17"] = {"class_type": "ReferenceMultiLatent", "inputs": {
             "positive": ["4", 0], "negative": ["5", 0], "vae": ["3", 0],
             "resolution": "resize", "resolution.megapixels": 1.0,
         }}
+        workflow["18"] = {"class_type": "BatchImagesNode", "inputs": {}}
         for i, path in enumerate(refs):
             node = str(20 + i)
             workflow[node] = {"class_type": "LoadImage", "inputs": {
                 "image": _upload_image(path, comfy_url=comfy_url),
             }}
             workflow["17"]["inputs"][f"images.image{i}"] = [node, 0]
+            workflow["18"]["inputs"][f"images.image{i}"] = [node, 0]
+        workflow["11"]["inputs"]["image"] = ["18", 0]
         workflow["7"]["inputs"]["positive"] = ["17", 0]
         workflow["7"]["inputs"]["negative"] = ["17", 1]
         # Keep the requested canvas; the reference node's empty latent uses

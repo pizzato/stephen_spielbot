@@ -50,7 +50,9 @@ export a Hugging Face read token as `HF_TOKEN`, then run:
 make install INSTALL_FLUX3=1
 ```
 
-This also repairs missing FLUX 3 files on existing workers. Select it afterwards
+This also repairs the four-file FLUX 3 bundle on existing workers, including the
+local prompt upsampler and renamed checkpoint (~17.2 GB total). It installs
+ComfyUI 0.41.3; existing style selections are unchanged. Select it afterwards
 under **Settings → Styles → Image model → Generation**. Plain `make install`
 installs the supporting ComfyUI snapshot without downloading the optional weights.
 See [model requirements and licence](models.md#image-engines-per-style).
