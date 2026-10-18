@@ -147,6 +147,9 @@ FLUX.1 schnell ignores them (logged, no crash).
   (`workflows/qwen_image_2_1_t2i.json`) with one `LoadImage` per reference wired
   into `TextEncodeQwenImage21` as `images.image_1`, `images.image_2`, …. The
   prompt cites each character as `<image1>`, `<image2>`.
+  Qwen-Image 2.1 Turbo uses the same reference binding through
+  `workflows/qwen_image_2_1_turbo_t2i.json`, with its fixed eight-step sampler
+  and prefix cache. Both paths keep the scene canvas independent of reference size.
 - FLUX 3 uses `workflows/flux3_t2i.json` with `ReferenceMultiLatent` and
   ordered `images.image0`, `images.image1`, … inputs. Character names bind to
   `<ref_image_0>`, `<ref_image_1>`, …. Up to 10 references are accepted by the

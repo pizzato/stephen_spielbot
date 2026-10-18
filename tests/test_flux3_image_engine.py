@@ -201,25 +201,35 @@ DEFAULT_SENTINELS = [
     "models/diffusion_models/flux-2-klein-4b.safetensors",
 ]
 FLUX3_FILES = [f'{m["dir"]}/{m["file"]}' for m in ENGINE["models"]]
+OPTIONAL_BUNDLES = [
+    ("flux3-klein-nvfp4", "INSTALL_FLUX3"),
+    ("qwen-image-2.1-turbo", "INSTALL_QWEN_TURBO"),
+]
 
 
-@pytest.mark.parametrize("missing_index", [1, 3])
-def test_make_install_detects_missing_optional_encoder_on_an_existing_install(tmp_path, missing_index):
+@pytest.mark.parametrize("key,flag", OPTIONAL_BUNDLES)
+def test_make_install_detects_missing_optional_bundle_on_an_existing_install(tmp_path, key, flag):
+    files = [f'{m["dir"]}/{m["file"]}' for m in engines.get(key)["models"]]
     source = (ROOT / "scripts/install.sh").read_text()
     function = source[source.index("_models_present_on() {"):source.index("_ask_hf_token() {")]
     code = 'is_local_host() { [[ "$1" == localhost || "$1" == 127.0.0.1 ]]; };\n' + function
     code += '\n_models_present_on 127.0.0.1'
-    env = {"COMFY_DIR": str(tmp_path), "INSTALL_FLUX3": "1"}
+    env = {"COMFY_DIR": str(tmp_path), flag: "1"}
     touch_files(tmp_path, DEFAULT_SENTINELS)
-    assert shell(code, {**env, "INSTALL_FLUX3": "0"}).returncode == 0
+    assert shell(code, {**env, flag: "0"}).returncode == 0
     assert shell(code, env).returncode != 0
-    touch_files(tmp_path, FLUX3_FILES)
+    touch_files(tmp_path, files)
     assert shell(code, env).returncode == 0
-    (tmp_path / FLUX3_FILES[missing_index]).unlink()
-    assert shell(code, env).returncode != 0
+    for file in files:
+        (tmp_path / file).unlink()
+        assert shell(code, env).returncode != 0
+        touch_files(tmp_path, [file])
 
 
-def test_downloader_installs_registry_bundle_and_skips_present_files(tmp_path):
+@pytest.mark.parametrize("key,flag", OPTIONAL_BUNDLES)
+def test_downloader_installs_registry_bundle_and_skips_present_files(tmp_path, key, flag):
+    engine = engines.get(key)
+    files = [f'{m["dir"]}/{m["file"]}' for m in engine["models"]]
     # Exercise the real shell downloader with a local fake HF CLI; no network or weights.
     script = tmp_path / "scripts/download_models.sh"
     script.parent.mkdir()
@@ -240,30 +250,31 @@ with open(os.environ["HF_TEST_LOG"], "a") as log:
     models = tmp_path / "comfy"
     models.mkdir()
     log = tmp_path / "downloads.log"
-    env = {"INSTALL_FLUX3": "1", "HF_TEST_LOG": str(log), "SKIP_LTX": "1",
+    env = {flag: "1", "HF_TEST_LOG": str(log), "SKIP_LTX": "1",
            "SKIP_FLUX2": "1", "HF_TOKEN": "", "ENGINE_MODELS": ""}
     cmd = f'bash "{script}" "{models}"'
     proc = shell(cmd, env)
     assert proc.returncode == 0, proc.stderr
-    for file in FLUX3_FILES:
+    for file in files:
         assert (models / file).is_file()
     initial = log.read_text()
     assert shell(cmd, env).returncode == 0
     assert log.read_text() == initial
-    (models / FLUX3_FILES[1]).unlink()
-    proc = shell(cmd, {**env, "FAIL_MODEL": ENGINE["models"][1]["remote"]})
+    (models / files[1]).unlink()
+    proc = shell(cmd, {**env, "FAIL_MODEL": engine["models"][1]["remote"]})
     assert proc.returncode != 0
     assert "Model download complete" not in proc.stdout
 
 
-@pytest.mark.parametrize("missing_index", [1, 3])
-def test_worker_syncs_optional_bundle_even_when_default_models_exist(tmp_path, missing_index):
+@pytest.mark.parametrize("key,flag", OPTIONAL_BUNDLES)
+def test_worker_syncs_optional_bundle_even_when_default_models_exist(tmp_path, key, flag):
+    files = [f'{m["dir"]}/{m["file"]}' for m in engines.get(key)["models"]]
     source = (ROOT / "scripts/install_worker_container.sh").read_text()
     block = source[source.index("_flux3_models_present() {"):source.index("# ── 4. Stop")]
     dest = tmp_path / "worker"
     touch_files(dest, DEFAULT_SENTINELS)
     source_models = tmp_path / "source"
-    touch_files(source_models, FLUX3_FILES)
+    touch_files(source_models, files)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     rsync = bin_dir / "rsync"
@@ -275,17 +286,17 @@ if source.is_dir():
 ''')
     rsync.chmod(0o755)
     env = {"REMOTE_MODELS": str(dest / "models"), "MODEL_SOURCE": "source",
-           "TARGET": "localhost", "LOCAL": "true", "INSTALL_FLUX3": "1",
+           "TARGET": "localhost", "LOCAL": "true", flag: "1",
            "TEST_SOURCE_MODELS": str(source_models / "models"),
            "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
     code = '_sh() { bash -c "$*"; };\n' + block
     proc = shell(code, env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "rsyncing" in proc.stdout
-    assert all((dest / f).is_file() for f in FLUX3_FILES)
+    assert all((dest / f).is_file() for f in files)
     assert "rsyncing" not in shell(code, env).stdout
-    (dest / FLUX3_FILES[missing_index]).unlink()
-    (source_models / FLUX3_FILES[missing_index]).unlink()
+    (dest / files[-1]).unlink()
+    (source_models / files[-1]).unlink()
     proc = shell(code, env)
     assert proc.returncode != 0
     assert "bundle incomplete" in proc.stdout
