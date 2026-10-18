@@ -302,6 +302,16 @@ marks a single character; `*asterisks*` mark the exact characters they wrap.
 | **YouTube description suffix** | Appended to every description |
 | **Attribution footer / X hashtags / YouTube tags** | The open-source attribution added to published videos |
 
+For music videos, use **Extra script instructions** to set the balance of singing,
+non-singing narrative scenes and artist-free imagery. Ask for cutaways throughout the
+song, including sung passages, and describe when people should act without miming.
+Keep **Visual style** focused on lighting, palette and photographic treatment: it is
+added to every image prompt, and naming a performer there can pull their character
+reference into a shot intended to be empty. Put identity and wardrobe rules in the
+character definition or script instructions, conditional on that person being visible.
+Clothing changes requested in a style apply to future videos using that style; use a
+film's own brief or assigned wardrobe for a change specific to one video.
+
 ### Video models
 
 A film can hold two kinds of scene, and each has its own model, picked side by side:
