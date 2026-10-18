@@ -950,12 +950,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // `style_name` and its visual-style TEXT in `style`, and matching the text
   // against the hierarchy offered none of the style's own cast.
   const styleKey = job?.style_name || job?.style || castStyles.defaultStyle
+  const castStyle = castStyles.styles.find((s) => s.name === styleKey)
   const lineageNames = new Set(styleLineage(castStyles.styles, styleKey).map((s) => s.name))
   // "(none)" imposes no STYLE cast but still sees the global pool — mirrors
   // the backend's _style_characters, whose resolver casts those at render.
   const styleCast = styleKey === '(none)'
     ? globalCast.filter((x) => !x.style).map((x) => x.name)
-    : globalCast.filter((x) => !x.style || lineageNames.has(x.style)).map((x) => x.name)
+    : globalCast.filter((x) => castStyle?.exclude_inherited_characters
+      ? x.style === styleKey
+      : !x.style || lineageNames.has(x.style)).map((x) => x.name)
   const castOpts = [...new Set([...characters.map((c) => c.name), ...styleCast])].filter(Boolean)
 
   // Jump the page to a scene's card (the thumbnail rail's click action).

@@ -59,8 +59,15 @@ Characters live in a single top-level `cfg["characters"]` list; each entry carri
   in the [style hierarchy](configuration.md) (children inherit the parent's cast;
   siblings and unrelated styles never see it).
 
+A style can opt out with **Settings → Styles → Characters → Do not inherit parent
+and global characters** (`exclude_inherited_characters: true`). Its library cast
+then contains only characters owned by that style, including for song singer selection,
+script casting, and rendering. Film-specific characters remain available; assets are
+unaffected. The toggle defaults to off and is set independently on each style, rather
+than inherited from a parent.
+
 `_style_characters(cfg, style_name)` resolves a style's effective cast (global pool +
-its lineage, library order; the `(none)` experiment style gets nothing). The Settings →
+its lineage unless opted out, library order; the `(none)` experiment style gets the global pool). The Settings →
 **Characters** tab has a scope picker mirroring the Styles tab's tree — a **Global**
 pill first, then the style hierarchy, each pill showing how many characters live there;
 picking a scope lists the characters homed in it, and each card has a **Belongs to**
@@ -268,8 +275,8 @@ new cast become per-script.
   generation/upload, and **Promote to catalogue** — `promote_script_character()` copies
   the character (and its look image) into the library scoped to the job's style, so
   that style and its children reuse it. One-way; the per-script copy stays.
-- At render time `_job_characters()` merges the cast the style inherits (global pool +
-  lineage) with the script's own; a per-script character shadows a catalogue one with
+- At render time `_job_characters()` merges the style's available library cast
+  (respecting its character inheritance toggle) with the script's own; a per-script character shadows a catalogue one with
   the same name.
 
 ## Deploy notes

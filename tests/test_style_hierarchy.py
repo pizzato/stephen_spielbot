@@ -353,6 +353,55 @@ class CharacterScopeHierarchyTests(TempConfigCase):
     to every style, a style's own characters flow to its descendants, and a
     promote from a job scopes the new catalogue entry to that job's style."""
 
+    def test_character_opt_out_round_trip_and_consumers(self):
+        self.write_config({
+            "characters": [
+                {"id": "global", "name": "Global", "description": "global singer"},
+                {"id": "parent", "name": "Parent", "description": "parent singer", "style": "Root"},
+                {"id": "own", "name": "Own", "description": "own singer", "style": "Kid"},
+            ],
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+            "styles": [_style("Root"),
+                       _child("Kid", "Root", exclude_inherited_characters=True),
+                       _child("Grandkid", "Kid")],
+            "default_style": "Kid",
+        })
+        cfg = app.load_config()
+        app.save_config(cfg)
+        cfg = app.load_config()
+        for name in ("Kid", "", "unknown"):
+            self.assertEqual([c["id"] for c in app._style_characters(cfg, name)], ["own"])
+        self.assertEqual([c["id"] for c in app.song_singer_candidates(cfg, "Kid")], ["own"])
+        self.assertEqual(app.pick_song_singer(cfg, "Kid", "Global Parent")["id"], "own")
+        self.assertEqual(
+            [c["id"] for c in app._requested_characters(cfg, "Kid", "Global Parent Own")],
+            ["own"],
+        )
+        wd, cid = self._seed_script_char()
+        self.assertEqual([c["id"] for c in app._job_characters(cfg, "Kid", wd)], ["own", cid])
+        # This is a per-style choice; other styles retain normal inheritance.
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, "Grandkid")],
+                         ["global", "parent", "own"])
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, app.NO_STYLE)], ["global"])
+        kid = next(s for s in cfg["styles"] if s["name"] == "Kid")
+        kid["exclude_inherited_characters"] = False
+        app.save_config(cfg)
+        self.assertEqual([c["id"] for c in app._style_characters(app.load_config(), "Kid")],
+                         ["global", "parent", "own"])
+
+    def test_opt_out_with_no_own_characters_and_root_style(self):
+        cfg = {
+            "styles": [_style("Root", exclude_inherited_characters=True),
+                       _child("Kid", "Root", exclude_inherited_characters=True)],
+            "characters": [{"id": "global", "name": "Global"},
+                           {"id": "parent", "name": "Parent", "style": "Root"}],
+            "assets": [{"id": "prop", "name": "Prop", "style": "Root"}],
+        }
+        self.assertEqual(app._style_characters(cfg, "Kid"), [])
+        self.assertIsNone(app.pick_song_singer(cfg, "Kid", "Global Parent"))
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, "Root")], ["parent"])
+        self.assertEqual([a["id"] for a in app.style_assets(cfg, "Kid")], ["prop"])
+
     def _seed_script_char(self):
         wd = self.output_dir / "vid-20260101-000000"
         wd.mkdir(parents=True, exist_ok=True)

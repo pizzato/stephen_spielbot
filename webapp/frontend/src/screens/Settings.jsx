@@ -1734,7 +1734,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     // or any other field set to the parent's current effective value, stores
     // nothing — the field keeps following the parent live. Only real
     // differences are recorded, and they win until changed back.
-    const drop = cur.parent && k !== 'name' && (
+    const drop = cur.parent && k !== 'name' && k !== 'exclude_inherited_characters' && (
       STYLE_TEXT_FIELDS.has(k)
         ? v === '{parent}'
         : JSON.stringify(v ?? null) === JSON.stringify((resolveStyle(list, cur.parent) || {})[k] ?? null))
@@ -1805,7 +1805,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           if (Object.keys(kept).length) next.automation = kept
           continue
         }
-        if (JSON.stringify(v) !== JSON.stringify(pe[k])) next[k] = v
+        if (k === 'exclude_inherited_characters' || JSON.stringify(v) !== JSON.stringify(pe[k])) next[k] = v
       }
     } else {
       next = { ...(resolveStyle(list, cur.name) || cur) }
@@ -2897,12 +2897,20 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <span className="label-sm">Characters</span>
               <Button variant="ghost" icon="user-group" onClick={() => setTab('characters')}>Manage characters</Button>
             </div>
+            <Check checked={!!st.exclude_inherited_characters}
+              onChange={(v) => setStyleField('exclude_inherited_characters', v)}
+              label="Do not inherit parent and global characters" />
             <div className="field__hint" style={{ marginTop: 6 }}>
-              The cast “{st.name}” inherits automatically: every <strong>global</strong> character, plus the ones that belong to this style or a style above it. When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos. Scripts only cast these characters when you <strong>ask for one by name</strong> in the topic, the title, or this style’s extra instructions — otherwise every story invents its own people.
+              {st.exclude_inherited_characters
+                ? <>Only characters belonging to “{st.name}” are available from the library. Film-specific characters remain available. This toggle applies only to this style.</>
+                : <>The cast “{st.name}” inherits automatically: every <strong>global</strong> character, plus the ones that belong to this style or a style above it.</>}
+              {' '}When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos. Scripts only cast these characters when you <strong>ask for one by name</strong> in the topic, the title, or this style’s extra instructions — otherwise every story invents its own people.
             </div>
             {(() => {
               const lineageNames = styleLineage(styles, st.name).map((s) => s.name)
-              const cast = chars.filter((c) => !c.style || lineageNames.includes(c.style))
+              const cast = chars.filter((c) => st.exclude_inherited_characters
+                ? c.style === st.name
+                : !c.style || lineageNames.includes(c.style))
               if (!cast.length) {
                 return <div className="muted" style={{ fontSize: 12, marginTop: 14 }}>No characters reach this style yet — create some under <strong>Characters</strong>.</div>
               }
@@ -3390,7 +3398,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               </div>
               <div className="field__hint" style={{ marginTop: 6 }}>
                 {scope === ''
-                  ? <>Recurring people or things that keep the same look across scenes and videos — these are inherited by <strong>every style</strong>. When a scene mentions one by name (or an alias), its appearance is written into the image prompt. Generated portraits use the owning style's image model and visual look (global characters use the default style's).</>
+                  ? <>Recurring people or things that keep the same look across scenes and videos — these are inherited by every style unless it disables parent and global character inheritance. When a scene mentions one by name (or an alias), its appearance is written into the image prompt. Generated portraits use the owning style's image model and visual look (global characters use the default style's).</>
                   : missing
                     ? <>The style “{scope}” no longer exists, so these characters are dormant. Pick a new home with each card's <strong>Belongs to</strong>.</>
                     : <>Used by “{scope}” and the styles under it, on top of the global pool every style inherits.</>}

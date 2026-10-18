@@ -1162,6 +1162,9 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         if parent == name or parent == NO_STYLE:
             parent = ""
         row = {"name": name}
+        # Character inheritance is an opt-out on this style only.
+        if s.get("exclude_inherited_characters"):
+            row["exclude_inherited_characters"] = True
         if parent:
             row["parent"] = parent
         absent = set()
@@ -2672,6 +2675,8 @@ def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
     Every style automatically inherits the GLOBAL pool (characters with no
     "style" scope). A character scoped to a style is visible to that style and
     every style below it in the hierarchy — children inherit the parent's cast.
+    A style with exclude_inherited_characters sees only its own characters.
+    This opt-out belongs to the target style, not its ancestors.
     An empty/unknown name resolves like style_settings (the default style).
 
     The "(none)" experiment style imposes no STYLE cast, but it still sees the
@@ -2687,6 +2692,9 @@ def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
     if target is None:
         target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
                       styles[0] if styles else None)
+    if target and target.get("exclude_inherited_characters"):
+        return [c for c in (cfg.get("characters") or [])
+                if isinstance(c, dict) and c.get("style") == target.get("name")]
     visible = {str(s.get("name") or "") for s in _style_lineage(styles, target)} if target else set()
     return [c for c in (cfg.get("characters") or [])
             if isinstance(c, dict) and (not c.get("style") or c.get("style") in visible)]
@@ -2883,7 +2891,9 @@ def _paint_worn_wardrobe(cfg: dict, style_name: str, char: dict, outfit: str,
 
 
 def style_assets(cfg: dict, style_name: str = "") -> list[dict]:
-    """Catalogue assets visible to a style — same rule as _style_characters."""
+    """Catalogue assets visible to a style — global pool plus its lineage.
+
+    The character inheritance opt-out does not affect assets."""
     requested = (style_name or "").strip()
     assets = _norm_assets(cfg.get("assets"))
     if requested == NO_STYLE:
