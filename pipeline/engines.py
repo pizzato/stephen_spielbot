@@ -22,6 +22,8 @@ The bundled image engines:
 - ``qwen-image-2.1-nvfp4`` — the same graph on Blackwell FP4 weights, the
   faster build for these GB10 workers. Same research license. Masked edits
   stay on a FLUX engine.
+- ``qwen-image-2.1-turbo`` — official INT8 eight-step distill with a fixed
+  sampling schedule, prefix cache and character references; research only.
 - ``flux3-klein-nvfp4`` — opt-in 16-step distilled FLUX 3, Blackwell only;
   generation and character references, under the FLUX Kommunity License.
 """
@@ -209,8 +211,8 @@ ENGINES: dict[str, dict] = {
     },
     # Faster on GB10 / RTX 50-series: NVFP4 diffusion (Blackwell FP4 kernels)
     # plus the official W4A8 text encoder. Same graph, same 25 steps, same
-    # research license. There is no few-step distill of 2.1 yet — BF16 is the
-    # slow large file, and the old Qwen-Image lightning LoRAs do not apply.
+    # research license. The separate Turbo checkpoint below is distilled for
+    # eight steps; the old Qwen-Image lightning LoRAs do not apply to 2.1.
     "qwen-image-2.1-nvfp4": {
         "key": "qwen-image-2.1-nvfp4",
         "label": "Qwen-Image 2.1 NVFP4",
@@ -249,6 +251,51 @@ ENGINES: dict[str, dict] = {
                    revision="1a38d44a3a2f35cb0b543a25b04da0a963e7b5e6"),
             _model("Comfy-Org/Qwen-Image-2.1",
                    "text_encoders/qwen3vl_8b_w4a8.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/Qwen-Image-2.1",
+                   "vae/qwen_image_2.1_vae_bf16.safetensors", "models/vae"),
+        ],
+    },
+    "qwen-image-2.1-turbo": {
+        "key": "qwen-image-2.1-turbo",
+        "label": "Qwen-Image 2.1 Turbo",
+        "sub": "8 steps · official INT8 · character references · research only",
+        "family": "qwen-image",
+        "can_generate": True,
+        "can_edit": False,
+        "t2i_workflow": "qwen_image_2_1_turbo_t2i.json",
+        "t2i_ref_workflow": "qwen_image_2_1_turbo_t2i.json",
+        "steps": 8,
+        "cfg": 1.0,
+        "timeout": 1800,
+        "commercial_ok": False,
+        "license": "Qwen Research License",
+        "license_note": (
+            "Research and evaluation only. Commercial use, including a monetized "
+            "YouTube or X film, needs a separate license from Qwen. Official "
+            "8-step Turbo INT8 checkpoint with its fixed sampling schedule and "
+            "prefix cache. Masked edits stay on FLUX.2."
+        ),
+        "model_file": "qwen_image_2.1_turbo_int8_convrot.safetensors",
+        "clip_t5": "qwen3vl_8b_int8_convrot.safetensors",
+        "clip_l": None,
+        "vae": "qwen_image_2.1_vae_bf16.safetensors",
+        "requires_node": "TextEncodeQwenImage21",
+        "extra_nodes": ["QwenImage21Cache", "ManualSigmas", "SamplerCustomAdvanced",
+                        "CFGGuider", "RandomNoise", "KSamplerSelect"],
+        "min_comfyui": (0, 41, 3),
+        "too_old_note": "the Turbo workflow requires native Qwen cache and custom sampling nodes",
+        "probe": ("UNETLoader", "unet_name", "qwen_image_2.1_turbo_int8_convrot.safetensors"),
+        "extra_probes": [
+            ("CLIPLoader", "clip_name", "qwen3vl_8b_int8_convrot.safetensors"),
+            ("VAELoader", "vae_name", "qwen_image_2.1_vae_bf16.safetensors"),
+        ],
+        "models": [
+            _model("Comfy-Org/Qwen-Image-2.1",
+                   "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/Qwen-Image-2.1",
+                   "text_encoders/qwen3vl_8b_int8_convrot.safetensors",
                    "models/text_encoders"),
             _model("Comfy-Org/Qwen-Image-2.1",
                    "vae/qwen_image_2.1_vae_bf16.safetensors", "models/vae"),

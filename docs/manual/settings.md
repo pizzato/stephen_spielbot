@@ -105,6 +105,10 @@ weights to every ComfyUI worker over SSH. Per-style engine choice lives in the
 BFL model conditions. Its **commercial use subject to licence** label accompanies
 the terms shown on the row; **installed** requires its transformer, encoder, VAE, local prompt upsampler
 and ComfyUI 0.41.3 with the required nodes.
+Qwen-Image 2.1 Turbo is an optional eight-step research engine; its install state
+checks the official INT8 transformer, INT8 encoder, VAE and native cache/sampling
+nodes. Both bundles can also be installed or repaired with
+`make install INSTALL_FLUX3=1 INSTALL_QWEN_TURBO=1`.
 
 **Model files downloaded** confirms the download only. If the files are present
 but ComfyUI lacks the engine's required nodes or minimum version, the row shows **worker update required**
@@ -380,10 +384,12 @@ back to Fast rather than failing the film.
 ### Image model
 
 Separate engines for **generation** and for **edit (mask + prompt)** inpainting. Default is
-FLUX.2 Klein for both. **Qwen-Image 2.1** and **Qwen-Image 2.1 NVFP4** are opt-in generation engines
-under the research license. NVFP4 is the faster one on the GB10 workers. The
+FLUX.2 Klein for both. **Qwen-Image 2.1**, **Qwen-Image 2.1 NVFP4** and
+**Qwen-Image 2.1 Turbo** are opt-in generation engines under the research licence.
+NVFP4 uses Blackwell FP4 weights; Turbo uses the official INT8 eight-step checkpoint
+with its trained sampling schedule and prefix cache. All accept character references. The
 worker image for this version of the app includes the ComfyUI release they
-need. Neither appears in the edit picker — masked inpaint stays on FLUX. The
+need. None appears in the edit picker — masked inpaint stays on FLUX. The
 licence note under the picker is the same restriction. **FLUX 3 Image Klein NVFP4**
 is another optional generation engine for Blackwell, with 16 steps, local prompt upsampling, a 2-megapixel native canvas and character
 references. Only FLUX 3 uses these settings; output sizes and other engines remain

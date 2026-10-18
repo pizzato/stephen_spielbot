@@ -57,6 +57,21 @@ under **Settings → Styles → Image model → Generation**. Plain `make instal
 installs the supporting ComfyUI snapshot without downloading the optional weights.
 See [model requirements and licence](models.md#image-engines-per-style).
 
+For optional **Qwen-Image 2.1 Turbo** (research/evaluation only), use:
+
+```bash
+make install INSTALL_QWEN_TURBO=1
+# Install or repair both optional bundles across all configured workers:
+make install INSTALL_FLUX3=1 INSTALL_QWEN_TURBO=1
+```
+
+Turbo downloads the official INT8 diffusion model, INT8 Qwen3-VL 8B encoder
+and VAE (~17 GB total). Files already present are reused. The installer checks
+every file in each requested bundle even when the default models already exist,
+syncs missing files to the other workers, and fails if a requested bundle remains
+incomplete. It does not select either engine for your styles. Turbo requires a
+separate commercial licence from Qwen for commercial use.
+
 Omit `WORKERS=...` for a single-machine (localhost) setup, or run `make install` with no
 arguments and it prompts once. An existing `config.yaml` is never overwritten.
 

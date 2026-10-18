@@ -116,6 +116,7 @@ inherit both like every other style field. Download an engine per worker from
 | **FLUX.1 schnell** (opt-in) | The legacy 4-step path, including masked inpaint | Apache-2.0 |
 | **Qwen-Image 2.1** (opt-in) | 25 steps, official INT8 weights, character reference images (up to the scene cap of 2). Not offered for masked "Edit image" — that slot stays on FLUX | Qwen Research License |
 | **Qwen-Image 2.1 NVFP4** (opt-in, faster on GB10) | Same graph and 25 steps. FP4 diffusion plus the official W4A8 text encoder — the faster weight set on these Blackwell workers | Qwen Research License |
+| **Qwen-Image 2.1 Turbo** (opt-in) | Official INT8 distill, 8 fixed steps with prefix caching and character references | Qwen Research License |
 
 FLUX 3 Image Klein NVFP4 notes:
 
@@ -176,7 +177,7 @@ FLUX 3 Image Klein NVFP4 notes:
 
 Qwen-Image 2.1 notes:
 
-- **Not part of the bulk install.** Both builds are research-and-evaluation
+- **Optional downloads.** All three builds are research-and-evaluation
   only: commercial use, including a monetized YouTube or X film, needs a
   separate license from Qwen. The picker says the same thing on each.
 - **INT8** is the official Comfy-Org pack, about **17 GB** (INT8 ConvRot
@@ -195,8 +196,27 @@ Qwen-Image 2.1 notes:
   diffusion pack was measured at **6.7 s** versus **7.6 s** INT8 and **15.6 s**
   BF16 (1024×1024, 40 steps). GB10 is the same Blackwell FP4 generation, which
   is why this is the one to pick there. It has not been timed on a Spark in
-  this project. There is no few-step distill of 2.1 yet, so both engines stay
-  at 25 steps — the old Qwen-Image lightning LoRAs are a different model.
+  this project. These base engines stay at 25 steps; the separate Turbo
+  checkpoint below uses eight. Old Qwen-Image lightning LoRAs are a different model.
+- **Turbo** (`qwen-image-2.1-turbo`) uses the official
+  [Qwen-Image 2.1 Turbo checkpoint](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)
+  repackaged by Comfy-Org: `qwen_image_2.1_turbo_int8_convrot.safetensors`,
+  `qwen3vl_8b_int8_convrot.safetensors`, and `qwen_image_2.1_vae_bf16.safetensors`
+  (~17 GB on disk; encoder and VAE shared with the INT8 base engine).
+  Install or repair it on every configured worker with
+  `make install INSTALL_QWEN_TURBO=1`, or download per worker in Settings.
+  Combine with `INSTALL_FLUX3=1` to install both optional bundles. The installer
+  checks all companion files and fails if synchronization leaves a bundle incomplete.
+  Plain `make install` installs node support but does not download these optional weights.
+- Turbo follows the [native ComfyUI workflow](https://docs.comfy.org/tutorials/image/qwen/qwen-image-2-1):
+  Euler, CFG 1, `QwenImage21Cache` (auto device, default precision), and the fixed
+  sigma sequence `1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`.
+  Simply lowering the base engine to eight steps is not equivalent. Turbo reuses
+  the existing scene prompts, requested canvas and ordered character references;
+  the upstream optional prompt enhancer is not enabled. Missing Turbo nodes fail
+  before submission. Settings checks the diffusion model, encoder, VAE and nodes.
+  Eight steps reduces sampling work, but does not guarantee a particular speedup
+  over the existing NVFP4 engine or a complete film.
 - The worker image pins **ComfyUI 0.41.3 (`8713616f`)**,
   which includes `TextEncodeQwenImage21` (introduced in v0.37.0). `make install` writes that pin, and
   `make start` rebuilds a worker whose image is older. A render on an older

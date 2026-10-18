@@ -2221,7 +2221,8 @@ def _build_qwen_workflow(engine: dict, repl: dict, ref_names: list[str] | None =
     """Qwen-Image 2.1 text→image graph, with optional character references.
 
     The base workflow is the ComfyUI day-0 template (UNET + Qwen3-VL CLIP +
-    VAE, ``TextEncodeQwenImage21``, euler/simple KSampler). Each reference is
+    VAE, ``TextEncodeQwenImage21``, euler/simple KSampler). Turbo uses its own
+    fixed eight-step sigma schedule and prefix cache. Each reference is
     a ``LoadImage`` wired to the encoder's autogrow slot ``images.image_N``
     — that is the API name, not ``image_N``. The VAE has to be connected or
     the vision tokens stay in the text stream and the DiT never sees the
@@ -2241,6 +2242,10 @@ def _build_qwen_workflow(engine: dict, repl: dict, ref_names: list[str] | None =
 def _generate_qwen(engine: dict, prompt: str, output_path: Path, *,
                    width: int, height: int, seed: int | None,
                    refs: list[Path], comfy_url: str) -> Path:
+    for node in engine.get("extra_nodes", []):
+        if comfy_node_exists(comfy_url, node) is not True:
+            raise RuntimeError(f"{engine['label']} requires {node} on {comfy_url}. "
+                               "Update the worker with make install before rendering.")
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
     width, height = _qwen_size(width, height)

@@ -12,8 +12,9 @@
 #   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders
 #   FLUX.2 Klein 4B — diffusion model, Qwen-3 encoder, VAE
 # Opt-in (env flags): INSTALL_FLUX1=1 adds the legacy FLUX.1-schnell engine.
-# INSTALL_FLUX3=1 adds distilled FLUX 3 Klein NVFP4 (~10.5 GB, Blackwell only).
+# INSTALL_FLUX3=1 adds distilled FLUX 3 Klein NVFP4 + upsampler (~17.2 GB, Blackwell only).
 # Accept https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy first.
+# INSTALL_QWEN_TURBO=1 adds official Qwen-Image 2.1 Turbo INT8 (~17 GB, research only).
 set -euo pipefail
 
 COMFY_DIR="${1:-$HOME/github/ComfyUI}"
@@ -367,6 +368,19 @@ if [[ "${INSTALL_FLUX3:-0}" == "1" ]]; then
         "vae/flux2-vae.safetensors" "models/vae"
     download "black-forest-labs/flux-3-image-klein-comfy" \
         "text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors" "models/text_encoders"
+fi
+
+# ── Qwen-Image 2.1 Turbo (optional, research/evaluation only) ─────────────────
+if [[ "${INSTALL_QWEN_TURBO:-0}" == "1" ]]; then
+    echo ""
+    echo "--- Qwen-Image 2.1 Turbo INT8 (~17 GB; 8 steps) ---"
+    echo "    Qwen Research License: commercial use needs a separate license from Qwen."
+    download "Comfy-Org/Qwen-Image-2.1" \
+        "diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors" "models/diffusion_models"
+    download "Comfy-Org/Qwen-Image-2.1" \
+        "text_encoders/qwen3vl_8b_int8_convrot.safetensors" "models/text_encoders"
+    download "Comfy-Org/Qwen-Image-2.1" \
+        "vae/qwen_image_2.1_vae_bf16.safetensors" "models/vae"
 fi
 
 # ── FLUX.1 schnell (legacy image engine) — OPT-IN ─────────────────────────────
