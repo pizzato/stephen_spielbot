@@ -109,7 +109,14 @@ The script critic is disabled for this format, including automatic passes, so it
 delete or reorder scenes and break their timing against the song. The lyrics-only song
 critic remains available before song generation.
 
-The pipeline changes in three places:
+The pipeline handles the song and its visuals together:
+
+- **Performance shares the screen with the visual story.** Drafting and scene division
+  interweave the lead's singing with non-singing action and artist-free imagery,
+  including during sung passages. The style's **Extra script instructions** and the
+  film's directions set the balance; the planner does not require the lead in most
+  scenes. Images may express the song's emotion and associations without literally
+  illustrating every lyric. The approved song and lyrics stay unchanged.
 
 - **The story becomes lyrics.** After you approve the prose draft, the divide step also
   writes the film's **song** (`song.json` in the work dir): tagged lyrics —
@@ -146,16 +153,18 @@ The pipeline changes in three places:
   appearance, rather than copying conflicting outfits from legacy image prompts.
 - **The cast performs it.** Every scene is staged as a **performed silent take** —
   the same H3 Ref2VA path as [silent scenes, performed](#silent-scenes-performed),
-  no style toggle needed — stamped `singing` in its metadata. Scenes with cast on screen
-  are prompted for a visible performance (mouth moving with the words, moving with the
-  beat) instead of the silent film's closed mouth, and the take ships carrying **its own
-  slice of the song**: the model's a-cappella audio is replaced by the exact stretch of
+  no style toggle needed — stamped `singing` in its metadata to carry the soundtrack.
+  On-screen singing scenes are prompted for a visible performance (mouth moving with
+  the words, moving with the beat) instead of the silent film's closed mouth, and the
+  take ships carrying **its own slice of the song**: the model's a-cappella audio is replaced by the exact stretch of
   the real track the scene was generated against, so a clip played on its own — on the
   render wall, in the film editor — shows the performance against the music it is meant
   to follow, which is the only way to see whether the mouth lands on the words. That
   audio is never mixed into the film (voice and ambient are pinned to 0 %, below), so
   nothing doubles. The speech gate stands down for these takes — singing is what was
-  asked for. A beat can also be told **not** to sing: **Re-generate scene** with the
+  asked for. Initial scene division preserves `performs: false` for non-singing acting
+  and person-free imagery: the song still plays over those shots, but nobody mimes it.
+  An existing beat can also be told **not** to sing: **Re-generate scene** with the
   "Nobody sings in this shot" chip (or any instruction to that effect) marks the scene
   as non-performing — the song still plays over it, but the cast listens and moves with
   the music instead of miming.

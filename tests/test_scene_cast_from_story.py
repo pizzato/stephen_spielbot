@@ -39,6 +39,24 @@ class CastRosterNoteTests(unittest.TestCase):
         self.assertIn("MUSIC VIDEO", note)
         self.assertIn("silent scenes are PERFORMED", note)
 
+    def test_song_staging_supports_non_singing_cast_and_empty_cutaways(self):
+        note = backend._build_dialogue_note("song", ["Ash Delgado"])
+        self.assertIn('"performs": false', note)
+        self.assertIn('"cast": []', note)
+        self.assertIn("including sung passages", note)
+        self.assertNotIn("the face that keeps returning", note)
+        self.assertNotIn("STRAIGHT FROM THE SONG", note)
+        self.assertIn("Never invent a person", note)
+
+    def test_song_draft_and_approved_lyrics_allow_associative_visuals(self):
+        draft_note = backend._story_format_note("song")
+        self.assertIn("non-singing narrative action and artist-free imagery", draft_note)
+        lyrics = "[Verse]\nRain on the tracks"
+        lyric_note = backend._song_lyrics_story_note({"lyrics": lyrics})
+        self.assertIn("rather than a literal illustration", lyric_note)
+        self.assertIn("Preserve the approved song and lyrics unchanged", lyric_note)
+        self.assertTrue(lyric_note.endswith(lyrics))
+
     def test_no_characters_at_all_keeps_the_open_wording(self):
         # An abstract explainer has nobody to close over — the writer still has
         # to be allowed to find the story's own recurring subjects.

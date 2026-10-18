@@ -643,6 +643,11 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
             # One name comes back as a bare string often enough to matter — and
             # list("Ada") is three "characters" nobody has a portrait for.
             extra["cast"] = [cast] if isinstance(cast, str) else list(cast)
+        # Non-singing acting is distinct from an instrumental break: vocals
+        # can remain audible while the people on screen do not mime them.
+        # Preserve the authored boolean through song timing and serialization.
+        if isinstance(item.get("performs"), bool):
+            extra["performs"] = item["performs"]
         if continues:
             extra["continues_previous"] = True
         return Scene(

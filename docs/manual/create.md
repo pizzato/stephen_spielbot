@@ -111,7 +111,7 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 | **Dialogue** | The characters act and speak on screen. Needs characters with a portrait (a voice keeps them consistent) |
 | **Mixed** | The AI blends narration, dialogue, and silent scenes |
 | **Silent** | Told in pictures: no narrator, and a spoken line only where a beat truly needs one |
-| **Music video** | The story becomes a **song**: the AI writes tagged lyrics from the approved draft, the music model sings them over the whole film, and the lead character performs it on camera in silent acted takes. Or [bring your own song](#the-song) and the film is built around that |
+| **Music video** | The story becomes a **song**: the AI writes tagged lyrics from the approved draft, the music model sings them over the whole film, and the visuals interweave the lead's performance, non-singing action and artist-free imagery in silent acted takes. The style and film directions set the balance. Or [bring your own song](#the-song) and the film is built around that |
 
 See [acted scenes](../performance_films.md) for what the modes actually render, and
 [singing films](../performance_films.md#singing-films-the-music-video-format) for the

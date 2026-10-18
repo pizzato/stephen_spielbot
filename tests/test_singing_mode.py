@@ -515,7 +515,7 @@ class SongFormatNoteTests(unittest.TestCase):
         note = _build_dialogue_note("song", ["Ada"])
         self.assertIn("MUSIC VIDEO", note)
         self.assertIn('NEVER use "narration"', note)
-        self.assertIn("SINGING to camera", note)
+        self.assertIn('"performs": true only for on-screen singing', note)
         # The silent-performance schema must always be requested — a song
         # film's takes are performed whatever the style toggle says.
         self.assertIn("silent scenes are PERFORMED", note)

@@ -292,6 +292,53 @@ class DivideSongFormatTests(unittest.TestCase):
         self.assertTrue(all(s.mode == "narration" for s in scenes))
         self.assertTrue(all(s.narration.strip() for s in scenes))
 
+    def test_non_singing_acting_survives_divide_timing_and_render_prompt(self):
+        from pipeline import performance
+
+        def fake(cfg, system, user_msg, max_tokens, label, retries=3):
+            if label.startswith("divide scenes"):
+                return json.dumps([
+                    {"title": "Listening", "mode": "silent", "cast": ["Isla"],
+                     "performs": False, "seconds": 5,
+                     "image_prompt": "Isla reads an old letter.",
+                     "video_prompt": "Isla folds the letter, mouth closed."},
+                    {"title": "Chorus", "mode": "silent", "cast": ["Isla"],
+                     "performs": True, "seconds": 5,
+                     "image_prompt": "Isla at a microphone.",
+                     "video_prompt": "Isla sings the chorus."},
+                    {"title": "Empty room", "mode": "silent", "cast": [],
+                     "performs": False, "seconds": 5,
+                     "image_prompt": "An empty room with a letter on a table.",
+                     "video_prompt": "Wind lifts the letter. No people."},
+                ])
+            if label == "recurring characters":
+                return "[]"
+            raise AssertionError(f"unexpected LLM label: {label}")
+
+        scenes, *_ = self._divide(3, fake)
+        story.mark_singing(scenes)
+        story.assign_song_slices(scenes, "[Verse]\nRead the letter\n[Chorus]\nLet it go",
+                                 total_seconds=15)
+        # Round-trip the persisted representation that the renderer consumes.
+        metadata = json.loads(json.dumps([s.metadata for s in scenes]))
+        self.assertEqual([m["performs"] for m in metadata], [False, True, False])
+        self.assertTrue(all(m["singing"] and m["song_window"] for m in metadata))
+        acting = performance.build_h3_prompt(metadata[0], picture_names=["Isla"])
+        self.assertIn("NOT singing in this shot", acting)
+        singing = performance.build_h3_prompt(metadata[1], picture_names=["Isla"])
+        self.assertIn("Isla is performing a song on camera", singing)
+        self.assertNotIn("NOT singing in this shot", singing)
+        scenery = performance.build_h3_prompt(metadata[2])
+        self.assertIn("NO people", scenery)
+
+    def test_missing_or_invalid_performs_keeps_existing_default(self):
+        for fields in ({}, {"performs": "false"}, {"performs": None}):
+            with self.subTest(fields=fields):
+                scene = story._scene_from_item(
+                    1, {"mode": "silent", "cast": "Isla", **fields},
+                    "Song", None, is_song=True)
+                self.assertNotIn("performs", scene.metadata)
+
 
 class RedraftStoryTests(unittest.TestCase):
     def _generate_then_redraft(self, n_from, n_to, fake=None):

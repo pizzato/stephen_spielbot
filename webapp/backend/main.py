@@ -2207,8 +2207,10 @@ def _story_format_note(fmt: str) -> str | None:
             "MUSIC VIDEO STORY: this story will become the SONG of a music video — "
             "sung over performed scenes, with no narrator and no spoken lines. Plan "
             "ONE clear lead performer among the recurring characters (never return "
-            "an empty characters array) — the person the camera keeps returning to — "
-            "and write chapter summaries whose beats are VISIBLE and singable: "
+            "an empty characters array), but interweave their performance with "
+            "non-singing narrative action and artist-free imagery throughout the film. "
+            "The lead need not be the protagonist of every visual thread. "
+            "Write chapter summaries whose beats are VISIBLE and singable: "
             "images, actions and turns a song can carry, never information that "
             "could only arrive in spoken words. Ignore any video length or scene "
             "limits while drafting — the story is divided into scenes afterwards."
@@ -2295,14 +2297,20 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
             "its own. NEVER use \"narration\" and NEVER give any scene \"lines\": nothing "
             "said on camera survives the mix. Stage the scenes as the song's pictures: "
             "the lead performer — ONE of the people named above, the same one in every "
-            "performance shot, never a newly invented singer — SINGING to camera and "
-            "performing, put them in \"cast\" in "
-            "most scenes (the face that keeps returning is what makes it a music video) — "
-            "with pure story imagery between the performance shots. Write each scene's "
-            "\"beats\" as performance action (singing to camera, turning, walking, "
-            "dancing, a look), spread across the whole take. Every scene's imagery comes "
-            "STRAIGHT FROM THE SONG — what the lyrics sing about at that stretch of the "
-            "track, or the performer singing it; nothing the song doesn't sing about.")
+            "performance shot, never a newly invented singer — returns for singing "
+            "performances interwoven with non-singing narrative action and artist-free "
+            "imagery throughout the track, including sung passages. Audible vocals do "
+            "not require anyone to sing on screen. Follow the style and direction's "
+            "scene balance; do not default to putting the lead in most scenes or "
+            "reserve all cutaways for the opening and ending. Set \"performs\": true "
+            "only for on-screen singing; set \"performs\": false for non-singing "
+            "acting and person-free imagery. The song plays over both. Include only "
+            "visible people in \"cast\"; use \"cast\": [] for person-free shots and "
+            "do not mention absent performers in their image_prompt or video_prompt. "
+            "Write each scene's \"beats\" as the visible action of its actual subjects, "
+            "spread across the whole take. Use the song's emotion, rhythm and "
+            "associations to connect the imagery; literal lyric illustration is "
+            "optional. Develop coherent visual threads rather than unrelated inserts.")
     else:
         balance = (
             "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
@@ -3296,12 +3304,14 @@ def _song_lyrics_story_note(song_data: dict) -> str:
     return (
         "\nTHE FILM'S SONG IS ALREADY WRITTEN AND APPROVED — this story is "
         "the VIDEO for it, nothing more. Stay entirely inside the song's "
-        "world: its subject, mood and images ARE the film's, and every beat "
-        "must be something the lyrics sing or directly show. Keep it SIMPLE "
-        "and visual — a music video is pictures following a song, not a "
-        "plot. No subplots, no extra characters, no backstory, no twist the "
-        "song doesn't sing about; the same few images the song repeats are "
-        "what the camera returns to. These are the lyrics:\n" + lyrics)
+        "world: its subject, mood and emotional progression guide the film. "
+        "Use connected visual threads, non-singing action and evocative places "
+        "or objects alongside the lead's performance. Imagery may be associative "
+        "rather than a literal illustration of each lyric. Keep it simple and "
+        "coherent; avoid unrelated subplots or invented biographical claims. "
+        "Follow the style and specific directions for the balance of performance "
+        "and artist-free scenes. Preserve the approved song and lyrics unchanged. "
+        "These are the lyrics:\n" + lyrics)
 
 
 def _register_song_job(wd: Path, *, title: str, video_title: str, topic: str,
