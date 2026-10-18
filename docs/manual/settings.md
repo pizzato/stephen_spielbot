@@ -103,11 +103,11 @@ then every image engine with its licence and an install state — **Download** p
 weights to every ComfyUI worker over SSH. Per-style engine choice lives in the
 [Styles](#styles) tab. FLUX 3 Klein NVFP4 requires Blackwell hardware and accepted
 BFL model conditions. Its **commercial use subject to licence** label accompanies
-the terms shown on the row; **installed** requires its transformer, encoder, VAE
-and native ComfyUI loader support.
+the terms shown on the row; **installed** requires its transformer, encoder, VAE, local prompt upsampler
+and ComfyUI 0.41.3 with the required nodes.
 
 **Model files downloaded** confirms the download only. If the files are present
-but ComfyUI lacks the engine's native nodes, the row shows **worker update required**
+but ComfyUI lacks the engine's required nodes or minimum version, the row shows **worker update required**
 and identifies the checked worker. Run `make start` on the controller to rebuild
 outdated workers, then refresh Settings. The button reads **Downloaded** while an
 update is required, so it does not repeat an already successful download. These
@@ -375,8 +375,9 @@ under the research license. NVFP4 is the faster one on the GB10 workers. The
 worker image for this version of the app includes the ComfyUI release they
 need. Neither appears in the edit picker — masked inpaint stays on FLUX. The
 licence note under the picker is the same restriction. **FLUX 3 Image Klein NVFP4**
-is another optional generation engine for Blackwell, with 16 steps and character
-references. Its commercial-output permission is conditional under the FLUX Kommunity
+is another optional generation engine for Blackwell, with 16 steps, local prompt upsampling, a 2-megapixel native canvas and character
+references. Only FLUX 3 uses these settings; output sizes and other engines remain
+unchanged. Its commercial-output permission is conditional under the FLUX Kommunity
 License; read the note beneath the picker. It also stays out of the masked edit picker. See
 [Models → Image engines](../models.md#image-engines-per-style).
 

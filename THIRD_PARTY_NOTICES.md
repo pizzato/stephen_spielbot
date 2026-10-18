@@ -16,7 +16,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | Model | Hugging Face repo | License | Commercial? |
 |---|---|---|---|
 | FLUX.2 Klein 4B (**default** generate + edit) | `Comfy-Org/vae-text-encorder-for-flux-klein-4b` (repackaging of `black-forest-labs/FLUX.2-klein-4B`) | Apache-2.0 (per the upstream Black Forest Labs model card — note the **9B** Klein variants are non-commercial; this project uses the 4B) | ✅ Yes |
-| FLUX 3 Image Klein NVFP4 (opt-in generation and references; distilled NVFP4 + INT8 Qwen3-VL 4B encoder + shared FLUX.2 VAE) | `black-forest-labs/flux-3-image-klein-comfy` | **FLUX Kommunity License v1.0** for the model; Qwen3-VL encoder under Apache-2.0 | Conditional commercial output generation for qualifying users below US$5M gross annualised revenue including affiliates; subject to filtering or output review and legally required AI disclosure. Other uses require separate licensing |
+| FLUX 3 Image Klein NVFP4 (opt-in generation and references; distilled NVFP4 + INT8 Qwen3-VL 4B encoder + W4A8 Qwen3.5 9B prompt upsampler + shared FLUX.2 VAE) | `black-forest-labs/flux-3-image-klein-comfy` | **FLUX Kommunity License v1.0** for the model; Qwen3-VL encoder and BFL prompt upsampler under Apache-2.0 | Conditional commercial output generation for qualifying users below US$5M gross annualised revenue including affiliates; subject to filtering or output review and legally required AI disclosure. Other uses require separate licensing |
 | FLUX.1 schnell (legacy, opt-in) | `Comfy-Org/flux1-schnell`, `comfyanonymous/flux_text_encoders`, `black-forest-labs/FLUX.1-schnell` (VAE) | Apache-2.0 | ✅ Yes |
 | Qwen-Image 2.1 (opt-in generate only; INT8 diffusion + INT8 Qwen3-VL 8B encoder + bf16 VAE) | `Comfy-Org/Qwen-Image-2.1` (repackaging of `Qwen/Qwen-Image-2.1`) | **Qwen Research License** (2026-09-20; not an OSI license) | ❌ No — research and evaluation only. Commercial use, including a monetized film, needs a separate grant from Qwen. Masked image edits are not offered on this engine |
 | Qwen-Image 2.1 NVFP4 (opt-in, faster on GB10; FP4 diffusion + official W4A8 encoder + the same bf16 VAE) | Diffusion: `BennyDaBall/Qwen-Image-2.1-NVFP4` (community NVFP4 quant of the official BF16 checkpoint, pinned revision `1a38d44a`). Encoder and VAE: `Comfy-Org/Qwen-Image-2.1` | **Qwen Research License** — the quant inherits it; not an OSI license | ❌ No — same research-only terms as the INT8 weights. Output is still bound by that license |
@@ -28,7 +28,13 @@ FLUX 3's [full licence](https://huggingface.co/black-forest-labs/flux-3-image-kl
 is revocable and restricts use of the model or outputs to improve competing models.
 Its commercial-output exception is not blanket permission for commercial model
 training or distribution. The optional weights are downloaded by the operator after
-accepting BFL's conditions; no weights or prompt upsampler are bundled in this repository.
+accepting BFL's conditions; no model weights are bundled in this repository. The optional installer downloads
+the [BFL prompt upsampler](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup)
+under Apache-2.0. `workflows/prompts/flux3.json` contains the plain
+text-to-image and reference-image system prompts from BFL's ComfyUI workflows,
+revision `feef60b0aaf63a4773ace96636ebbcf43b881312`; the FLUX 3 graph also adapts
+those workflows. Their MIT notice is preserved in
+[`workflows/flux3_LICENSE.upstream`](workflows/flux3_LICENSE.upstream).
 
 ## Video model
 

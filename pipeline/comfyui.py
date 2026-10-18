@@ -2277,7 +2277,7 @@ def _generate_flux3(engine: dict, prompt: str, output_path: Path, *,
     gen_width = round(width * scale / 16) * 16
     gen_height = round(height * scale / 16) * 16
     seed = seed if seed is not None else random.randint(0, 2**32 - 1)
-    prompts = _load_workflow("flux3_upsampler_prompts.json")
+    prompts = json.loads(_load_workflow("prompts/flux3.json"))
     request = f"TARGET CANVAS: {width}:{height}\n{prompt}"
     if refs:
         references = ", ".join(f"<ref_image_{i}>" for i in range(len(refs)))

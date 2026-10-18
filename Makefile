@@ -17,7 +17,7 @@ W ?=
 ## non-interactively: make install WORKERS="s1 s2 s3"
 ## Includes SoulX-Singer SVC, Seed-VC and shared re-voicing/lyric-alignment tools.
 ## The macOS login service is opt-in: INSTALL_SERVICE=1 installs it without asking.
-## Add INSTALL_FLUX3=1 to download FLUX 3 Klein NVFP4 (Blackwell; gated HF repo).
+## Add INSTALL_FLUX3=1 to download FLUX 3 Klein NVFP4 + prompt upsampler (Blackwell; gated HF repo).
 install:
 	@WORKERS="$(WORKERS)" INSTALL_SERVICE="$(INSTALL_SERVICE)" GPU_MODE="$(GPU_MODE)" INSTALL_FLUX3="$(INSTALL_FLUX3)" bash $(SCRIPTS)/install.sh
 
@@ -46,7 +46,7 @@ $(CLEAN_MODES):
 	@:
 endif
 
-## Download the default models; INSTALL_FLUX3=1 also downloads FLUX 3 Klein NVFP4.
+## Download the default models; INSTALL_FLUX3=1 also downloads FLUX 3 Klein NVFP4 + prompt upsampler.
 download-models:
 	@INSTALL_FLUX3="$(INSTALL_FLUX3)" bash $(SCRIPTS)/download_models.sh
 
@@ -217,7 +217,7 @@ help:
 	@echo "  install         Install everything: deps, models, workers, web UI (backend+React build)"
 	@echo "                  Includes SoulX-Singer SVC + Seed-VC re-voicing on controller and workers"
 	@echo "                  (first run seeds config.yaml — set hosts: make install WORKERS=\"s1 s2 s3\")"
-	@echo "                  INSTALL_FLUX3=1 adds FLUX 3 Klein NVFP4 (Blackwell; accept BFL terms + set HF_TOKEN)"
+	@echo "                  INSTALL_FLUX3=1 adds FLUX 3 Klein NVFP4 + prompt upsampler (Blackwell; accept BFL terms + set HF_TOKEN)"
 	@echo "  uninstall       Stop everything + remove the service and worker container stacks"
 	@echo "                  (keeps config/models/videos; purge: bash scripts/uninstall.sh --purge-data --purge-models)"
 	@echo "  clean <what>    Reset part of the install — warns and confirms before deleting:"
@@ -226,7 +226,7 @@ help:
 	@echo "                    make clean settings  Delete config.yaml + YouTube/X credentials"
 	@echo "                    make clean all       All of the above"
 	@echo "  download-models Download the defaults: LTX 2.3 + ACE-Step + FLUX.2 Klein (skips existing)"
-	@echo "                  INSTALL_FLUX3=1 also downloads FLUX 3 Klein NVFP4"
+	@echo "                  INSTALL_FLUX3=1 also downloads FLUX 3 Klein NVFP4 + prompt upsampler"
 	@echo "  download-flux          Download the legacy FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
 	@echo "  svc-install     Install/repair SoulX-Singer SVC + Seed-VC on controller and workers"

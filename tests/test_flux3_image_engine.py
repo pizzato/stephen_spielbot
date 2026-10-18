@@ -1,5 +1,6 @@
 """FLUX 3 workflow, character binding, capability and install regressions."""
 import json
+import math
 import os
 import subprocess
 import sys
@@ -28,24 +29,46 @@ def test_engine_is_optional_gated_and_generation_only():
     assert "affiliates" in public["license_note"]
 
 
-def generate(tmp_path, refs=(), width=1024, height=576):
-    with mock.patch.object(comfyui, "comfyui_version", return_value=(0, 41, 0)), \
+@pytest.fixture(autouse=True)
+def current_worker(monkeypatch):
+    monkeypatch.setattr(comfyui, "comfyui_version", lambda *a, **kw: (0, 41, 3))
+
+
+def generate(tmp_path, refs=(), width=1024, height=576, engine=ENGINE):
+    with mock.patch.object(comfyui, "comfyui_version", return_value=(0, 41, 3)), \
          mock.patch.object(comfyui, "comfy_node_exists", return_value=True), \
+         mock.patch.object(comfyui, "_comfy_has_cuda", return_value=True), \
          mock.patch.object(comfyui, "_upload_image", side_effect=lambda p, **kw: p.name) as upload, \
          mock.patch.object(comfyui, "_run_and_save", return_value=tmp_path / "out.png") as run:
-        comfyui.generate_with_engine(ENGINE, 'Alice holds a sign reading "hello".',
+        comfyui.generate_with_engine(engine, 'Alice holds a sign reading "hello".',
                                      tmp_path / "out.png", width=width, height=height,
                                      seed=0, reference_images=refs)
     return run.call_args.args[0], upload, run.call_args.kwargs
 
 
-def test_distilled_graph_preserves_prompt_seed_and_requested_canvas(tmp_path):
+def test_distilled_graph_upsamples_before_encoding_and_preserves_output_canvas(tmp_path):
     wf, upload, kwargs = generate(tmp_path, width=1080, height=1000)
-    assert wf["1"]["inputs"]["unet_name"] == "flux3_image_klein_sd_nvfp4.safetensors"
+    assert wf["1"]["inputs"]["unet_name"] == "flux3-image-klein-nvfp4.safetensors"
     assert wf["2"]["inputs"]["type"] == "flux3"
     assert wf["2"]["inputs"]["clip_name"] == "qwen3vl_4b_int8_convrot.safetensors"
-    assert wf["4"]["inputs"]["text"] == 'Alice holds a sign reading "hello".'
-    assert wf["6"]["inputs"] == {"width": 1072, "height": 992, "batch_size": 1}
+    assert wf["4"]["inputs"]["text"] == ["11", 0]
+    pup = wf["11"]["inputs"]
+    assert pup["clip"] == ["10", 0]
+    assert wf["10"]["inputs"]["clip_name"] == ENGINE["prompt_upsampler"]
+    assert pup["prompt"] == 'TARGET CANVAS: 1072:992\nAlice holds a sign reading "hello".'
+    assert pup["system_prompt"] == json.loads(comfyui._load_workflow("prompts/flux3.json"))["t2i"]
+    assert pup["sampling_mode.seed"] == 0
+    assert pup["sampling_mode.presence_penalty"] == 1.5
+    assert "image" not in pup
+    size = wf["6"]["inputs"]
+    assert size["width"] * size["height"] == pytest.approx(2 * 1024**2, rel=0.02)
+    assert size["width"] / size["height"] == pytest.approx(1072 / 992, rel=0.015)
+    assert size["width"] % 16 == size["height"] % 16 == 0
+    assert wf["12"]["inputs"]["max_shift"] == wf["12"]["inputs"]["base_shift"] == math.log(16)
+    assert wf["7"]["inputs"]["model"] == ["12", 0]
+    assert wf["13"]["inputs"]["width"] == 1072
+    assert wf["13"]["inputs"]["height"] == 992
+    assert wf["9"]["inputs"]["images"] == ["13", 0]
     sampler = wf["7"]["inputs"]
     assert (sampler["steps"], sampler["cfg"], sampler["seed"]) == (16, 1.0, 0)
     assert (sampler["sampler_name"], sampler["scheduler"]) == ("euler", "simple")
@@ -66,15 +89,23 @@ def test_references_keep_order_limit_and_scene_aspect_ratio(tmp_path):
     for i in range(10):
         assert refs[f"images.image{i}"] == [str(20 + i), 0]
         assert wf[str(20 + i)]["inputs"]["image"] == f"person{i}.png"
+        assert wf["18"]["inputs"][f"images.image{i}"] == [str(20 + i), 0]
     assert "images.image10" not in refs
     assert wf["7"]["inputs"]["positive"] == ["17", 0]
     assert wf["7"]["inputs"]["negative"] == ["17", 1]
     # A square portrait must not replace the widescreen scene canvas.
     assert wf["7"]["inputs"]["latent_image"] == ["6", 0]
-    assert wf["6"]["inputs"]["height"] == 576
+    assert wf["6"]["inputs"]["width"] / wf["6"]["inputs"]["height"] == pytest.approx(16 / 9, rel=0.015)
+    assert wf["13"]["inputs"]["height"] == 576
+    pup = wf["11"]["inputs"]
+    assert pup["image"] == ["18", 0]
+    assert pup["system_prompt"] == json.loads(comfyui._load_workflow("prompts/flux3.json"))["i2i"]
+    assert pup["sampling_mode.presence_penalty"] == 0
+    assert "<ref_image_9>" in pup["prompt"]
+    assert "<ref_image_10>" not in pup["prompt"]
 
 
-@pytest.mark.parametrize("version,node", [((0, 40, 0), True), ((0, 41, 0), False), ((), None)])
+@pytest.mark.parametrize("version,node", [((0, 41, 0), True), ((0, 41, 2), True), ((0, 41, 3), False), ((), None)])
 def test_stale_or_unverifiable_worker_is_refused_before_upload(tmp_path, version, node):
     with mock.patch.object(comfyui, "comfyui_version", return_value=version), \
          mock.patch.object(comfyui, "comfy_node_exists", return_value=node), \
@@ -101,7 +132,7 @@ def test_character_reference_tokens_follow_the_uploaded_order(override):
     assert ("Apply the requested changes" in prompt) == override
 
 
-@pytest.mark.parametrize("missing", [None, ENGINE["model_file"], ENGINE["clip_t5"], ENGINE["vae"]])
+@pytest.mark.parametrize("missing", [None, ENGINE["model_file"], ENGINE["clip_t5"], ENGINE["vae"], ENGINE["prompt_upsampler"]])
 def test_settings_requires_the_entire_model_bundle(missing):
     from webapp.backend import main as web
     with mock.patch.object(web.gapp, "load_config", return_value={"comfy_workers": ["http://worker:8188"]}), \
@@ -172,7 +203,8 @@ DEFAULT_SENTINELS = [
 FLUX3_FILES = [f'{m["dir"]}/{m["file"]}' for m in ENGINE["models"]]
 
 
-def test_make_install_detects_missing_optional_encoder_on_an_existing_install(tmp_path):
+@pytest.mark.parametrize("missing_index", [1, 3])
+def test_make_install_detects_missing_optional_encoder_on_an_existing_install(tmp_path, missing_index):
     source = (ROOT / "scripts/install.sh").read_text()
     function = source[source.index("_models_present_on() {"):source.index("_ask_hf_token() {")]
     code = 'is_local_host() { [[ "$1" == localhost || "$1" == 127.0.0.1 ]]; };\n' + function
@@ -183,7 +215,7 @@ def test_make_install_detects_missing_optional_encoder_on_an_existing_install(tm
     assert shell(code, env).returncode != 0
     touch_files(tmp_path, FLUX3_FILES)
     assert shell(code, env).returncode == 0
-    (tmp_path / FLUX3_FILES[1]).unlink()
+    (tmp_path / FLUX3_FILES[missing_index]).unlink()
     assert shell(code, env).returncode != 0
 
 
@@ -224,7 +256,8 @@ with open(os.environ["HF_TEST_LOG"], "a") as log:
     assert "Model download complete" not in proc.stdout
 
 
-def test_worker_syncs_optional_bundle_even_when_default_models_exist(tmp_path):
+@pytest.mark.parametrize("missing_index", [1, 3])
+def test_worker_syncs_optional_bundle_even_when_default_models_exist(tmp_path, missing_index):
     source = (ROOT / "scripts/install_worker_container.sh").read_text()
     block = source[source.index("_flux3_models_present() {"):source.index("# ── 4. Stop")]
     dest = tmp_path / "worker"
@@ -251,18 +284,55 @@ if source.is_dir():
     assert "rsyncing" in proc.stdout
     assert all((dest / f).is_file() for f in FLUX3_FILES)
     assert "rsyncing" not in shell(code, env).stdout
-    (dest / FLUX3_FILES[1]).unlink()
-    (source_models / FLUX3_FILES[1]).unlink()
+    (dest / FLUX3_FILES[missing_index]).unlink()
+    (source_models / FLUX3_FILES[missing_index]).unlink()
     proc = shell(code, env)
     assert proc.returncode != 0
     assert "bundle incomplete" in proc.stdout
 
 
 def test_all_worker_install_paths_pin_the_native_flux3_revision():
-    revision = "29e28e2b488e7739c351c331d73da25aa435da5c"
+    revision = "8713616fcc321624e306bbd36be5906203dcb0dc"
     for file in ("docker/comfyui/Dockerfile", "docker/docker-compose.yml",
                  "scripts/install_worker_container.sh"):
         assert revision in (ROOT / file).read_text()
     required = (ROOT / "docker/comfyui/required_nodes.txt").read_text()
     assert ENGINE["requires_node"] in required
     assert "ReferenceMultiLatent" in required
+
+
+@pytest.mark.parametrize("key", ["flux2-klein", "qwen-image-2.1", "qwen-image-2.1-nvfp4"])
+def test_other_image_engines_keep_original_prompts_and_resolution(tmp_path, key):
+    wf, _, _ = generate(tmp_path, engine=engines.get(key))
+    assert not {"TextGenerate", "BatchImagesNode", "ImageScale"} & {n["class_type"] for n in wf.values()}
+    encodings = [n for n in wf.values() if n["class_type"] in ("CLIPTextEncode", "TextEncodeQwenImage21")]
+    assert any('Alice holds a sign reading "hello".' in n["inputs"].values() for n in encodings)
+    assert any(n["inputs"].get("width") == 1024 and n["inputs"].get("height") == 576 for n in wf.values())
+
+
+def test_larger_flux3_canvas_is_not_reduced_before_sampling(tmp_path):
+    wf, _, _ = generate(tmp_path, width=2048, height=2048)
+    assert wf["6"]["inputs"] == {"width": 2048, "height": 2048, "batch_size": 1}
+
+
+@pytest.mark.parametrize("missing_node", ENGINE["extra_nodes"])
+def test_missing_upsampling_capability_is_refused_before_upload(tmp_path, missing_node):
+    with mock.patch.object(comfyui, "comfy_node_exists", side_effect=lambda u, n: n != missing_node), \
+         mock.patch.object(comfyui, "_upload_image") as upload:
+        with pytest.raises(RuntimeError, match=missing_node):
+            comfyui.generate_with_engine(ENGINE, "scene", tmp_path / "out.png", width=1024, height=576)
+    upload.assert_not_called()
+
+
+def test_settings_requires_recommended_version_even_with_all_nodes_and_weights():
+    from webapp.backend import main as web
+    url = "http://worker:8188"
+    with mock.patch.object(web.gapp, "load_config", return_value={"comfy_workers": [url]}), \
+         mock.patch("pipeline.worker_pool.queue_depth", return_value=0), \
+         mock.patch.object(comfyui, "engine_model_present", return_value=True), \
+         mock.patch.object(comfyui, "comfy_node_exists", return_value=True), \
+         mock.patch.object(comfyui, "comfyui_version", return_value=(0, 41, 2)):
+        result = web.list_engines()
+    assert result["availability"][KEY] is False
+    assert result["worker_updates"][KEY] == url
+    assert result["availability"]["qwen-image-2.1-nvfp4"] is True

@@ -120,31 +120,44 @@ inherit both like every other style field. Download an engine per worker from
 FLUX 3 Image Klein NVFP4 notes:
 
 - Select `flux3-klein-nvfp4` under **Settings → Styles → Image model → Generation**.
-  FLUX.2 remains the default. The new engine uses the style's canvas, snapped down
-  to a multiple of 16, with 16 steps, Euler/simple sampling and CFG 1.
+  FLUX.2 remains the default. Only FLUX 3 uses the following quality settings;
+  Qwen, FLUX.2 and the video/music workflows keep their existing prompts and sizes.
+- Every FLUX 3 generation path (scenes, portraits, sheets and covers) first runs
+  BFL's **local Qwen3.5 9B prompt upsampler**. It uses BFL's text-to-image or
+  reference-image system prompt; references reach both the upsampler and diffusion
+  model in the same order. No hosted LLM or extra account is used for this step.
+  Missing upsampler weights fail the render rather than silently bypassing it.
+- Sampling follows BFL's [updated ComfyUI workflow](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/tree/main/workflows):
+  **16 steps, Euler/simple, CFG 1 and timestep-shift alpha 16** (`mu = ln(16)`).
+  The native canvas is approximately **2 megapixels** (`2 × 1024²` pixels), or the
+  requested size if larger, preserving aspect ratio on a 16-pixel grid. The
+  decoded image is resized with Lanczos to the existing requested canvas (floored
+  to multiples of 16). Film resolution, first-frame caching and other engines
+  therefore keep their current behaviour. Higher native resolution and prompt
+  upsampling cost additional render time; they do not change the video engine.
 - **Blackwell only** (including DGX Spark / GB10 and RTX 50-series). The official
   [BFL ComfyUI package](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy)
-  supplies `flux3_image_klein_sd_nvfp4.safetensors` (5.3 GB),
-  `qwen3vl_4b_int8_convrot.safetensors` (4.9 GB) and `flux2-vae.safetensors`
-  (0.3 GB, shared with FLUX.2). About **10.5 GB on disk**, not a peak memory estimate.
-  The `_sd_` checkpoint is distilled; the base model and separate prompt upsampler
-  are not installed. Existing detailed scene prompts are passed through unchanged.
+  supplies `flux3-image-klein-nvfp4.safetensors` (5.3 GB),
+  `qwen3vl_4b_int8_convrot.safetensors` (4.9 GB),
+  `qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors` (6.7 GB), and
+  `flux2-vae.safetensors` (0.3 GB, shared with FLUX.2). About **17.2 GB on disk**,
+  not a peak memory estimate. The base checkpoint is not installed.
 - **Gated download:** accept the conditions on the BFL model page, then set a read
   token in Settings before clicking **Download**. For the full installation path,
-  export `HF_TOKEN` and run `make install INSTALL_FLUX3=1`. This checks the complete
-  bundle even on existing installs, downloads on the model-source worker and syncs
+  export `HF_TOKEN` and run `make install INSTALL_FLUX3=1`. This checks all four
+  files even on existing installs, downloads on the model-source worker and syncs
   missing files to the other configured workers. `make download-models INSTALL_FLUX3=1`
   downloads the defaults plus FLUX 3 locally. Neither command selects it for styles.
   Plain `make install` installs worker support but leaves these optional weights out.
-  Settings' **Download** installs model files only. If it shows **worker update
-  required**, run `make start` on the controller to rebuild outdated ComfyUI
-  containers, then refresh Settings; downloading again does not upgrade the worker.
-- The worker image pins ComfyUI's **0.41 development snapshot `29e28e2b`**, after
-  [native FLUX 3 support](https://github.com/Comfy-Org/ComfyUI/pull/17064) landed.
-  The exact pin is shared by Docker, Compose and `make install`; `make start`
-  rebuilds stale images. Settings checks the transformer, encoder, VAE and native
-  loader sentinel. Generation refuses workers without that native capability,
-  including earlier development builds reporting the same version number.
+  BFL renamed the original `flux3_image_klein_sd_nvfp4.safetensors` checkpoint;
+  existing installations must download the current filename and the upsampler.
+  Older files are left untouched.
+- The worker image pins **ComfyUI 0.41.3 (`8713616f`)**. Docker, Compose and
+  `make install` share the pin; `make start` rebuilds stale images. Settings checks
+  all four model files, the required nodes and the minimum worker version.
+  **Model files downloaded** confirms only the download. If Settings shows
+  **worker update required**, run `make start` and refresh Settings; downloading
+  again does not upgrade ComfyUI. Generation refuses incompatible workers.
 - Character references retain their order and are named `<ref_image_0>`,
   `<ref_image_1>`, etc. The workflow accepts up to 10; scene matching retains its
   existing two-character cap. A portrait reference never changes the scene's output
@@ -184,7 +197,7 @@ Qwen-Image 2.1 notes:
   is why this is the one to pick there. It has not been timed on a Spark in
   this project. There is no few-step distill of 2.1 yet, so both engines stay
   at 25 steps — the old Qwen-Image lightning LoRAs are a different model.
-- The worker image pins **ComfyUI 0.41 development snapshot `29e28e2b`**,
+- The worker image pins **ComfyUI 0.41.3 (`8713616f`)**,
   which includes `TextEncodeQwenImage21` (introduced in v0.37.0). `make install` writes that pin, and
   `make start` rebuilds a worker whose image is older. A render on an older
   image is refused up front.

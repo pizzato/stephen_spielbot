@@ -67,7 +67,7 @@ FROM ${BASE_IMAGE}
 # Pin ComfyUI for reproducible workers: a tag, branch, or commit SHA.
 # v0.30.0 is the first release with native MiniMax H3 nodes (nodes_minimax_h3);
 # v0.32.0 adds native LTX 2.5; v0.33.0 adds MiniMax Music 3; v0.37.0 adds
-# Qwen-Image 2.1 (TextEncodeQwenImage21). The pinned 0.41 development snapshot
+# Qwen-Image 2.1 (TextEncodeQwenImage21). The pinned 0.41.3 release
 # adds native FLUX 3 (PR #17064; not in v0.40.0). Bumping this wants a chained H3
 # render re-check — H3 Motion Context monkey-patches ComfyUI internals and
 # self-tests on load.

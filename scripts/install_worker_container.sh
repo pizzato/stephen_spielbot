@@ -160,7 +160,7 @@ rsync -az          "$REPO_ROOT/.dockerignore" "$BUILD_DEST/.dockerignore"
 _sh "cat > ~/$REMOTE_BUILD_DIR/docker/.env" <<ENV
 MODELS_DIR=${REMOTE_MODELS}
 COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
-# ComfyUI 0.41 development snapshot with native FLUX 3 (PR #17064).
+# ComfyUI 0.41.3 release with native FLUX 3 (PR #17064).
 COMFYUI_REF=8713616fcc321624e306bbd36be5906203dcb0dc
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
