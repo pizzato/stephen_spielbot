@@ -109,7 +109,7 @@ ENGINES: dict[str, dict] = {
     "flux3-klein-nvfp4": {
         "key": "flux3-klein-nvfp4",
         "label": "FLUX 3 Image Klein NVFP4",
-        "sub": "16 steps · Blackwell only (GB10 / RTX 50) · character references",
+        "sub": "16 steps · local prompt upsampling · 2 MP · Blackwell only · character references",
         "family": "flux3",
         "can_generate": True,
         # Reference editing does not preserve pixels outside a painted mask.
@@ -129,29 +129,33 @@ ENGINES: dict[str, dict] = {
             "Accept the model's Hugging Face conditions before downloading. "
             "Requires a Blackwell GPU; masked edits stay on FLUX.2."
         ),
-        "model_file": "flux3_image_klein_sd_nvfp4.safetensors",
+        "model_file": "flux3-image-klein-nvfp4.safetensors",
         "clip_t5": "qwen3vl_4b_int8_convrot.safetensors",
+        "prompt_upsampler": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
         "clip_l": None,
         "vae": "flux2-vae.safetensors",
-        # The version alone is insufficient: early 0.41 development builds
-        # predate the native FLUX 3 loader. This node landed with that loader.
         "requires_node": "Flux3LayoutPrompt",
-        "min_comfyui": (0, 41, 0),
-        "too_old_note": "its native FLUX 3 loader is not available there",
-        "probe": ("UNETLoader", "unet_name", "flux3_image_klein_sd_nvfp4.safetensors"),
+        "extra_nodes": ["TextGenerate", "BatchImagesNode", "ModelSamplingFlux"],
+        "min_comfyui": (0, 41, 3),
+        "too_old_note": "BFL's updated workflow requires ComfyUI 0.41.3 or newer",
+        "probe": ("UNETLoader", "unet_name", "flux3-image-klein-nvfp4.safetensors"),
         "extra_probes": [
             ("CLIPLoader", "clip_name", "qwen3vl_4b_int8_convrot.safetensors"),
             ("VAELoader", "vae_name", "flux2-vae.safetensors"),
+            ("CLIPLoader", "clip_name", "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors"),
         ],
         "models": [
             _model("black-forest-labs/flux-3-image-klein-comfy",
-                   "diffusion_models/flux3_image_klein_sd_nvfp4.safetensors",
+                   "diffusion_models/flux3-image-klein-nvfp4.safetensors",
                    "models/diffusion_models", gated=True),
             _model("black-forest-labs/flux-3-image-klein-comfy",
                    "text_encoders/qwen3vl_4b_int8_convrot.safetensors",
                    "models/text_encoders", gated=True),
             _model("black-forest-labs/flux-3-image-klein-comfy",
                    "vae/flux2-vae.safetensors", "models/vae", gated=True),
+            _model("black-forest-labs/flux-3-image-klein-comfy",
+                   "text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
+                   "models/text_encoders", gated=True),
         ],
     },
     "qwen-image-2.1": {

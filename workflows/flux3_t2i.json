@@ -13,7 +13,7 @@
   },
   "4": {
     "class_type": "CLIPTextEncode",
-    "inputs": {"clip": ["2", 0], "text": "{{POSITIVE_PROMPT}}"}
+    "inputs": {"clip": ["2", 0], "text": ["11", 0]}
   },
   "5": {
     "class_type": "ConditioningZeroOut",
@@ -26,7 +26,7 @@
   "7": {
     "class_type": "KSampler",
     "inputs": {
-      "model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
+      "model": ["12", 0], "positive": ["4", 0], "negative": ["5", 0],
       "latent_image": ["6", 0], "seed": "{{SEED}}", "steps": "{{STEPS}}",
       "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0
     }
@@ -37,6 +37,36 @@
   },
   "9": {
     "class_type": "SaveImage",
-    "inputs": {"images": ["8", 0], "filename_prefix": "flux3-klein"}
+    "inputs": {"images": ["13", 0], "filename_prefix": "flux3-klein"}
+  },
+  "10": {
+    "class_type": "CLIPLoader",
+    "inputs": {"clip_name": "{{UPSAMPLER}}", "type": "flux3", "device": "default"}
+  },
+  "11": {
+    "class_type": "TextGenerate",
+    "inputs": {
+      "clip": ["10", 0], "prompt": "{{POSITIVE_PROMPT}}", "system_prompt": "{{SYSTEM_PROMPT}}",
+      "max_length": 3584, "sampling_mode": "on",
+      "sampling_mode.temperature": 1.0, "sampling_mode.top_k": 1,
+      "sampling_mode.top_p": 0.95, "sampling_mode.min_p": 0.0,
+      "sampling_mode.repetition_penalty": 1.0, "sampling_mode.seed": "{{SEED}}",
+      "sampling_mode.presence_penalty": "{{PRESENCE_PENALTY}}",
+      "thinking": false, "use_default_template": true, "mtp": "off"
+    }
+  },
+  "12": {
+    "class_type": "ModelSamplingFlux",
+    "inputs": {
+      "model": ["1", 0], "max_shift": "{{SHIFT}}", "base_shift": "{{SHIFT}}",
+      "width": "{{WIDTH}}", "height": "{{HEIGHT}}"
+    }
+  },
+  "13": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": ["8", 0], "upscale_method": "lanczos",
+      "width": "{{OUTPUT_WIDTH}}", "height": "{{OUTPUT_HEIGHT}}", "crop": "disabled"
+    }
   }
 }

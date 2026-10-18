@@ -238,7 +238,7 @@ LTX 2.5 notes:
   automatically. The 2.3 checkpoint stays installed for the keyframed
   establishing shots and the film editor's upscalers.
 - Native support ships with **ComfyUI itself (≥ v0.32.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=8713616fcc321624e306bbd36be5906203dcb0dc`) if the engine shows
   "not installed" with the weights already downloaded. Older workers refuse the
   render rather than failing mid-graph.
 - Clips render at **24 fps** (2.3 ran at 25) through the same two-pass
@@ -255,7 +255,7 @@ MiniMax H3 notes:
   encoder, video + audio VAEs) from **Settings → Infrastructure → Video models** —
   it is *not* part of the bulk install.
 - Its nodes ship with **ComfyUI itself (≥ v0.30.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=8713616fcc321624e306bbd36be5906203dcb0dc`) if the engine shows
   "not installed" with the weights already downloaded.
 - Generation is capped at ~1 MP (768×1344-class); larger style resolutions render
   at the cap and are reframed back to the plan size. Clips run 4–15 s at 24 fps.
@@ -428,7 +428,7 @@ per worker from **Settings → Infrastructure → Music models**.
 MiniMax Music 3 notes:
 
 - Its nodes ship with **ComfyUI itself (≥ v0.33.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=8713616fcc321624e306bbd36be5906203dcb0dc`) if the engine shows
   "not installed" with the weights already downloaded. Renders are refused
   up-front on an older worker rather than failing mid-graph.
 - The film's **music description** becomes the model's *caption*. It reads best

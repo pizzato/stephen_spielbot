@@ -71,7 +71,7 @@ FROM ${BASE_IMAGE}
 # adds native FLUX 3 (PR #17064; not in v0.40.0). Bumping this wants a chained H3
 # render re-check — H3 Motion Context monkey-patches ComfyUI internals and
 # self-tests on load.
-ARG COMFYUI_REF=29e28e2b488e7739c351c331d73da25aa435da5c
+ARG COMFYUI_REF=8713616fcc321624e306bbd36be5906203dcb0dc
 ARG TORCH_INDEX_URL
 ARG TORCH_SPEC
 

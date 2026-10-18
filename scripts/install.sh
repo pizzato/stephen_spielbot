@@ -125,12 +125,14 @@ _models_present_on() {
     local host="$1"
     if [[ "${INSTALL_FLUX3:-0}" == "1" ]]; then
         if is_local_host "$host"; then
-            [[ -f "$COMFY_DIR/models/diffusion_models/flux3_image_klein_sd_nvfp4.safetensors" &&
+            [[ -f "$COMFY_DIR/models/diffusion_models/flux3-image-klein-nvfp4.safetensors" &&
                -f "$COMFY_DIR/models/text_encoders/qwen3vl_4b_int8_convrot.safetensors" &&
+               -f "$COMFY_DIR/models/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors" &&
                -f "$COMFY_DIR/models/vae/flux2-vae.safetensors" ]] || return 1
         else
-            ssh "$host" '[[ -f $HOME/github/ComfyUI/models/diffusion_models/flux3_image_klein_sd_nvfp4.safetensors &&
+            ssh "$host" '[[ -f $HOME/github/ComfyUI/models/diffusion_models/flux3-image-klein-nvfp4.safetensors &&
                             -f $HOME/github/ComfyUI/models/text_encoders/qwen3vl_4b_int8_convrot.safetensors &&
+                            -f $HOME/github/ComfyUI/models/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors &&
                             -f $HOME/github/ComfyUI/models/vae/flux2-vae.safetensors ]]' || return 1
         fi
     fi
