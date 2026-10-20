@@ -1843,7 +1843,7 @@ class SoundedTakeTests(unittest.TestCase):
             Path(out).write_bytes(b"wav")
             return Path(out)
 
-        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
             return {"pictures": [{"slot": 1, "name": "Ada", "kind": "character",
                                   "path": str(wd / "scene_02_preview.png")}],
                     "audios": []}

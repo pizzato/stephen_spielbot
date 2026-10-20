@@ -309,9 +309,12 @@ marks a single character; `*asterisks*` mark the exact characters they wrap.
 For music videos, use **Extra script instructions** to set the balance of singing,
 non-singing narrative scenes and artist-free imagery. Ask for cutaways throughout the
 song, including sung passages, and describe when people should act without miming.
+Keep shot variety there: wides, action, details and portraits belong in separate scenes.
 Keep **Visual style** focused on lighting, palette and photographic treatment: it is
-added to every image prompt, and naming a performer there can pull their character
-reference into a shot intended to be empty. Put identity and wardrobe rules in the
+added once to each image prompt. Performer names in that style text do not select
+character references; the scene's own cast and description do. Each scene image defaults
+to one continuous composition. Request panels or a collage explicitly in that scene's
+direction when wanted. Put identity and wardrobe rules in the
 character definition or script instructions, conditional on that person being visible.
 Clothing changes requested in a style apply to future videos using that style; use a
 film's own brief or assigned wardrobe for a change specific to one video.

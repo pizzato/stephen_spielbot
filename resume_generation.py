@@ -460,15 +460,18 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
     # the same binding the Create-screen preview and the film editor's image
     # re-render use. Without it this painter alone invents a face, and the
     # scene opens on a stranger who then rides into the take as its "frame".
-    from app import _characters_prompt_and_refs
+    from app import _characters_prompt_and_refs, record_scene_frame_cast
+    frame_scene = {"id": scene.id, "image_prompt": prompt,
+                   "metadata": _performance.scene_meta(scene)}
     prompt, reference_images = _characters_prompt_and_refs(
-        prompt, {}, cfg, style_name, work_dir, engine=engine)
+        prompt, frame_scene, cfg, style_name, work_dir, engine=engine)
     out = work_dir / f"scene_{scene.id:02d}_first_frame.png"
     logger.info("Scene %d: opening frame for the silent take (%s) on %s",
                 scene.id, engine.get("key"), comfy_url)
     generate_with_engine(engine, prompt, out, width=vid_width, height=vid_height,
                          reference_images=reference_images or None,
                          comfy_url=comfy_url)
+    record_scene_frame_cast(out, frame_scene, cfg, work_dir, style_name)
     return out
 
 
@@ -517,6 +520,9 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
         ensure_opening_frame(scene, work_dir, cfg, comfy_url=comfy_url,
                              vid_width=vid_width, vid_height=vid_height,
                              style_name=style_name)
+        from app import sync_scene_frame_cast
+        scene_meta = sync_scene_frame_cast(
+            work_dir, scene.id, cfg, style_name, meta=scene_meta)
     # One scene = ONE generation, whole conversation in a single continuous
     # clip (the user's call: shot/reverse-shot splitting kept identities safe
     # but broke scenes apart). The splitter remains available per config
@@ -620,7 +626,8 @@ def continue_performance_scene(scene, work_dir: Path, cfg: dict, *, comfy_url: s
     # honouring it here would have the scene play its opening again.
     meta.pop("prompt_override", None)
 
-    refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
+    refs = resolve_performance_references(
+        meta, cfg, work_dir, style_name, scene_id=scene.id, include_frame_cast=False)
     ref_images = [Path(p["path"]) for p in refs["pictures"]]
     ref_audios = [Path(a["path"]) for a in refs["audios"]]
     if not ref_images:
@@ -980,7 +987,9 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
 
     # The SAME resolver the editor's performance view calls, so the slots shown
     # on screen are the slots wired into the graph.
-    refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
+    refs = resolve_performance_references(
+        meta, cfg, work_dir, style_name, scene_id=scene.id,
+        include_frame_cast="frame" not in drop_kinds and prev_ctx is None)
     if drop_kinds:
         kept = [p for p in refs["pictures"] if p.get("kind") not in drop_kinds]
         if not kept and not extra_pictures:

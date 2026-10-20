@@ -2307,6 +2307,12 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
             "acting and person-free imagery. The song plays over both. Include only "
             "visible people in \"cast\"; use \"cast\": [] for person-free shots and "
             "do not mention absent performers in their image_prompt or video_prompt. "
+            "Include every recurring character visible in the first frame in \"cast\", "
+            "even when they are not singing or speaking. Compose each image as one "
+            "uninterrupted view of one moment; panels or split screen are occasional "
+            "choices only when explicitly directed for that scene. Vary framing "
+            "BETWEEN scenes. Keep the first frame's clothes throughout each take; "
+            "a different outfit needs a deliberate scene boundary. "
             "Write each scene's \"beats\" as the visible action of its actual subjects, "
             "spread across the whole take. Use the song's emotion, rhythm and "
             "associations to connect the imagery; literal lyric illustration is "
@@ -6300,6 +6306,8 @@ def select_scene_preview(job_id: str, scene_id: int, body: PreviewSelectBody) ->
     finally:
         store.close()
     _clear_no_first_frame(job_id, int(scene_id))
+    gapp.sync_scene_frame_cast(wd, int(scene_id), gapp.load_config(),
+                              _job_style_name(job_id) or "", image=out)
     return {"ok": True, "preview_path": str(out),
             "history": image_history.history(wd, int(scene_id))}
 
@@ -15818,7 +15826,8 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
 
 
 def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path,
-                             engine: dict | None = None) -> tuple[str, list[Path]]:
+                             engine: dict | None = None, *,
+                             instruction: str = "") -> tuple[str, list[Path]]:
     """Styled image prompt + character reference images for a film-scene re-render.
 
     Mirrors _generate_active_scene_preview so a frame regenerated from the edit
@@ -15836,6 +15845,7 @@ def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path,
         # painter of an acted scene's frame uses).
         base_prompt = performance_mode.opening_frame_prompt(
             row.get("metadata") if isinstance(row.get("metadata"), dict) else {})
+    base_prompt = gapp._apply_prompt_instruction(base_prompt, instruction)
     base_prompt, reference_images = gapp._characters_prompt_and_refs(
         base_prompt, row, cfg, style_name, wd, engine=engine)
     style_clean = (jc.get("style") or "").strip().rstrip(".")
@@ -15863,9 +15873,8 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
     try:
         _film_checkpoint(task_id)
-        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd, engine)
-        # One-off user steering from the Re-generate popover (not persisted).
-        image_prompt = gapp._apply_prompt_instruction(image_prompt, instruction)
+        image_prompt, reference_images = _film_scene_image_prompt(
+            jc, row, cfg, wd, engine, instruction=instruction)
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
@@ -15891,6 +15900,11 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             pool.release(url)
 
         if first_frame.exists():
+            gapp.record_scene_frame_cast(
+                first_frame, {**row, "id": sid}, cfg, wd, jc.get("style_name") or "",
+                prompt=gapp._apply_prompt_instruction(
+                    row.get("image_prompt") or performance_mode.opening_frame_prompt(
+                        row.get("metadata") or {}), instruction))
             shutil.copy2(first_frame, preview)
             image_history.record(wd, sid, preview)
 
@@ -15970,7 +15984,8 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         _film_checkpoint(task_id)
         # Character-consistent, styled image prompt + reference images, so a
         # regenerated first frame keeps the scene's recurring characters' looks.
-        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd, engine)
+        image_prompt, reference_images = _film_scene_image_prompt(
+            jc, row, cfg, wd, engine, instruction=instruction)
         video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
         style_clean = jc.get("style", "").strip().rstrip(".")
         if style_clean and video_prompt and not video_prompt.startswith(style_clean):
@@ -15979,7 +15994,6 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         # to the motion prompt and to the first-frame prompt used if the frame is
         # regenerated below (a reused first frame is unaffected).
         video_prompt = gapp._apply_prompt_instruction(video_prompt, instruction)
-        image_prompt = gapp._apply_prompt_instruction(image_prompt, instruction)
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
@@ -16019,6 +16033,11 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             finally:
                 pool.release(url)
             scene_first_frame = first_frame
+            gapp.record_scene_frame_cast(
+                first_frame, {**row, "id": sid}, cfg, wd, jc.get("style_name") or "",
+                prompt=gapp._apply_prompt_instruction(
+                    row.get("image_prompt") or performance_mode.opening_frame_prompt(
+                        row.get("metadata") or {}), instruction))
             image_history.record(wd, sid, first_frame)
 
         # Determine narration duration from existing narration wav
@@ -16406,6 +16425,8 @@ def select_film_preview(scene_id: int, body: FilmPreviewSelectBody) -> dict:
     finally:
         store.close()
     _clear_no_first_frame(job_id, int(scene_id))
+    gapp.sync_scene_frame_cast(wd, int(scene_id), gapp.load_config(),
+                              _film_job_config(wd).get("style_name") or "", image=out)
     return {"ok": True, "preview_path": str(out),
             "history": image_history.history(wd, int(scene_id))}
 
