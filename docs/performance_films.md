@@ -57,7 +57,8 @@ What the take is built from depends on what the scene has:
 
 - **The scene's first frame.** Ref2VA has no literal first-frame input, but the scene's own
   image rides as a reference that defines the opening composition — *begin the take looking
-  like this picture*. So the image prompt still composes the shot, exactly as it did on the
+  like this picture*, including the outfit each person keeps throughout the take.
+  So the image prompt still composes the shot, exactly as it did on the
   I2V path. The Create screen's preview is used when one exists; otherwise the frame is
   generated at render time, on the same worker, right before the take (anyone the frame
   names is anchored to their character reference portrait, so the painted opening shows the
@@ -409,7 +410,9 @@ narrated one: on the Script screen its card paints the image from the scene's *s
 with the cast anchored to their portraits (or use Edit image / upload). Ref2VA has no
 literal first-frame input — the image rides as the take's **opening-composition
 reference**: a `<Picture N>` whose authority is the space, light, framing and where
-everyone stands, while faces and voices stay bound to their own references. When a scene
+everyone stands, plus the clothes visible on each person throughout the take. Portraits
+define face, hair and build only when an opening frame is present; their clothing cannot
+replace its outfit mid-scene. Faces and voices stay bound to their own references. When a scene
 has one, it supersedes the location asset for that scene (the frame IS the place,
 photographed), keeping the reference budget tight — measured, three picture references
 hold; more and the weakest starts dropping.
@@ -465,8 +468,11 @@ character's own [turnaround sheet](characters.md#turnaround-sheets) in instead. 
 usual cascade applies: a catalogue outfit reaches every film in its scope, a film's own
 artifact of the same name shadows it, the artifact's *Used in* list scopes it to chosen
 scenes — and an acted scene can opt out entirely with **Portrait clothes only** (scene
-editor), which stands every wardrobe reference down and returns clothing authority to
-the portraits (a flashback, or a costume change inside one film).
+editor), which stands every wardrobe reference down. Without an opening frame, clothing
+authority returns to the portraits (a flashback, or a costume change inside one film).
+With an opening frame, its visible outfit always remains unchanged throughout the take;
+wardrobe references can supply only unseen details consistent with that outfit. To change
+an outfit, update the opening image before shooting the scene.
 
 **Soundtrack artifacts.** An **audio** artifact is not a reference picture: the whole
 track is **pinned into the H3 generation** of every acted take it applies to

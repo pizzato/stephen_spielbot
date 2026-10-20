@@ -93,7 +93,7 @@ class RetakeTests(unittest.TestCase):
                 Path(out).write_bytes(f"take{len(renders)}".encode())
                 return Path(out)
 
-            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
                 return {"pictures": [{"slot": 1, "name": "A", "kind": "character",
                                       "path": str(wd / "face.png")}], "audios": []}
 
@@ -137,7 +137,7 @@ class RetakeTests(unittest.TestCase):
                 Path(out).write_bytes(b"take")
                 return Path(out)
 
-            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
                 return {"pictures": [{"slot": 1, "name": "A", "kind": "character",
                                       "path": str(wd / "face.png")}], "audios": []}
 
@@ -180,7 +180,7 @@ class RetakeTests(unittest.TestCase):
                 Path(out).write_bytes(b"take")
                 return Path(out)
 
-            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
                 return {"pictures": [{"slot": 1, "name": "A", "kind": "character",
                                       "path": str(wd / "face.png")}], "audios": []}
 
@@ -211,7 +211,7 @@ class RetakeTests(unittest.TestCase):
                 Path(out).write_bytes(b"data")
                 return Path(out)
 
-            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
                 return {"pictures": [{"slot": 1, "name": "A", "kind": "character",
                                       "path": str(wd / "face.png")}], "audios": []}
 
@@ -251,7 +251,7 @@ class SilenceGateTests(unittest.TestCase):
                 Path(out).write_bytes(f"take{len(renders)}".encode())
                 return Path(out)
 
-            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
                 return {"pictures": [{"slot": 1, "name": "A", "kind": "character",
                                       "path": str(wd / "face.png")}], "audios": []}
 

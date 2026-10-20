@@ -842,7 +842,7 @@ class SceneContinuityTests(unittest.TestCase):
                       mode="performance", lines=meta["lines"],
                       metadata_extra={k: v for k, v in meta.items() if k != "lines"})
 
-        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
             return {"pictures": [{"slot": 1, "name": m.get("speaker") or "A",
                                   "kind": "character", "path": str(wd / "face.png")}],
                     "audios": []}
@@ -887,7 +887,7 @@ class SceneContinuityTests(unittest.TestCase):
                       mode="performance", lines=meta["lines"],
                       metadata_extra={k: v for k, v in meta.items() if k != "lines"})
 
-        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
             return {"pictures": [
                 {"slot": 1, "name": m.get("speaker") or "A", "kind": "character",
                  "path": str(wd / "face.png")},

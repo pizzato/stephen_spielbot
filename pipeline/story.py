@@ -639,7 +639,7 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
         extra = {k: item[k] for k in ("setting", "camera", "soundscape", "beats")
                  if item.get(k)}
         cast = item.get("cast")
-        if cast:
+        if cast is not None:
             # One name comes back as a bare string often enough to matter — and
             # list("Ada") is three "characters" nobody has a portrait for.
             extra["cast"] = [cast] if isinstance(cast, str) else list(cast)

@@ -339,6 +339,12 @@ class DivideSongFormatTests(unittest.TestCase):
                     "Song", None, is_song=True)
                 self.assertNotIn("performs", scene.metadata)
 
+    def test_person_free_cast_survives_song_scene_serialization(self):
+        scene = story._scene_from_item(
+            1, {"mode": "silent", "cast": [], "image_prompt": "An empty street."},
+            "Song", None, is_song=True)
+        self.assertEqual(json.loads(json.dumps(scene.metadata))["cast"], [])
+
 
 class RedraftStoryTests(unittest.TestCase):
     def _generate_then_redraft(self, n_from, n_to, fake=None):

@@ -202,7 +202,10 @@ while a sheet under the `wardrobe` picture role holds the exact garments (and ne
 leaked a second person in testing — the role bounds it to the clothes and demotes the
 portrait to face-only). Wardrobe artifacts and catalogue outfits can copy a character's
 sheet in directly, or paint a film-specific **worn sheet** of the character in a
-described costume — see [Performance films](performance_films.md).
+described costume. When a take has an opening frame, its visible outfit takes precedence:
+the sheet supplies only consistent unseen garment details, so the clothes do not switch
+to the portrait or sheet outfit mid-scene. Update the opening image to change the outfit —
+see [Performance films](performance_films.md).
 
 ### Storage and endpoints
 

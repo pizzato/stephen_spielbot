@@ -349,7 +349,8 @@ def shots_for(meta: dict, establishing: bool = False) -> list[dict]:
     return shots
 
 
-def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
+def picture_role(pic, has_wardrobe: frozenset = frozenset(), *,
+                 has_frame: bool = False) -> str:
     """One reference's bounded-authority line: what it controls, what to ignore.
 
     References compete — a portrait's own clothing and background fight the
@@ -358,6 +359,9 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
     reference defines AND what it must not control.
     """
     if isinstance(pic, str):
+        if has_frame:
+            return (f"defines {pic}'s face, hair and build only. Ignore "
+                    "this picture's clothing and background")
         return f"defines {pic}'s appearance"
     name, kind = pic.get("name", ""), pic.get("kind", "character")
     hint = _clean(pic.get("hint"))
@@ -367,9 +371,11 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
                 "none")
     if kind == "frame":
         return ("defines the scene's OPENING IMAGE — the space, light, framing "
-                "and where everyone stands. Begin the take looking like this "
-                "picture. Faces come from the portrait references only, voices "
-                "from the audio references only")
+                "and where everyone stands, including the clothes they wear. "
+                "Begin the take looking like this picture and keep each person's "
+                "outfit visible in the opening image throughout the take. "
+                "Faces come from the portrait references only, voices from "
+                "the audio references only")
     if kind == "continuity":
         return ("defines the SAME room, furniture, lighting and time of day "
                 "already filmed in this scene — this shot is another angle of "
@@ -387,12 +393,16 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
     if kind == "wardrobe":
         owner = (pic.get("character") or "").strip()
         who = f"the clothes {owner} wears" if owner else "the wardrobe"
+        if has_frame:
+            return (f"supplies unseen details of {who} only where consistent "
+                    "with the opening image; never replace or change the clothes "
+                    "visible in the opening image. Ignore its background")
         return (f"defines {who} only — those exact garments, colours and "
                 f"details. Ignore its background")
     tail = f" — {name} is {hint}" if hint else ""
-    if name.strip().lower() in has_wardrobe:
-        # Their clothes come from a wardrobe reference; the portrait must not
-        # compete for them.
+    if has_frame or name.strip().lower() in has_wardrobe:
+        # The opening frame or wardrobe reference owns the clothes; the
+        # portrait must not make the outfit change during the take.
         return (f"defines {name}'s face, hair and build only{tail}. Ignore "
                 f"this picture's clothing and background")
     return f"defines {name}'s appearance{tail}. Ignore this picture's background"
@@ -468,6 +478,7 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     wardrobe_owners = frozenset(
         str(p.get("character") or "").strip().lower()
         for p in pics if isinstance(p, dict) and p.get("kind") == "wardrobe")
+    has_frame = any(isinstance(p, dict) and p.get("kind") == "frame" for p in pics)
     # A song film's shots. *sung* is when a voice is actually heard inside this
     # clip (measured off the track by assign_song_slices); *performs* is
     # whether anybody mimes it here at all — which needs somebody on screen to
@@ -481,7 +492,7 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     sections: list[str] = []
 
     # [REFERENCE USE] — every asset's authority, bounded.
-    refs = [f"<Picture {i + 1}> {picture_role(p, wardrobe_owners)}."
+    refs = [f"<Picture {i + 1}> {picture_role(p, wardrobe_owners, has_frame=has_frame)}."
             for i, p in enumerate(pics)]
     refs += [f"<Audio {i + 1}> defines {name}'s voice only — {name} must speak "
              f"in exactly this voice." for i, name in enumerate(audio_names or [])]
@@ -497,7 +508,12 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     if len(people_names) > 1:
         locks.append(f"{' and '.join(people_names)} are different people — never "
                      f"swap or merge their faces, bodies, clothes or voices.")
-    locks.append("Keep every face, wardrobe and body exactly as in the references.")
+    if has_frame:
+        locks.append("Keep every face and body exactly as in the portrait references. "
+                     "The opening image controls clothing for the entire take; "
+                     "portrait clothing and other outfit descriptions cannot replace it.")
+    else:
+        locks.append("Keep every face, wardrobe and body exactly as in the references.")
     sections.append("[IDENTITY LOCKS]\n" + "\n".join(locks))
 
     # [SCENE]

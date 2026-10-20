@@ -331,10 +331,20 @@ thing twice), with a legend above it saying which reference each `<Picture N>` n
 has — name a catalogue character in the instruction to bring them in
 (see [casting is opt-in, by name](../characters.md#casting-is-opt-in-by-name)). An acted scene's
 **first frame is optional**: painted from the setting with the cast anchored to their
-portraits, it rides as the take's opening-composition reference — and
+portraits, it rides as the take's opening-composition reference and keeps the visible
+outfit consistent throughout the take. Portraits then control face, hair and build only;
+an assigned wardrobe cannot replace clothes already visible in the opening image. To
+change those clothes, update the image before shooting the scene.
 **Remove first frame** drops it again. That removal is permanent for the scene: it
 ticks **No first frame**, so no later render paints one back. Re-generating the
 image, or picking a kept version from the strip, clears it.
+
+Known characters used to generate a first frame are attached to **On screen**
+automatically, including when you select an image from its history. Older ComfyUI PNGs
+that retain their portrait-reference metadata are supported too. This uses the image's
+saved identity information, not face recognition: add the cast yourself for an arbitrary
+uploaded image without that information. Artist names in the visual style do not add
+characters to a scene.
 
 ### Acted staging
 

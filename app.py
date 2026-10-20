@@ -3426,6 +3426,43 @@ def _characters_for_scene(scene_text: str, cfg: dict, style_name: str,
             and _character_mentions(scene_text, c)]
 
 
+def _scene_character_text(base_prompt: str, scene: dict, cfg: dict, style_name: str,
+                          work_dir: Path | None = None) -> str:
+    """Match characters from the shot and its authored cast, not its style.
+
+    A music style often names its artist even on empty-location shots. Strip
+    only known leading style text; names in the actual image description still
+    count. Covers pass no scene and retain their existing subject matching.
+    """
+    if not scene:
+        return base_prompt
+    prefixes = [style_settings(cfg, style_name).get("visual_style") or ""]
+    if work_dir is not None:
+        path = Path(work_dir) / "job_config.json"
+        if path.exists():
+            saved_style = _read_json(path).get("style") or ""
+            prefixes.extend([saved_style, _compose_visual_style(saved_style, cfg, style_name)])
+    prefixes = sorted({p.strip().rstrip(".") for p in prefixes if p.strip()},
+                      key=len, reverse=True)
+    texts = []
+    for text in (base_prompt, scene.get("image_prompt") or ""):
+        text = text.strip()
+        while text:
+            for prefix in prefixes:
+                if not text.casefold().startswith(prefix.casefold()):
+                    continue
+                rest = text[len(prefix):]
+                if not rest or rest.startswith((".", ",")):
+                    text = rest.lstrip("., ").strip()
+                    break
+            else:
+                break
+        texts.append(text)
+    cast = (scene.get("metadata") or {}).get("cast") or scene.get("cast") or []
+    texts.extend([cast] if isinstance(cast, str) else cast)
+    return " ".join(str(text) for text in texts)
+
+
 def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str,
                        work_dir: Path | None = None, *,
                        allow_appearance_override: bool = False) -> str:
@@ -3437,7 +3474,7 @@ def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str
     but not on screen). Its description is only appended when not already
     present, so re-generating a scene never stacks duplicate clauses. No match →
     unchanged."""
-    scene_text = f"{base_prompt} {scene.get('image_prompt') or ''}"
+    scene_text = _scene_character_text(base_prompt, scene, cfg, style_name, work_dir)
     clauses = []
     for c in _characters_for_scene(scene_text, cfg, style_name, work_dir):
         desc = c["description"]
@@ -3462,7 +3499,7 @@ def _scene_reference_characters(base_prompt: str, scene: dict, cfg: dict, style_
     FLUX.2 reference conditioning). Includes the script's own characters when a
     work_dir is given. Empty list when nothing matches."""
     chars = _job_characters(cfg, style_name, work_dir)
-    scene_text = f"{base_prompt} {scene.get('image_prompt') or ''}"
+    scene_text = _scene_character_text(base_prompt, scene, cfg, style_name, work_dir)
     pairs = []
     for c in chars:
         if not c.get("enabled", True) or not c.get("ref_image"):
@@ -3520,7 +3557,7 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
     prompt = _inject_characters(
         base_prompt, scene, cfg, style_name, work_dir,
         allow_appearance_override=allow_appearance_override)
-    pairs = _scene_reference_characters(prompt, scene, cfg, style_name, work_dir)
+    pairs = _scene_reference_characters(base_prompt, scene, cfg, style_name, work_dir)
     refs = [p for _c, p in pairs]
     if pairs and engine is not None and engine.get("t2i_ref_workflow"):
         if allow_appearance_override:
@@ -3550,6 +3587,23 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
             sep = " " if prompt.rstrip().endswith((".", "!", "?")) else ". "
             prompt = f"{prompt.rstrip()}{sep}{notes}"
     return prompt, refs
+
+
+def record_scene_frame_cast(image: Path, scene: dict, cfg: dict, work_dir: Path,
+                            style_name: str = "", *, prompt: str | None = None) -> dict:
+    """Record and attach known characters requested in this scene image.
+
+    Use the shot before character descriptions are injected. A known character
+    still belongs to the frame's cast when they do not yet have a portrait.
+    """
+    from pipeline.scene_image import record_cast
+
+    text = _scene_character_text(
+        prompt if prompt is not None else scene.get("image_prompt") or "",
+        scene, cfg, style_name, work_dir)
+    record_cast(image, [c for c in _job_characters(cfg, style_name, work_dir)
+                        if c.get("enabled", True) and _character_mentions(text, c)])
+    return sync_scene_frame_cast(work_dir, int(scene["id"]), cfg, style_name, image=image)
 
 
 def build_cover_generation(work_dir, cfg: dict, style_name: str, scenes=None,
@@ -4354,8 +4408,97 @@ def pick_song_singer(cfg: dict, style_name: str, *texts: str | None,
     return random.choice(usable)
 
 
+_FRAME_CAST_LOCK = threading.RLock()
+
+
+def sync_scene_frame_cast(work_dir: Path, scene_id: int, cfg: dict,
+                          style_name: str = "", *, image: Path | None = None,
+                          meta: dict | None = None) -> dict:
+    """Attach known characters requested in the selected frame to its scene.
+
+    Generated images carry reference provenance, not face recognition. Older
+    ComfyUI PNGs retain their reference filenames; arbitrary uploads may have
+    no identity information. Merge only known identities, never style names.
+    """
+    from pipeline import scene_image
+    from pipeline.orchestrator import job_id_from_work_dir
+
+    work_dir = Path(work_dir)
+    sid = int(scene_id)
+    with _FRAME_CAST_LOCK:
+        store = DurableStore.default()
+        try:
+            job_id = job_id_from_work_dir(work_dir)
+            current = store.get_scene(job_id, sid)
+            stored = current is not None
+            script_path = work_dir / "script.json"
+            disk_rows = json.loads(script_path.read_text()) if script_path.exists() else []
+            if not current:
+                current = next((r for r in disk_rows if int(r.get("id", 0)) == sid), None)
+            result = dict(meta if meta is not None else (current or {}).get("metadata") or {})
+            if image is None:
+                if result.get("no_first_frame"):
+                    return result
+                image = next((p for p in (
+                    work_dir / f"scene_{sid:02d}_preview.png",
+                    work_dir / f"scene_{sid:02d}_first_frame.png",
+                ) if p.is_file()), None)
+            if image is None:
+                return result
+            characters = _job_characters(cfg, style_name, work_dir)
+            names = scene_image.read_cast(image, characters)
+            if not names:
+                return result
+            identities = {}
+            for character in characters:
+                canonical = character["name"].strip().casefold()
+                for label in [character["name"], *(character.get("aliases") or [])]:
+                    identities.setdefault(str(label).strip().casefold(), canonical)
+
+            def merged_cast(metadata):
+                cast = metadata.get("cast") or []
+                cast = [cast] if isinstance(cast, str) else list(cast)
+                merged, seen = [], set()
+                for name in [*cast, *names]:
+                    key = str(name).strip().casefold()
+                    identity = identities.get(key, key)
+                    if identity not in seen:
+                        merged.append(name)
+                        seen.add(identity)
+                return merged
+
+            result["cast"] = merged_cast(result)
+            if current:
+                saved_meta = dict(current.get("metadata") or {})
+                cast = merged_cast(saved_meta)
+                if cast != saved_meta.get("cast"):
+                    saved_meta["cast"] = cast
+                    if stored:
+                        store.upsert_scene(
+                            job_id, sid, title=current.get("title") or "",
+                            image_prompt=current.get("image_prompt") or "",
+                            video_prompt=current.get("video_prompt") or "",
+                            narration=current.get("narration") or "",
+                            preview_path=current.get("preview_path") or "",
+                            metadata=saved_meta)
+                # Patch just this scene in the saved script, including when
+                # the store was already correct but the snapshot was stale.
+                disk_row = next((r for r in disk_rows if int(r.get("id", 0)) == sid), None)
+                if disk_row is not None:
+                    disk_meta = dict(disk_row.get("metadata") or {})
+                    if disk_meta.get("cast") != cast:
+                        disk_row["metadata"] = {**disk_meta, "cast": cast}
+                        _persist_script_snapshot(work_dir, disk_rows)
+                elif not disk_rows and stored:
+                    _persist_script_snapshot(work_dir, store.scene_rows(job_id))
+            return result
+        finally:
+            store.close()
+
+
 def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
-                                   style_name: str = "", scene_id: int = 0) -> dict:
+                                   style_name: str = "", scene_id: int = 0, *,
+                                   include_frame_cast: bool = True) -> dict:
     """Which references a performance scene will actually be rendered with.
 
     Returns ``{"pictures": [...], "audios": [...]}`` where each entry carries its
@@ -4368,6 +4511,12 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
     screen shows is what the model receives."""
     from pipeline import performance as _perf
 
+    # A frame painted before its cast was attached still needs those portraits
+    # in both the editor and the rendered take.
+    if scene_id and include_frame_cast and not meta.get("solo"):
+        synced = sync_scene_frame_cast(work_dir, scene_id, cfg, style_name, meta=meta)
+        if "cast" in synced:
+            meta["cast"] = synced["cast"]
     portrait_for, voice_for, voice_name_for, looks_like = _performance_refs(
         cfg, work_dir, style_name)
     pictures, audios = [], []
@@ -4405,8 +4554,8 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
     for vis in scene_visuals(work_dir, scene_id, meta.get("cast"), cfg, style_name):
         if frame is not None and vis["kind"] == "location":
             continue
-        # The scene said "portrait only": every wardrobe reference stands down
-        # and the cast portraits keep their full clothing authority.
+        # "Portrait only" removes wardrobe sheets. A selected opening frame
+        # still keeps the outfit already visible in that frame.
         if vis["kind"] == "wardrobe" and meta.get("no_wardrobe"):
             continue
         pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
@@ -4504,17 +4653,18 @@ def _generate_active_scene_preview(
         from pipeline import performance as _perf
         acted_prompt = _perf.opening_frame_prompt(md)
     base_prompt = image_prompt or scene.get("image_prompt") or acted_prompt or title
+    # Match a character added by one-off steering before choosing references.
+    scene_prompt = _apply_prompt_instruction(base_prompt, instruction)
     # Re-inject any recurring character's canonical appearance so the same named
     # subject looks consistent across scenes even when the LLM paraphrased it,
     # and anchor featured characters to their reference image (FLUX.2 only).
     # work_dir folds in the script's own (per-script) characters, not just the
     # global catalogue ones the style opted into.
     base_prompt, reference_images = _characters_prompt_and_refs(
-        base_prompt, scene, cfg, style_name, work_dir, engine=engine)
-    prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
-    # One-off user steering from the Re-generate popover (not persisted).
-    prompt = _apply_prompt_instruction(prompt, instruction)
-
+        scene_prompt, scene, cfg, style_name, work_dir, engine=engine)
+    prompt = (f"{combined_style}. {base_prompt}"
+              if combined_style and not base_prompt.startswith(combined_style)
+              else base_prompt)
     url = worker_pool.acquire()
     try:
         generate_with_engine(
@@ -4526,6 +4676,8 @@ def _generate_active_scene_preview(
             reference_images=reference_images,
             comfy_url=url,
         )
+        record_scene_frame_cast(out, {**scene, "id": sid}, cfg, work_dir, style_name,
+                                prompt=scene_prompt)
         # Keep the first frame in sync so the film screen and a re-render use
         # the regenerated image, not the stale frame (mirrors select/inpaint).
         if first_frame.exists():
