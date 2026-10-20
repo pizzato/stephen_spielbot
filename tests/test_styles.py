@@ -1541,8 +1541,8 @@ class CharacterReferenceImageTests(TempConfigCase):
         prompt, refs = app._characters_prompt_and_refs(
             scene["image_prompt"], scene, cfg, "Hero",
             engine=engines.get("qwen-image-2.1"))
-        self.assertIn("Bob appears EXACTLY as the character in <image1>", prompt)
-        self.assertIn("Ada appears EXACTLY as the character in <image2>", prompt)
+        self.assertIn("character identities in <image1> and <image2>", prompt)
+        self.assertIn("the character from <image1> and the character from <image2> wave", prompt)
         self.assertEqual(len(refs), 2)
 
     def test_prompt_and_refs_no_note_without_reference_support(self):

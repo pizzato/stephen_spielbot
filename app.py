@@ -3529,15 +3529,21 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
 # look drifts; with it the render follows the uploaded look. A generic,
 # nameless version of this note ("any character depicted…") does NOT work.
 _REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in their provided reference "
-                   "image — identical face, hair and build. Use the scene's specified "
-                   "clothes; otherwise retain the reference outfit. Ignore the reference background.")
+                   "image. Use it for identity only. Depict {name} exactly once, in the scene's "
+                   "stated position and pose, never as a separate portrait or overlay. Use the "
+                   "specified scene outfit; otherwise retain the reference outfit. "
+                   "Ignore the reference composition and background.")
 # Qwen-Image 2.1 addresses each reference by slot (<image1>, <image2>, …).
 _QWEN_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <image{n}> — "
-                        "identical face, hair and build. Use the scene's specified "
-                        "clothes; otherwise retain the reference outfit. Ignore the reference background.")
+                        "use it for identity only. Depict {name} exactly once, in the scene's "
+                        "stated position and pose, never as a separate portrait or overlay. Use the "
+                        "specified scene outfit; otherwise retain the reference outfit. "
+                        "Ignore the reference composition and background.")
 _FLUX3_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <ref_image_{n}> — "
-                        "identical face, hair and build. Use the scene's specified "
-                        "clothes; otherwise retain the reference outfit. Ignore the reference background.")
+                        "use it for identity only. Depict {name} exactly once, in the scene's "
+                        "stated position and pose, never as a separate portrait or overlay. Use the "
+                        "specified scene outfit; otherwise retain the reference outfit. "
+                        "Ignore the reference composition and background.")
 
 
 def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_name: str,
@@ -3575,6 +3581,27 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
     prompt = base_prompt if conditions_on_refs and scene else _inject_characters(
         base_prompt, scene, cfg, style_name, work_dir,
         allow_appearance_override=allow_appearance_override)
+    if pairs and scene and conditions_on_refs and engine.get("family") == "qwen-image":
+        # Qwen otherwise copies a large portrait into the foreground AND paints
+        # the named actor in the scene. Bind subjects inline and ask it to
+        # recompose the reference, rather than appending a second description.
+        for i, (c, _p) in enumerate(pairs, 1):
+            names = sorted({str(n).strip() for n in
+                            [c.get("name", ""), *(c.get("aliases") or [])] if n},
+                           key=len, reverse=True)
+            label = "the referenced character" if len(pairs) == 1 else f"the character from <image{i}>"
+            if names:
+                prompt = re.sub(r"\b(?:" + "|".join(re.escape(n) for n in names) + r")\b",
+                                label, prompt, flags=re.IGNORECASE)
+        slots = " and ".join(f"<image{i}>" for i in range(1, len(pairs) + 1))
+        prompt = (
+            f"Create a new full-frame scene using the character identities in {slots}. "
+            "Reposition and reframe each referenced character exactly once into the "
+            "following composition, replacing the portrait backgrounds and poses. "
+            "Do not retain foreground portraits or add second depictions. "
+            "Use the scene's specified outfits; otherwise retain the reference outfits. "
+            f"Scene: {prompt}")
+        return prompt, refs
     if pairs and engine is not None and engine.get("t2i_ref_workflow"):
         if allow_appearance_override:
             notes = " ".join(

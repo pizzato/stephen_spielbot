@@ -51,12 +51,14 @@ class SceneImageCharacterTests(TempConfigCase):
         prompt, refs = self._prompt("Mick Dargo beside a timber workbench.")
         self.assertEqual(refs, [self.ref])
         self.assertNotIn("dark mullet and thick moustache", prompt)
-        self.assertIn("Mick Dargo appears EXACTLY as the character in <image1>", prompt)
+        self.assertIn("character identities in <image1>", prompt)
+        self.assertIn("Scene: the referenced character beside a timber workbench", prompt)
 
     def test_authored_cast_keeps_reference_when_shot_uses_pronoun(self):
         prompt, refs = self._prompt("He waits beside a timber workbench.", ["Mick Dargo"])
         self.assertEqual(refs, [self.ref])
-        self.assertIn("Mick Dargo appears EXACTLY", prompt)
+        self.assertIn("character identities in <image1>", prompt)
+        self.assertIn("exactly once", prompt)
 
     def test_saved_style_is_removed_from_matching_after_profile_changes(self):
         self.cfg["styles"][1]["visual_style"] = "Restrained photographic lighting"
@@ -147,7 +149,7 @@ class SceneImageCharacterTests(TempConfigCase):
                 prompt = gen.call_args.args[1]
                 self.assertEqual(prompt.count(self.style), 0)
                 if instruction:
-                    self.assertIn(instruction, prompt)
+                    self.assertIn("Add the referenced character beside the workbench", prompt)
                 self.assertEqual(
                     scene_image.read_cast(out, self.cfg["characters"]), expected_names)
                 self.assertEqual(
