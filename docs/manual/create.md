@@ -86,12 +86,17 @@ so when one is selected). Which upscaler does the lifting is the style's
 
 ## Visual style
 
-Free text appended to every scene's image prompt — *"Cinematic 35mm, golden hour, painterly
+Visual direction — *"Cinematic 35mm, golden hour, painterly
 lighting"*. Locked to the style's own visual style while a style is active — unless that
 style leaves it blank, in which case the field stays free and what you write applies to
 this film only.
 
-Describe the **look**, never the camera's movement. This sentence rides on every scene —
+For **music videos**, this guides the script writer, who selects the actual look for each
+shot. The broad style profile is not copied into the individual image or video prompts.
+Keep artist identity in portrait references and put location or wardrobe options in
+script direction.
+
+Describe the **look**, never the camera's movement. In other formats this sentence rides on every scene —
 including the still image prompts, which must hold no motion at all, and every
 [acted take](../performance_films.md), where each scene already states its own move. Left
 blank, the LLM writes the sentence and is told the same thing: *"handheld"*, *"steadicam"*,

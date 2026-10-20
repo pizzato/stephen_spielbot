@@ -31,7 +31,7 @@ script_claude_initial:
       - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory. The appearance MUST belong to the video's visual style and world: when the style or topic implies non-human characters (robots, creatures, machines, animated figures), describe that form — never default to a human.
       - "gender": "male" | "female" — how the character would sound if voiced.
       - "age": "young" | "adult" | "mature" | "elderly" — the voice age bracket.
-    When a scene features one of these characters, refer to them BY NAME in that scene's "image_prompt" and "video_prompt" — write the name, NOT their appearance. The canonical "description" is appended automatically to every prompt that names them, so restating it (or describing the character without the name) breaks consistency. Only add appearance details that DIFFER from the canonical description in that scene, such as a change of clothes or an injury.
+    When a scene features one of these characters, refer to them BY NAME in that scene's "image_prompt" and "video_prompt" — write the name, NOT their appearance. Names bind characters to their stored portraits; describing someone similar without naming them loses that identity. Only add scene-specific differences, such as a chosen outfit or an injury.
 
     "scenes": Array of scene objects, each with:
       - "id": integer starting from 1
@@ -360,7 +360,7 @@ story_divide:
 
     Every "image_prompt" and "video_prompt" must obey the world rules and constraints in the TOPIC/DIRECTION below — who and what exists in this world, how it looks — in EVERY scene, not just where the story text mentions them.
 
-    When the request lists RECURRING CHARACTERS, any scene featuring one of them must refer to them BY NAME in its "image_prompt" and "video_prompt" — the name only, never a re-description of their appearance (each named character's canonical appearance is appended to the prompt automatically; describing them without the name breaks consistency).
+    When the request lists RECURRING CHARACTERS, any scene featuring one of them must refer to them BY NAME in its "image_prompt" and "video_prompt" — the name only, never a re-description of their appearance. Named characters bind to their stored portrait references; describing someone similar without naming them loses that identity. Include every visible recurring character in cast, even in a reflection, partial view or back view.
 
     Output only the raw JSON array. No markdown, no code fences, no explanation.
   user: |

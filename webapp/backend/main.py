@@ -2457,16 +2457,18 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     if work_dir is None:
         work_dir = gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
-    # Bake the visual style prefix into each image_prompt so it's visible in the
-    # scene editor and consistent even if the style profile is later renamed/edited.
-    # The render step guards against re-adding a prefix that's already present.
-    combined_style = gapp._compose_visual_style(style, cfg, ss["name"])
+    # Music shots already contain the writer's selected look. The profile is
+    # planning guidance, not a list of people/locations to paint in every shot.
+    # Other formats retain their existing style prefix.
+    combined_style = ("" if body.format == "song" else
+                      gapp._compose_visual_style(style, cfg, ss["name"]))
     scenes_list = [
         _scene_snapshot_row(s, image_prompt=(
             f"{combined_style}. {s.image_prompt}"
             if combined_style and s.image_prompt
             and not s.image_prompt.startswith(combined_style)
-            else s.image_prompt))
+            else gapp._scene_image_text(s.image_prompt, cfg, ss["name"], work_dir)
+            if body.format == "song" else s.image_prompt))
         for s in scenes
     ]
     gapp._persist_script_snapshot(work_dir, scenes_list)
@@ -5486,6 +5488,29 @@ def _restyle_script(wd: Path, *, style_name: str, style: str,
     ]
 
     rows = _read_script_scenes(wd)
+    music_rows = [{"id": r["id"],
+                   "image_prompt": _strip_style_prefix(r.get("image_prompt") or "", prefixes)}
+                  for r in rows if isinstance(r, dict)
+                  and (r.get("metadata") or {}).get("singing") and r.get("image_prompt")]
+    music_prompts = {}
+    if music_rows:
+        # Restyle is an explicit change of look. Compile that choice into each
+        # music shot instead of restoring the broad prefix removed at render.
+        raw = _llm_complete(
+            "Restyle scene images. Return only JSON: {\"scenes\": [{\"id\": 1, "
+            "\"image_prompt\": \"...\"}]}. Keep all IDs, subjects, names, locations, "
+            "outfits and compositions unchanged. Apply only the new medium, palette "
+            "and lighting. Write concise self-contained shot descriptions, not "
+            "copied guidance, alternative settings or character appearance descriptions.",
+            f"New visual guidance: {new_prefix}\nScenes: "
+            + json.dumps(music_rows, ensure_ascii=False),
+            cfg, max_tokens=max(900, len(music_rows) * 250))
+        parsed = llm._parse_claude_response(raw, "restyle music shots")
+        items = parsed.get("scenes", []) if isinstance(parsed, dict) else []
+        music_prompts = {r.get("id"): str(r.get("image_prompt") or "").strip()
+                         for r in items if isinstance(r, dict)}
+        if any(not music_prompts.get(r["id"]) for r in music_rows):
+            raise HTTPException(502, "Restyle did not return every music shot. No images were changed.")
     retired: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -5504,7 +5529,8 @@ def _restyle_script(wd: Path, *, style_name: str, style: str,
                         acted.get("lines") or [])[:performance_mode.MAX_SPEAKERS_PER_SCENE])
             continue
         image_prompt = _strip_style_prefix(row.get("image_prompt") or "", prefixes)
-        row["image_prompt"] = _apply_style_prefix(new_prefix, image_prompt) if image_prompt else ""
+        row["image_prompt"] = (music_prompts[row["id"]] if row["id"] in music_prompts
+                               else _apply_style_prefix(new_prefix, image_prompt) if image_prompt else "")
         row["video_prompt"] = _strip_style_prefix(row.get("video_prompt") or "", prefixes)
         # The look is in the pixels too: retire this scene's preview and first
         # frame (kept as history versions) so the render paints the new style.
@@ -6728,12 +6754,15 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     cfg = gapp.load_config()
 
     video_title, topic, style, style_name, outline = "", "", "", "", ""
+    music_shot = False
     jc = {}
     try:
         store = DurableStore.default()
         try:
             job = store.get_job(job_id)
             rows = store.scene_rows(job_id)
+            music_shot = any(int(r["id"]) == scene_id and
+                             (r.get("metadata") or {}).get("singing") for r in rows)
         finally:
             store.close()
         if job:
@@ -6778,7 +6807,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
 
     # For image_prompt, bake the visual style prefix so the editor shows what renders.
-    if field == "image_prompt" and style_name:
+    if field == "image_prompt" and style_name and not music_shot:
         prefix = gapp._compose_visual_style(style, cfg, style_name)
         text = _apply_style_prefix(prefix, text)
 
@@ -7332,6 +7361,9 @@ def start_generation(body: GenerateBody) -> dict:
             # the cover prompt with the film title (which the model then
             # painted, misspelled, into the "text-free" background).
             image_prompt=("" if _acted_row(row) else
+                          gapp._scene_image_text(row.get("image_prompt") or title,
+                                                cfg, style_name, work_dir)
+                          if (row.get("metadata") or {}).get("singing") else
                           _apply_style_prefix(combined_style, row.get("image_prompt") or title)),
             video_prompt=row.get("video_prompt") or ("" if _acted_row(row) else
                                                      row.get("image_prompt") or title),
@@ -15830,13 +15862,9 @@ def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path,
                              instruction: str = "") -> tuple[str, list[Path]]:
     """Styled image prompt + character reference images for a film-scene re-render.
 
-    Mirrors _generate_active_scene_preview so a frame regenerated from the edit
-    video screen keeps its recurring characters' looks: re-inject each featured
-    character's canonical appearance into the prompt, gather their reference
-    images, and (FLUX.2) bind each name to its reference so the render actually
-    follows the uploaded look. work_dir folds in the script's own per-script
-    characters, not just the catalogue ones the style opted into. The style
-    prefix is applied last, matching the plain (character-less) re-render path."""
+    Mirrors the Script preview's named portrait binding, including per-script
+    characters. Music shots use their authored look, stripping legacy broad
+    style prefixes; other formats retain their existing style prefix."""
     style_name = jc.get("style_name", "")
     base_prompt = (row.get("image_prompt") or "").strip()
     if not base_prompt:
@@ -15848,7 +15876,8 @@ def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path,
     base_prompt = gapp._apply_prompt_instruction(base_prompt, instruction)
     base_prompt, reference_images = gapp._characters_prompt_and_refs(
         base_prompt, row, cfg, style_name, wd, engine=engine)
-    style_clean = (jc.get("style") or "").strip().rstrip(".")
+    style_clean = ("" if (row.get("metadata") or {}).get("singing")
+                   else (jc.get("style") or "").strip().rstrip("."))
     if style_clean and base_prompt and not base_prompt.startswith(style_clean):
         base_prompt = f"{style_clean}. {base_prompt}"
     return base_prompt, reference_images

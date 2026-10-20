@@ -508,17 +508,25 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     if len(people_names) > 1:
         locks.append(f"{' and '.join(people_names)} are different people — never "
                      f"swap or merge their faces, bodies, clothes or voices.")
-    if has_frame:
+    if has_frame and people_names:
         locks.append("Keep every face and body exactly as in the portrait references. "
                      "The opening image controls clothing for the entire take; "
                      "portrait clothing and other outfit descriptions cannot replace it.")
-    else:
+    elif people_names:
         locks.append("Keep every face, wardrobe and body exactly as in the references.")
-    sections.append("[IDENTITY LOCKS]\n" + "\n".join(locks))
+    if locks:
+        sections.append("[IDENTITY LOCKS]\n" + "\n".join(locks))
 
     # [SCENE]
     setting = _clean(scene_meta.get("setting"))
-    look = " ".join(x for x in (setting, _clean(style_note)) if x)
+    # Music styles guide the writer; the chosen shot and its frame guide H3.
+    # Sending the artist's whole world here invites location/outfit montages.
+    look = " ".join(x for x in (setting, "" if singing else _clean(style_note)) if x)
+    if singing and has_frame:
+        look += (" Keep the opening image's room or landscape, lighting and layout "
+                 "throughout this continuous take unless this scene explicitly scripts "
+                 "a transition. Only the authored actions occur; do not improvise "
+                 "background replacement or montage.")
     if look:
         sections.append(f"[SCENE]\n{look}")
 
@@ -533,6 +541,10 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     # against that audio, and this is where the performance is told what to do
     # with it.
     track_usage = _clean(scene_meta.get("track_usage"))
+    if singing and scene_meta.get("song_window") and not track_usage:
+        track_usage = ("Use the supplied song for rhythm, dancing and the scene's "
+                       "authored movement. Only the designated on-screen singer "
+                       "mimes the vocals; music does not add people to the scene.")
     if track_usage:
         sections.append(f"[SOUNDTRACK]\nThe clip's own soundtrack is a "
                         f"provided music track. {track_usage}")
@@ -676,7 +688,10 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
 
     # [PRODUCTION SOUND] — diegetic only; performance films carry no score.
     soundscape = _unterminated(scene_meta.get("soundscape")) or "quiet room tone throughout"
-    if performs:
+    if singing and track_usage:
+        sections.append(f"[PRODUCTION SOUND]\nUse the provided song unchanged. "
+                        f"Do not add speech or another soundtrack. {soundscape}.")
+    elif performs:
         # Ask for the singing VOICE (mouth movement follows the audio the model
         # writes for itself) but keep instruments out — this audio is replaced
         # by the film's real track, and "no music of any kind" would fight the
@@ -702,15 +717,15 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     # A singing scene ASKS for a voice raised in song; the blanket "no music"
     # would fight it, so only the instruments are refused there. Same for a
     # pinned track in use: refuse music BEYOND it, not the track itself.
-    no_music = ("no instrumental music" if performs
-                else "no music beyond the clip's own soundtrack" if track_usage
+    no_music = ("no music beyond the clip's own soundtrack" if track_usage
+                else "no instrumental music" if performs
                 else "no music")
     sections.append(("[NEGATIVES]\n"
                      "Preserve every reference exactly as assigned; do not modify "
                      "anything else. No extra people, no face drift, no wardrobe "
                      "changes, no voice swaps, no broken eyelines, no unmotivated "
                      "cuts. Do not add subtitles, do not add captions, do not add "
-                     f"any on-screen text, no watermark, no scene changes, "
+                     f"any on-screen text, no watermark, no unrequested scene changes, "
                      f"{no_music}. {extra}").strip())
 
     return "\n\n".join(sections)
@@ -852,6 +867,12 @@ def acted_meta(scene, chained: bool = False) -> dict:
             meta.get("seconds") or field("duration", 0) or meta.get("duration")
             or SCENE_SECONDS, chained)
     meta["beats"] = norm_beats(meta.get("beats"), float(meta["seconds"]))
+    if meta.get("singing") and not meta["beats"]:
+        # Older music scripts often wrote actions only in video_prompt. Do not
+        # discard those decisions just because the separate beats field is empty.
+        action = _clean(field("video_prompt"))
+        if action and not action.startswith("[") and "[NEGATIVES]" not in action:
+            meta["beats"] = [{"t0": 0.0, "t1": float(meta["seconds"]), "action": action}]
     return meta
 
 

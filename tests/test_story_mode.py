@@ -190,6 +190,19 @@ class DivideStoryTests(unittest.TestCase):
         _, _, style_, _ = self._divide(6, make_fake(), style_hint="Divide style")
         self.assertEqual(style_, "Divide style")
 
+    def test_music_guidance_reaches_planner_and_continuity_includes_visuals(self):
+        fake = mock.Mock(side_effect=make_fake())
+        self._divide(12, fake, fmt="song", style_hint="charcoal photography",
+                     video_style_hint="restrained movement")
+        prompts = [c.args[2] for c in fake.call_args_list
+                   if c.args[4].startswith("divide scenes")]
+        for prompt in prompts:
+            self.assertIn("charcoal photography", prompt)
+            self.assertIn("restrained movement", prompt)
+            self.assertIn("never copy it into individual shot prompts", prompt)
+            self.assertIn("never substitute an anonymous lookalike", prompt)
+        self.assertIn("Action:", prompts[-1])
+
     def test_malformed_json_halves_and_retries(self):
         # chunks wider than 5 scenes return garbage → each 10-scene chapter
         # must split into halves and still deliver every scene in order

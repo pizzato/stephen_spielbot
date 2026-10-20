@@ -1514,7 +1514,7 @@ class CharacterReferenceImageTests(TempConfigCase):
         scene = {"image_prompt": "Bob waves.", "narration": ""}
         prompt, refs = app._characters_prompt_and_refs(
             scene["image_prompt"], scene, cfg, "Hero", engine=self._FLUX2)
-        self.assertIn("a man", prompt)  # description still injected
+        self.assertNotIn("a man", prompt)  # identity comes from the portrait
         self.assertIn("Bob appears EXACTLY as the character", prompt)
         self.assertEqual(len(refs), 1)
 
@@ -1541,8 +1541,8 @@ class CharacterReferenceImageTests(TempConfigCase):
         prompt, refs = app._characters_prompt_and_refs(
             scene["image_prompt"], scene, cfg, "Hero",
             engine=engines.get("qwen-image-2.1"))
-        self.assertIn("Bob appears EXACTLY as the character in <image1>", prompt)
-        self.assertIn("Ada appears EXACTLY as the character in <image2>", prompt)
+        self.assertIn("character identities in <image1> and <image2>", prompt)
+        self.assertIn("the character from <image1> and the character from <image2> wave", prompt)
         self.assertEqual(len(refs), 2)
 
     def test_prompt_and_refs_no_note_without_reference_support(self):
@@ -1555,13 +1555,12 @@ class CharacterReferenceImageTests(TempConfigCase):
             self.assertNotIn("appears EXACTLY", prompt)
             self.assertEqual(len(refs), 1)
 
-    def test_prompt_and_refs_no_note_when_nothing_matches(self):
+    def test_prompt_and_refs_refuses_missing_portrait(self):
         cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])  # no image
         scene = {"image_prompt": "Bob waves.", "narration": ""}
-        prompt, refs = app._characters_prompt_and_refs(
-            scene["image_prompt"], scene, cfg, "Hero", engine=self._FLUX2)
-        self.assertNotIn("appears EXACTLY", prompt)
-        self.assertEqual(refs, [])
+        with self.assertRaisesRegex(RuntimeError, "Missing character reference image: Bob"):
+            app._characters_prompt_and_refs(
+                scene["image_prompt"], scene, cfg, "Hero", engine=self._FLUX2)
 
     def test_set_and_clear_character_image(self):
         cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])

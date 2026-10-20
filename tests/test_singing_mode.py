@@ -74,6 +74,31 @@ class RoutingTests(unittest.TestCase):
 
 
 class PromptTests(unittest.TestCase):
+    def test_music_uses_chosen_setting_not_artist_world_and_keeps_song(self):
+        for cast in ([], [{"name": "Ada", "kind": "character"}]):
+            prompt = perf.build_h3_prompt(
+                {"singing": True, "performs": False, "song_window": [0, 5],
+                 "setting": "An empty room with an amber lamp.", "seconds": 5},
+                style_note="Ada has blond hair. Lakes, mountains and city bridges.",
+                picture_names=cast + [{"name": "First frame", "kind": "frame"}])
+            self.assertNotIn("blond hair", prompt)
+            self.assertNotIn("mountains", prompt)
+            self.assertIn("amber lamp", prompt)
+            self.assertIn("do not improvise background replacement or montage", prompt)
+            self.assertIn("Use the supplied song for rhythm, dancing", prompt)
+            self.assertNotIn("no music of any kind", prompt)
+            if not cast:
+                self.assertNotIn("[IDENTITY LOCKS]", prompt)
+
+    def test_authored_music_motion_reaches_video_when_beats_are_empty(self):
+        scene = _singing()
+        scene.video_prompt = "Ada looks across the room; the camera stays still."
+        meta = perf.acted_meta(scene)
+        prompt = perf.build_h3_prompt(meta, picture_names=["Ada"])
+        self.assertIn(scene.video_prompt, prompt)
+        scene.video_prompt = prompt
+        self.assertEqual(perf.acted_meta(scene)["beats"], [])  # never nest an assembled prompt
+
     def _prompt(self, **extra):
         meta = {"mode": "silent", "singing": True, "seconds": 8.0,
                 "setting": "a rooftop at night", **extra}
@@ -1825,7 +1850,7 @@ class SoundedTakeTests(unittest.TestCase):
     never heard in the final — which left every scene clip silent in the editor
     and on the render wall, with nothing to check the performance against."""
 
-    def _render(self, clip_secs=5.17, window=(4.0, 9.0), track=True):
+    def _render(self, clip_secs=5.17, window=(4.0, 9.0), track=True, cast=True, performs=True):
         import resume_generation as rg
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -1835,7 +1860,9 @@ class SoundedTakeTests(unittest.TestCase):
             (wd / "background_music.wav").write_bytes(b"wav")
         scene = _singing()
         scene.metadata_extra = {**scene.metadata_extra, "song_window": list(window),
-                                "seconds": window[1] - window[0]}
+                                "seconds": window[1] - window[0], "performs": performs}
+        if not cast:
+            scene.metadata_extra["cast"] = []
         cuts, muxes, trims = [], [], []
 
         def fake_cut(src, out, t0, t1):
@@ -1844,11 +1871,12 @@ class SoundedTakeTests(unittest.TestCase):
             return Path(out)
 
         def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
-            return {"pictures": [{"slot": 1, "name": "Ada", "kind": "character",
+            return {"pictures": [{"slot": 1, "name": "Ada", "kind": "character" if cast else "frame",
                                   "path": str(wd / "scene_02_preview.png")}],
                     "audios": []}
 
         def fake_gen(engine, prompt, ref_images, out, **kw):
+            self.assertEqual(kw.get("track_audio") is not None, track)
             Path(out).write_bytes(b"mp4")
             return Path(out)
 
@@ -1890,6 +1918,12 @@ class SoundedTakeTests(unittest.TestCase):
         _, cuts, muxes, _ = self._render(clip_secs=3.5)
         self.assertEqual(cuts[-1][2:], (4.0, 7.5))
         self.assertEqual(len(muxes), 1)
+
+    def test_nonperforming_and_empty_scenes_still_condition_on_the_song(self):
+        for cast in (True, False):
+            _, cuts, muxes, _ = self._render(cast=cast, performs=False)
+            self.assertEqual([c[2:] for c in cuts], [(4.0, 9.0), (4.0, 9.0)])
+            self.assertEqual(len(muxes), 1)
 
     def test_the_cut_keeps_the_windows_own_frame(self):
         # The window sits on the frame grid (song_timing.frame_snap) and a

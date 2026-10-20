@@ -333,6 +333,11 @@ also show their resolved cast portraits, voices, location/wardrobe/reference slo
 song slice on that same card, so editing, rewriting, re-shooting and choosing takes never
 requires switching to another tab.
 
+On music scenes, regeneration uses the scene's chosen composition and strips known
+legacy style prefixes. Every named person needs an actual portrait reference; a missing
+portrait stops the take even when a first frame exists. Song conditioning stays enabled
+for every shot. These changes do not alter already-rendered images or clips.
+
 On a film whose final was [upscaled](#upscale-video), a note above the cards says the
 published final's size and that the clips here stay at the render resolution —
 re-rendering one scene only replaces that clip; it never redoes the upscale.
