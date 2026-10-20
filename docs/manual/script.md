@@ -307,6 +307,14 @@ that is what the take is built from. It is the dialogue editor minus the dialogu
 the film gets the **Characters & Artifacts** wall like any other performance film. The
 image and video prompts stay: the image still paints the frame the take opens on, and
 the video prompt stands in as the setting while that field is empty.
+For music scenes with no separate action beats, the authored video prompt also supplies
+the take's action, so a populated setting does not cause that direction to be discarded.
+
+Music scripts choose a concrete composition, location, outfit and action for each scene.
+The artist's broad style guidance is used during writing, not appended to every shot.
+Every visible recurring character must be named in **On screen**, including partial and
+back views. Portraits supply identity; missing portraits must be supplied before rendering.
+The song remains model conditioning on all scenes, including non-singing shots.
 
 Every field label has a regenerate button that rewrites just that field with the LLM,
 optionally with a free-text instruction. Edits save when you leave the field.
@@ -412,7 +420,9 @@ look yourself, choose whether to **repaint the cast's looks**, and click **Resty
 
 The old style sentence is stripped from the head of every scene's image prompt and the new
 one put in its place; acted scenes get their H3 prompt re-assembled under the new style
-(a hand-edited prompt is left as written). The scene previews, cover and — if ticked — cast
+(a hand-edited prompt is left as written). For music scenes, the writer instead
+rewrites the image's medium, palette and lighting into a concise shot description,
+preserving its subjects, location, outfit and composition. The scene previews, cover and — if ticked — cast
 portraits painted in the old style are retired (kept in their version strips), so the
 missing previews are painted in the new look straight away and the render uses them. The
 script's brief and queue entry move to the new style too, so approving it renders with

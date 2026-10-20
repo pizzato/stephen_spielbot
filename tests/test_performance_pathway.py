@@ -248,15 +248,11 @@ class RenderWiringTests(TempConfigCase):
         self.assertEqual(len(shots), 1)
         self.assertNotIn("Only CHICO is on camera", shots[0]["prompt"])
 
-    def test_unknown_character_is_dropped_not_renumbered_wrong(self):
-        # Single speaker, so the scene stays one clip and the slot numbering is
-        # visible: an unresolvable name must not leave a gap or shift the rest.
-        cap = self._render(self._meta(
-            cast=["CHICO", "GHOST", "MARIA"],
-            lines=[{"speaker": "CHICO", "delivery": "flat", "text": "Alone."}]))
-        self.assertEqual([p.name for p in cap["ref_images"]], ["char_a.png", "char_b.png"])
-        self.assertIn("<Picture 2> defines MARIA", cap["prompt"])
-        self.assertNotIn("GHOST", cap["prompt"].splitlines()[0])
+    def test_missing_member_of_cast_is_an_error_even_with_other_portraits(self):
+        with self.assertRaisesRegex(RuntimeError, "missing portrait reference for GHOST"):
+            self._render(self._meta(
+                cast=["CHICO", "GHOST", "MARIA"],
+                lines=[{"speaker": "CHICO", "delivery": "flat", "text": "Alone."}]))
 
     def test_no_portrait_at_all_is_an_error(self):
         with self.assertRaises(RuntimeError):

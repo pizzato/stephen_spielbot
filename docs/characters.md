@@ -5,13 +5,14 @@ mechanisms work together:
 
 1. **Text consistency** — every character has a canonical appearance description that is
    fed to the script LLM ([when the brief asks for them](#casting-is-opt-in-by-name))
-   and deterministically re-injected into image prompts.
+   and re-injected for text-only image models.
 2. **Visual consistency** — a character can carry a reference image; scenes featuring
    that character use reference conditioning on FLUX.2 Klein, FLUX 3 Klein NVFP4
    or Qwen-Image 2.1, so the output resembles the reference. FLUX.1 schnell ignores references.
 
-The video side needs no changes: LTX renders from the scene's first-frame still, so once
-the still is consistent, the motion clip inherits it.
+LTX renders from the scene's first-frame still. H3 receives separate character portraits
+as identity conditions alongside the opening image; a missing cast portrait stops the
+take rather than using the opening image as a substitute for identity.
 
 ## One library, scoped by style
 
@@ -127,12 +128,15 @@ placeholder with no UI.
 - All LLM backends fill a `${character_note}` placeholder — prompt keys
   `script_claude_initial`, `script_claude_continuation`, `script_local_story`,
   `script_local_visual` in `prompts.yaml`.
-- **Deterministic re-injection** (the reliability net against LLM paraphrasing):
+- **Text-only models**:
   `_inject_characters()` in `app.py` appends `"{name}: {description}."` to a scene's
   image prompt whenever the scene mentions the character's name/alias and the canonical
   description isn't already present. Matching: `_character_mentions()`; scene cast
-  selection: `_characters_for_scene()`. Called from `_generate_active_scene_preview` and
-  the dialogue shot-still path.
+  selection: `_characters_for_scene()`. Reference-capable models instead receive the
+  portrait and a named reference-slot binding, without this descriptive injection.
+  A scene using a reference-capable model fails if any named character lacks a portrait.
+  Music scenes with named characters also require a reference-capable image model;
+  they cannot silently fall back to generating a similar person from words.
 
 ## Reference-image path
 

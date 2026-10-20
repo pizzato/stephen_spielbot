@@ -35,7 +35,7 @@ class SceneImageCharacterTests(TempConfigCase):
 
     def _prompt(self, shot, cast=None):
         text = f"{self.style}. {shot}"
-        scene = {"image_prompt": text, "metadata": {"cast": cast or []}}
+        scene = {"image_prompt": text, "metadata": {"cast": cast or [], "singing": True}}
         return app._characters_prompt_and_refs(
             text, scene, self.cfg, "Mick", self.wd, engine=self.engine)
 
@@ -44,12 +44,13 @@ class SceneImageCharacterTests(TempConfigCase):
         self.assertEqual(refs, [])
         self.assertNotIn("appears EXACTLY", prompt)
         self.assertNotIn("dark mullet and thick moustache", prompt)
-        self.assertTrue(prompt.startswith(self.style))
+        self.assertNotIn(self.style, prompt)
+        self.assertNotIn("Mick Dargo", prompt)
 
     def test_named_subject_gets_reference_even_when_cast_was_empty(self):
         prompt, refs = self._prompt("Mick Dargo beside a timber workbench.")
         self.assertEqual(refs, [self.ref])
-        self.assertIn("dark mullet and thick moustache", prompt)
+        self.assertNotIn("dark mullet and thick moustache", prompt)
         self.assertIn("Mick Dargo appears EXACTLY as the character in <image1>", prompt)
 
     def test_authored_cast_keeps_reference_when_shot_uses_pronoun(self):
@@ -75,6 +76,35 @@ class SceneImageCharacterTests(TempConfigCase):
         self.assertEqual(refs, [self.ref])
         self.assertIn("for identity and unchanged features", prompt)
 
+    def test_missing_portrait_refuses_descriptive_fallback(self):
+        for missing in ("", "missing.png"):
+            with self.subTest(missing=missing):
+                self.cfg["characters"][0]["ref_image"] = missing
+                with self.assertRaisesRegex(RuntimeError, "Missing character reference.*Mick Dargo"):
+                    self._prompt("Mick Dargo beside a workbench.")
+
+    def test_unknown_cast_refuses_a_lookalike(self):
+        with self.assertRaisesRegex(RuntimeError, "Missing character reference.*Stranger"):
+            self._prompt("He stands at the window.", ["Stranger"])
+
+    def test_music_performer_requires_reference_capable_engine(self):
+        self.engine = {"family": "flux1"}
+        with self.assertRaisesRegex(RuntimeError, "reference conditioning"):
+            self._prompt("Mick Dargo beside a workbench.")
+
+    def test_film_rerender_removes_old_style_and_uses_actual_portrait(self):
+        from webapp.backend.main import _film_scene_image_prompt
+        for shot, expected in (("An empty street. No people.", []),
+                               ("Mick Dargo beside a workbench.", [self.ref])):
+            text = f"{self.style}. {shot}"
+            row = {"image_prompt": text, "metadata": {"singing": True}}
+            prompt, refs = _film_scene_image_prompt(
+                {"style": self.style, "style_name": "Mick"}, row,
+                self.cfg, self.wd, self.engine)
+            self.assertNotIn(self.style, prompt)
+            self.assertNotIn("dark mullet", prompt)
+            self.assertEqual(refs, expected)
+
     def test_known_subject_without_portrait_is_recorded_and_attached(self):
         self.cfg["characters"][0]["ref_image"] = ""
         scene = {"id": 3, "image_prompt": f"{self.style}. Mick Dargo at a workbench.",
@@ -94,7 +124,7 @@ class SceneImageCharacterTests(TempConfigCase):
         ):
             with self.subTest(shot=shot):
                 text = f"{self.style}. {shot}"
-                scene = {"image_prompt": text, "metadata": {"cast": []}}
+                scene = {"image_prompt": text, "metadata": {"cast": [], "singing": True}}
                 store = mock.Mock()
                 store.get_scene.return_value = scene
                 store.get_job.return_value = {
@@ -115,7 +145,7 @@ class SceneImageCharacterTests(TempConfigCase):
                         "job", 1, "", self.style, "Workshop", text,
                         force=True, worker_pool=pool, instruction=instruction)
                 prompt = gen.call_args.args[1]
-                self.assertEqual(prompt.count(self.style), 1)
+                self.assertEqual(prompt.count(self.style), 0)
                 if instruction:
                     self.assertIn(instruction, prompt)
                 self.assertEqual(

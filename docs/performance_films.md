@@ -169,6 +169,14 @@ The pipeline handles the song and its visuals together:
   "Nobody sings in this shot" chip (or any instruction to that effect) marks the scene
   as non-performing — the song still plays over it, but the cast listens and moves with
   the music instead of miming.
+  **Every song scene keeps its song segment as model conditioning**, including dancing,
+  non-singing acting and empty-location shots, so movement can follow the rhythm.
+- **The script chooses the shot.** Broad artist/style guidance goes to the writer,
+  who commits to a concise first-frame description and concrete actions. It is not
+  repeated inside each music-shot prompt. On regeneration, known legacy style prefixes
+  are removed from the image prompt. The opening frame anchors the location, lighting
+  and outfit throughout the take; the video model receives the chosen setting and
+  actions, not the artist profile's alternative locations or appearance descriptions.
 - **A shot with nobody in it stays empty.** A song film's story usually includes scenes
   written with no one in frame — an empty street, a sky, a diagram. Those are rendered as
   **scenery**: the song still plays over them, but nothing is asked to mime it. Asking for
@@ -362,7 +370,8 @@ the film ends a fraction of a frame inside the song rather than running past it.
 
 **Characters with portraits.** The portraits *are* the conditioning: each cast member's
 reference image becomes a `<Picture N>` reference for the scenes they appear in. A scene
-whose cast resolves to no portrait at all fails rather than inventing a look — see
+with any cast member missing a portrait fails rather than inventing a look, even if
+other portraits or an opening frame are available — see
 [characters](characters.md) for the catalogue and the per-script cast.
 
 An acted story casts **its own** characters: the style's catalogue is only offered as

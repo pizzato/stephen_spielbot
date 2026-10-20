@@ -443,6 +443,24 @@ def divide_story(story: dict, n_scenes: int | None = None,
 
     identified = _norm_identified_characters(story.get("characters"))
     video_style_note = _video_style_note(video_style_hint)
+    if is_song:
+        video_style_note = (
+            "\nMUSIC VIDEO PLANNING GUIDANCE — use this to make decisions for the "
+            "whole film, never copy it into individual shot prompts:\n"
+            f"Visual direction: {style_hint or story.get('style') or ''}\n"
+            f"Motion direction: {video_style_hint or ''}\n"
+            "Commit to one location, composition, outfit and lighting setup per scene. "
+            "Choose a few coherent locations across the film. Write a concise, "
+            "self-contained image_prompt (about 30–60 words) with only the chosen "
+            "subjects, positions, setting, medium and lighting. No menus, alternatives, "
+            "conditional instructions, artist biography, or copied style rules. "
+            "Name each visible recurring character and include them in cast, even "
+            "from behind or partially visible; never substitute an anonymous lookalike "
+            "or describe their face. Their portraits supply identity. "
+            "Write video_prompt and beats as concrete actions for that same composition. "
+            "Keep clothing and location stable within the take. A montage, panel layout "
+            "or transforming background is an exceptional, explicitly authored choice "
+            "for at most one scene in a film unless the user requests more; default to none.")
     avoid_note = _avoid_note(avoid_hint)
     character_note = _merge_character_note(_character_note(character_sheet), identified)
     character_note += (
@@ -464,7 +482,9 @@ def divide_story(story: dict, n_scenes: int | None = None,
             if batch_end == n else ""
         )
         ctx_str = "\n".join(
-            f'  Scene {s.id}: "{s.title}" — {s.narration}' for s in scenes[-2:]
+            f'  Scene {s.id}: "{s.title}" — '
+            + (f"{s.image_prompt} Action: {s.video_prompt}" if is_song else s.narration)
+            for s in scenes[-2:]
         ) or "  (none — this chapter opens the video)"
         scenes.extend(_divide_chunk(
             call, title, chapter.get("text", ""), batch_start, batch_end,

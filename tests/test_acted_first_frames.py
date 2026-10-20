@@ -50,6 +50,10 @@ class OpeningFrameTests(unittest.TestCase):
             wd = Path(td)
             for name in files:
                 (wd / name).write_bytes(b"x")
+            (wd / "characters").mkdir(exist_ok=True)
+            (wd / "characters" / "ana.png").write_bytes(b"png")
+            (wd / "characters.json").write_text(json.dumps([
+                {"id": "ana", "name": "Ana", "ref_image": "ana.png"}]))
             made = []
 
             def _fake_gen(engine, prompt, out, **kw):
@@ -70,14 +74,18 @@ class OpeningFrameTests(unittest.TestCase):
     def test_the_toggle_paints_a_dialogue_frame_from_its_image_prompt(self):
         got, made = self._run(_dialogue(image_prompt="i"), ON)
         self.assertTrue(str(got).endswith("scene_03_first_frame.png"))
-        self.assertEqual(made, [("i", 512, 256)])
+        self.assertEqual(len(made), 1)
+        self.assertTrue(made[0][0].startswith("i. Ana appears EXACTLY"))
+        self.assertEqual(made[0][1:], (512, 256))
 
     def test_without_an_image_prompt_the_frame_is_composed_from_the_setting(self):
         got, made = self._run(_dialogue(setting="a wharf at dusk"), ON)
         self.assertTrue(str(got).endswith("scene_03_first_frame.png"))
-        self.assertEqual(made, [(
+        self.assertTrue(made[0][0].startswith(
             "a wharf at dusk. Ana is in the scene. "
-            "The very first moment of the scene, nobody speaking yet.", 512, 256)])
+            "The very first moment of the scene, nobody speaking yet."))
+        self.assertIn("Ana appears EXACTLY", made[0][0])
+        self.assertEqual(made[0][1:], (512, 256))
 
     def test_no_prompt_and_no_setting_is_not_an_error(self):
         got, made = self._run(_dialogue(), ON)
@@ -118,7 +126,8 @@ class OpeningFrameTests(unittest.TestCase):
                                         comfy_url="http://x",
                                         vid_width=512, vid_height=256)
         self.assertEqual([Path(p).name for p in seen["refs"]], [f"{cid}.png"])
-        self.assertIn("green eyes", seen["prompt"])
+        self.assertNotIn("green eyes", seen["prompt"])
+        self.assertIn("Ana appears EXACTLY as the character", seen["prompt"])
 
     def test_a_location_reference_still_stops_the_paint(self):
         import resume_generation as rg
@@ -183,6 +192,10 @@ class NoFirstFrameTests(unittest.TestCase):
             wd = Path(td)
             for name in files:
                 (wd / name).write_bytes(b"x")
+            (wd / "characters").mkdir(exist_ok=True)
+            (wd / "characters" / "ana.png").write_bytes(b"png")
+            (wd / "characters.json").write_text(json.dumps([
+                {"id": "ana", "name": "Ana", "ref_image": "ana.png"}]))
             made = []
 
             def _fake_gen(engine, prompt, out, **kw):

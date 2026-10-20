@@ -252,8 +252,9 @@ class SilenceGateTests(unittest.TestCase):
                 return Path(out)
 
             def fake_refs(m, cfg, work_dir, style_name="", scene_id=0, **kwargs):
-                return {"pictures": [{"slot": 1, "name": "A", "kind": "character",
-                                      "path": str(wd / "face.png")}], "audios": []}
+                return {"pictures": [{"slot": i + 1, "name": name, "kind": "character",
+                                      "path": str(wd / "face.png")}
+                                     for i, name in enumerate(("A", "B"))], "audios": []}
 
             scene = Scene(id=1, title="S", image_prompt="", video_prompt="", narration="",
                           mode="performance", lines=[],

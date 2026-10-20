@@ -60,6 +60,18 @@ class StoryEndpointTests(TempConfigCase):
         self.assertIsNone(backend._build_dialogue_note("narration", []))
         self.assertIsNone(backend._story_format_note("narration"))
 
+    def test_music_persistence_keeps_scene_decisions_without_style_prefix(self):
+        cfg = backend.gapp.load_config()
+        ss = backend.gapp.style_settings(cfg, "Hero")
+        shot = "An empty room with an amber lamp, photographed in muted grey."
+        scene = Scene(id=1, title="Room", image_prompt=shot, video_prompt="Light flickers.",
+                      narration="", mode="silent", metadata_extra={"singing": True, "cast": []})
+        result = backend._persist_generated_script(
+            backend.GenerateScriptBody(video_title="Music", style_name="Hero", format="song"),
+            cfg, ss, "Music", [scene], "", ss["visual_style"], [])
+        rows = json.loads((Path(result["work_dir"]) / "script.json").read_text())
+        self.assertEqual(rows[0]["image_prompt"], shot)
+
     def test_an_acted_format_carries_its_note_into_both_phases(self):
         body = backend.GenerateScriptBody(video_title="Dlg", topic="A topic",
                                           n_scenes=2, style_name="Hero",

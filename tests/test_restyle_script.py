@@ -130,6 +130,21 @@ class RestyleScriptTests(unittest.TestCase):
         rows = json.loads((self.wd / "script.json").read_text())
         self.assertEqual(rows[0]["image_prompt"], f"{NEW}. a fox in a field")
 
+    def test_music_restyle_compiles_shot_look_without_reintroducing_global_prefix(self):
+        rows = backend._read_script_scenes(self.wd)
+        for row in rows:
+            row["metadata"] = {"mode": "silent", "singing": True, "cast": []}
+        backend.gapp._persist_script_snapshot(self.wd, rows)
+        shots = [{"id": 1, "image_prompt": "A cel-animated fox in a field, bold ink outlines."},
+                 {"id": 2, "image_prompt": "A cel-animated fox by a river, bold ink outlines."}]
+        with mock.patch.object(backend, "_llm_complete",
+                               return_value=json.dumps({"scenes": shots})) as writer:
+            backend._restyle_script(self.wd, style_name="Cartoon", style="", repaint_cast=False)
+        self.assertIn(NEW, writer.call_args.args[1])
+        rows = backend._read_script_scenes(self.wd)
+        self.assertEqual([r["image_prompt"] for r in rows],
+                         [r["image_prompt"] for r in shots])
+
     def test_no_style_takes_the_written_sentence_alone(self):
         backend._restyle_script(self.wd, style_name="(none)", style="Muted pastel palette")
         rows = json.loads((self.wd / "script.json").read_text())

@@ -310,12 +310,14 @@ For music videos, use **Extra script instructions** to set the balance of singin
 non-singing narrative scenes and artist-free imagery. Ask for cutaways throughout the
 song, including sung passages, and describe when people should act without miming.
 Keep shot variety there: wides, action, details and portraits belong in separate scenes.
-Keep **Visual style** focused on lighting, palette and photographic treatment: it is
-added once to each image prompt. Performer names in that style text do not select
-character references; the scene's own cast and description do. Each scene image defaults
-to one continuous composition. Request panels or a collage explicitly in that scene's
-direction when wanted. Put identity and wardrobe rules in the
-character definition or script instructions, conditional on that person being visible.
+Keep **Visual style** focused on lighting, palette and medium. For music videos, visual
+and motion styles guide the script writer, who chooses one concrete composition,
+location, outfit and action per scene. The full profile is not appended to music-shot
+image or video prompts. Location menus and wardrobe possibilities belong in script
+instructions; physical identity comes from the character's portrait.
+Each image defaults to one continuous composition, with the same location and clothing
+throughout its take. Panels, montages and changing backgrounds must be explicitly
+authored exceptions, normally no more than one scene per film.
 Clothing changes requested in a style apply to future videos using that style; use a
 film's own brief or assigned wardrobe for a change specific to one video.
 

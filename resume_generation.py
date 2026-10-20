@@ -1017,6 +1017,14 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     audio_names = [a["name"] for a in refs["audios"]]
     ref_audios = [Path(a["path"]) for a in refs["audios"]]
 
+    missing_cast = [name for name in (meta.get("cast") or [])
+                    if not any(p.get("kind", "character") == "character"
+                               and p["name"] == name for p in picture_names)]
+    if missing_cast:
+        raise RuntimeError(
+            f"Scene {scene.id}: missing portrait reference for {', '.join(missing_cast)}. "
+            "Generate or attach their portraits before rendering; the first frame "
+            "does not replace character conditioning.")
     if not ref_images:
         raise RuntimeError(
             f"Scene {scene.id}: no reference image resolved for cast "

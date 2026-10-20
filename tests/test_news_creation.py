@@ -182,7 +182,7 @@ class NewsCreationTests(TempConfigCase):
             engine={"family": "qwen-image", "t2i_ref_workflow": "reference.json"})
         self.assertEqual(refs, [photo])
         self.assertIn("Anthony Albanese appears EXACTLY as the character in <image1>", prompt)
-        self.assertIn("Test photographer", prompt)
+        self.assertNotIn("Test photographer", prompt)  # reference supplies identity
 
     def test_unresolved_news_person_gets_a_persisted_reusable_automatic_portrait(self):
         wd = self.output_dir / "unresolved"

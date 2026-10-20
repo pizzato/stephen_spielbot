@@ -116,6 +116,10 @@ class OpeningFrameTests(unittest.TestCase):
             wd = Path(td)
             for name in files:
                 (wd / name).write_bytes(b"x")
+            (wd / "characters").mkdir(exist_ok=True)
+            (wd / "characters" / "ana.png").write_bytes(b"png")
+            (wd / "characters.json").write_text(json.dumps([
+                {"id": "ana", "name": "Ana", "ref_image": "ana.png"}]))
             made = []
 
             def _fake_gen(engine, prompt, out, **kw):
@@ -131,7 +135,9 @@ class OpeningFrameTests(unittest.TestCase):
     def test_a_silent_scene_without_one_gets_one(self):
         got, made = self._run(_silent(["Ana"]))
         self.assertTrue(str(got).endswith("scene_03_first_frame.png"))
-        self.assertEqual(made, [("i", 512, 256)])
+        self.assertEqual(len(made), 1)
+        self.assertTrue(made[0][0].startswith("i. Ana appears EXACTLY"))
+        self.assertEqual(made[0][1:], (512, 256))
 
     def test_an_existing_preview_is_reused(self):
         got, made = self._run(_silent(), files=["scene_03_preview.png"])

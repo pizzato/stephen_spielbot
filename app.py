@@ -2583,10 +2583,9 @@ def _compose_visual_style(style: str, cfg: dict, style_name: str = "") -> str:
 def _character_sheet(characters: list[dict]) -> str:
     """Format a style's enabled, described characters into a prompt block for the
     script LLM, or "" when there are none. Passed to generate_script so scenes
-    reference recurring characters BY NAME in their visual prompts —
-    _inject_characters appends the canonical appearance (and reference image)
-    to any prompt that names them, so a paraphrased description without the
-    name breaks that match."""
+    reference recurring characters BY NAME in their visual prompts. Those
+    names select their portrait conditions, so a paraphrased description
+    without the name breaks that match."""
     rows = [c for c in (characters or [])
             if c.get("enabled", True) and c.get("name") and c.get("description")]
     if not rows:
@@ -2595,13 +2594,14 @@ def _character_sheet(characters: list[dict]) -> str:
     return (
         "RECURRING CHARACTERS — when a scene features one of these, refer to them "
         "BY NAME in that scene's image/video prompts. Write the NAME ONLY — never "
-        "restate or paraphrase their appearance (the canonical appearance below is "
-        "appended automatically to every prompt that names them). Only describe "
+        "restate or paraphrase their appearance (named characters bind to their "
+        "stored portrait references). Only describe "
         "what DIFFERS from their canonical look in that scene, such as a change "
         "of clothes or an injury:\n"
         f"{lines}\n"
-        "Only mention a character when the narration involves them; leave other "
-        "scenes unaffected."
+        "Name and cast a character whenever they are visibly present, including "
+        "silent scenes, back views and reflections. An off-screen mention does "
+        "not put them in the image."
     )
 
 
@@ -3426,16 +3426,9 @@ def _characters_for_scene(scene_text: str, cfg: dict, style_name: str,
             and _character_mentions(scene_text, c)]
 
 
-def _scene_character_text(base_prompt: str, scene: dict, cfg: dict, style_name: str,
-                          work_dir: Path | None = None) -> str:
-    """Match characters from the shot and its authored cast, not its style.
-
-    A music style often names its artist even on empty-location shots. Strip
-    only known leading style text; names in the actual image description still
-    count. Covers pass no scene and retain their existing subject matching.
-    """
-    if not scene:
-        return base_prompt
+def _scene_image_text(text: str, cfg: dict, style_name: str,
+                      work_dir: Path | None = None) -> str:
+    """Remove legacy style guidance from the actual shot description."""
     prefixes = [style_settings(cfg, style_name).get("visual_style") or ""]
     if work_dir is not None:
         path = Path(work_dir) / "job_config.json"
@@ -3444,20 +3437,27 @@ def _scene_character_text(base_prompt: str, scene: dict, cfg: dict, style_name: 
             prefixes.extend([saved_style, _compose_visual_style(saved_style, cfg, style_name)])
     prefixes = sorted({p.strip().rstrip(".") for p in prefixes if p.strip()},
                       key=len, reverse=True)
-    texts = []
-    for text in (base_prompt, scene.get("image_prompt") or ""):
-        text = text.strip()
-        while text:
-            for prefix in prefixes:
-                if not text.casefold().startswith(prefix.casefold()):
-                    continue
-                rest = text[len(prefix):]
-                if not rest or rest.startswith((".", ",")):
-                    text = rest.lstrip("., ").strip()
-                    break
-            else:
+    text = text.strip()
+    while text:
+        for prefix in prefixes:
+            if not text.casefold().startswith(prefix.casefold()):
+                continue
+            rest = text[len(prefix):]
+            if not rest or rest.startswith((".", ",")):
+                text = rest.lstrip("., ").strip()
                 break
-        texts.append(text)
+        else:
+            break
+    return text
+
+
+def _scene_character_text(base_prompt: str, scene: dict, cfg: dict, style_name: str,
+                          work_dir: Path | None = None) -> str:
+    """Match characters from the shot and its authored cast, not its style."""
+    if not scene:
+        return base_prompt
+    texts = [_scene_image_text(t, cfg, style_name, work_dir)
+             for t in (base_prompt, scene.get("image_prompt") or "")]
     cast = (scene.get("metadata") or {}).get("cast") or scene.get("cast") or []
     texts.extend([cast] if isinstance(cast, str) else cast)
     return " ".join(str(text) for text in texts)
@@ -3529,15 +3529,15 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
 # look drifts; with it the render follows the uploaded look. A generic,
 # nameless version of this note ("any character depicted…") does NOT work.
 _REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in their provided reference "
-                   "image — identical face, head, materials and colours; only the pose "
-                   "and setting differ.")
+                   "image — identical face, hair and build. Use the scene's specified "
+                   "clothes; otherwise retain the reference outfit. Ignore the reference background.")
 # Qwen-Image 2.1 addresses each reference by slot (<image1>, <image2>, …).
 _QWEN_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <image{n}> — "
-                        "identical face, head, materials and colours; only the pose "
-                        "and setting differ.")
+                        "identical face, hair and build. Use the scene's specified "
+                        "clothes; otherwise retain the reference outfit. Ignore the reference background.")
 _FLUX3_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in <ref_image_{n}> — "
-                        "identical face, head, materials and colours; only the pose "
-                        "and setting differ.")
+                        "identical face, hair and build. Use the scene's specified "
+                        "clothes; otherwise retain the reference outfit. Ignore the reference background.")
 
 
 def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_name: str,
@@ -3546,19 +3546,35 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
                                 allow_appearance_override: bool = False) -> tuple[str, list[Path]]:
     """Character-consistent prompt + reference images for one scene image render.
 
-    Injects each featured character's canonical appearance (_inject_characters),
-    gathers their reference images, and — only when the engine actually
-    conditions on references (it has a t2i_ref_workflow — FLUX.2 or
-    Qwen-Image 2.1 or FLUX 3) — appends a per-character note tying the name to
-    its attached image. Qwen cites ``<image1>``; FLUX 3 cites ``<ref_image_0>``.
-    Engines without reference support get the plain injected prompt. Guided
-    covers can allow appearance overrides: descriptions and portraits then
-    supply identity and unchanged features, not an immutable outfit."""
-    prompt = _inject_characters(
-        base_prompt, scene, cfg, style_name, work_dir,
-        allow_appearance_override=allow_appearance_override)
+    Reference-capable engines receive portraits with named slot bindings, not
+    appearance descriptions. Music shots require those portraits for any named
+    cast and remove legacy style prefixes. Non-reference engines retain text
+    injection for other formats. Guided covers can allow appearance overrides."""
+    music_shot = bool((scene.get("metadata") or {}).get("singing"))
+    if music_shot:
+        base_prompt = _scene_image_text(base_prompt, cfg, style_name, work_dir)
     pairs = _scene_reference_characters(base_prompt, scene, cfg, style_name, work_dir)
     refs = [p for _c, p in pairs]
+    conditions_on_refs = bool(engine and engine.get("t2i_ref_workflow"))
+    if scene and (music_shot or conditions_on_refs):
+        text = _scene_character_text(base_prompt, scene, cfg, style_name, work_dir)
+        required = [c["name"] for c in _job_characters(cfg, style_name, work_dir)
+                    if c.get("enabled", True) and _character_mentions(text, c)]
+        cast = (scene.get("metadata") or {}).get("cast") or scene.get("cast") or []
+        required.extend([cast] if isinstance(cast, str) else cast)
+        missing = [name for name in dict.fromkeys(required)
+                   if not any(_character_mentions(name, c) for c, _p in pairs)]
+        if missing:
+            raise RuntimeError("Missing character reference image: " + ", ".join(missing)
+                               + ". Generate or attach their portraits before rendering.")
+        if required and not conditions_on_refs:
+            raise RuntimeError("This music scene needs an image model with character "
+                               "reference conditioning. Select a reference-capable image model.")
+    # Portrait-conditioned models get the actual identity, never a second
+    # textual reconstruction of it (which can invent a lookalike or outfit).
+    prompt = base_prompt if conditions_on_refs and scene else _inject_characters(
+        base_prompt, scene, cfg, style_name, work_dir,
+        allow_appearance_override=allow_appearance_override)
     if pairs and engine is not None and engine.get("t2i_ref_workflow"):
         if allow_appearance_override:
             notes = " ".join(
@@ -4244,7 +4260,7 @@ def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
         path = Path(c["_ref_path"]) if c and c.get("_ref_path") else None
         if path and path.exists():
             return path
-        logger.info("  performance: no portrait for %r — H3 will invent the look", name)
+        logger.info("  performance: missing portrait reference for %r", name)
         return None
 
     def voice_for(name: str) -> Path | None:
@@ -4526,7 +4542,8 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
         path = portrait_for(name)
         if path is not None:
             pictures.append({"slot": len(pictures) + 1, "name": name,
-                             "kind": "character", "hint": looks_like(name),
+                             "kind": "character",
+                             "hint": "" if meta.get("singing") else looks_like(name),
                              "path": str(path)})
     # The scene's first-frame image, when one was made: it rides as the take's
     # opening-composition reference. Ref2VA has no literal first-frame input,
@@ -4646,8 +4663,8 @@ def _generate_active_scene_preview(
     # Match the render: snap the preview to LTX's renderable grid so the cached
     # preview is reused as the first frame instead of regenerated at a new size.
     img_width, img_height = ltx_dimensions(img_width, img_height)
-    combined_style = _compose_visual_style(style, cfg, style_name)
     md = scene.get("metadata") or {}
+    combined_style = "" if md.get("singing") else _compose_visual_style(style, cfg, style_name)
     acted_prompt = ""
     if not (image_prompt or scene.get("image_prompt")):
         from pipeline import performance as _perf
@@ -4655,9 +4672,7 @@ def _generate_active_scene_preview(
     base_prompt = image_prompt or scene.get("image_prompt") or acted_prompt or title
     # Match a character added by one-off steering before choosing references.
     scene_prompt = _apply_prompt_instruction(base_prompt, instruction)
-    # Re-inject any recurring character's canonical appearance so the same named
-    # subject looks consistent across scenes even when the LLM paraphrased it,
-    # and anchor featured characters to their reference image (FLUX.2 only).
+    # Bind featured characters to their actual portrait conditions.
     # work_dir folds in the script's own (per-script) characters, not just the
     # global catalogue ones the style opted into.
     base_prompt, reference_images = _characters_prompt_and_refs(
