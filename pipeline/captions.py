@@ -295,6 +295,13 @@ def build_srt(work_dir: Path, lang: str | None = None,
     ``None`` means "skip captions" — callers should still upload the video.
     """
     work_dir = Path(work_dir)
+    from pipeline.working_files import is_cleaned
+    suffix = (f"_{lang}" if lang else "") + (f"_t-{timing_lang}" if timing_lang else "")
+    out_path = work_dir / f"captions{suffix}.srt"
+    if is_cleaned(work_dir):
+        # These tracks were timed to the final before scene clips disappeared.
+        # Recomputing from shorter narration WAVs would shift later captions.
+        return out_path if out_path.is_file() else None
     scenes = _published_order(work_dir, _load_scenes(work_dir))
     if not scenes:
         return None
@@ -360,8 +367,6 @@ def build_srt(work_dir: Path, lang: str | None = None,
         f"{i}\n{_timestamp(start)} --> {_timestamp(end)}\n{text}\n"
         for i, (start, end, text) in enumerate(timed, 1)
     ]
-    suffix = (f"_{lang}" if lang else "") + (f"_t-{timing_lang}" if timing_lang else "")
-    out_path = work_dir / f"captions{suffix}.srt"
     out_path.write_text("\n".join(blocks), encoding="utf-8")
     logger.info("Built %d caption cues → %s", len(timed), out_path)
     return out_path

@@ -864,7 +864,7 @@ def _render_activity_item(wd: Path) -> dict:
     # Same reconciliation the Progress screen + sidebar badge use, so the
     # Activity % matches the ETA instead of the raw band value.
     final_path = gapp._final_path_for_work_dir(wd)
-    _done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
+    _done = final_path.exists() and final_path.stat().st_size > 10_000 and gapp._has_finished_video(wd)
     pct = _display_pct(int(round(pct)), eta, status, _done)
     return _make_activity_event(
         name="Rendering film",
@@ -5940,7 +5940,7 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
         # keeps its clips: they are the deliverable, and the film editor re-renders
         # the scene on request rather than leaving a hole in the cut.
         if ({k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")} != old_dialogue
-                and not (Path(work_dir) / "combined.mp4").exists()):
+                and not gapp._has_finished_video(Path(work_dir))):
             wd = Path(work_dir)
             stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
                      wd / f"scene_{sid:02d}_establish.mp4"]
@@ -5974,7 +5974,7 @@ def _work_dir_render_active(wd: Path) -> bool:
     per-directory logic, including its 24 h staleness cutoff so a phantom dir
     can't lock the editor forever."""
     cfg_file = wd / "job_config.json"
-    if not cfg_file.exists() or (wd / "combined.mp4").exists():
+    if not cfg_file.exists() or gapp._has_finished_video(wd):
         return False
     try:
         if cfg_file.stat().st_mtime <= time.time() - 86400:
@@ -7572,7 +7572,7 @@ def _reconciled_render_pct(wd) -> int:
     band pct before durable tasks exist."""
     band = gapp._status_for_work_dir(wd)[0]
     final_path = gapp._final_path_for_work_dir(wd)
-    done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
+    done = final_path.exists() and final_path.stat().st_size > 10_000 and gapp._has_finished_video(wd)
     if done:
         return 100
     status, eta = "", None
@@ -7602,8 +7602,7 @@ def progress(work_dir: str = Query("")) -> dict:
 
     pct, msg = gapp._status_for_work_dir(wd)
     final_path = gapp._final_path_for_work_dir(wd)
-    combined = wd / "combined.mp4"
-    done = final_path.exists() and final_path.stat().st_size > 10_000 and combined.exists()
+    done = final_path.exists() and final_path.stat().st_size > 10_000 and gapp._has_finished_video(wd)
     cover = wd / "cover.png"
 
     tasks, workers, counts, job, eta = [], [], {}, None, None
@@ -7961,7 +7960,7 @@ def list_jobs(view: Literal["all", "films", "scripts", "recent"] = "all") -> dic
     scripts = [{"label": l, "work_dir": d,
                 # a finished film exists for this script — same marker the
                 # finished list keys on, so "Not rendered" can filter on it
-                "rendered": (Path(d) / "combined.mp4").exists(),
+                "rendered": gapp._has_finished_video(Path(d)),
                 # story drafted but not yet divided into scenes — the Script
                 # screen opens these straight into the Story view
                 "story_draft": not (Path(d) / "script.json").exists(),
@@ -8012,10 +8011,6 @@ class WorkingFilesBody(BaseModel):
     work_dir: str
 
 
-class WorkingFilesPolicyBody(WorkingFilesBody):
-    policy: Literal["manual", "after_approval", "after_upload"] = "manual"
-
-
 def _working_files_dir(work_dir: str) -> Path:
     raw = Path(work_dir)
     wd = raw.resolve()
@@ -8029,8 +8024,9 @@ def _working_files_dir(work_dir: str) -> Path:
 
 
 def _working_files_state(wd: Path) -> dict:
-    path = wd / "working_files.json"
-    return json.loads(path.read_text()) if path.exists() else {"policy": "manual"}
+    state = working_files.state(wd)
+    state.pop("policy", None)  # Legacy per-video preferences no longer apply.
+    return state
 
 
 def _save_working_files_state(wd: Path, state: dict) -> None:
@@ -8067,7 +8063,7 @@ def _working_files_final(wd: Path) -> Path:
 
 def _working_files_blocked(wd: Path) -> str:
     final = _working_files_final(wd)
-    if (not (wd / "combined.mp4").is_file() or not final.is_file()
+    if (not gapp._has_finished_video(wd) or not final.is_file()
             or final.stat().st_size <= 10_000):
         return "Cleanup is available once the final video is complete."
     meta = json.loads((wd / "job.json").read_text()) if (wd / "job.json").exists() else {}
@@ -8082,14 +8078,31 @@ def _clean_working_files(wd: Path, *, automatic: bool = False) -> dict | None:
         raise HTTPException(409, "This film is being updated. Try cleanup again when it finishes.")
     try:
         state = _working_files_state(wd)
-        trigger = _working_files_trigger(wd, state.get("policy", "manual"))
+        style_name = _work_dir_style_name(wd)
+        policy = gapp.working_files_cleanup_policy(gapp.load_config(), style_name)
+        milestone = _working_files_trigger(wd, policy)
+        trigger = f"v2:{style_name}:{policy}:{milestone}" if milestone else ""
         if automatic and (not trigger or state.get("completed_trigger") == trigger):
             return None
         reason = _working_files_blocked(wd)
         if reason:
             raise HTTPException(409, reason)
+        # Validate the plan before saving captions or marking this final as
+        # retained. Capture its language before the duplicate history is pruned.
+        working_files.preview(wd, _working_files_final(wd))
+        if not state.get("video_sources_removed"):
+            hist = final_video_history.history(wd)
+            state["retained_cut"] = next((v for v in hist["versions"]
+                                          if v["id"] == hist.get("selected")), {})
+            _publish_caption_tracks(wd, _video_language_for_work_dir(wd, "en"))
+            working_files.preserve_scene_audio(wd)
+            state["video_sources_removed"] = True
+            # A crash during unlinking must not make this completed film look
+            # resumable or allow an automatic rebuild to replace the final.
+            _save_working_files_state(wd, state)
         result = working_files.clean(wd, _working_files_final(wd))
-        state["last_cleanup"] = {**result, "at": time.time(), "automatic": automatic}
+        if result["files"] or result["errors"] or "last_cleanup" not in state:
+            state["last_cleanup"] = {**result, "at": time.time(), "automatic": automatic}
         if not result["errors"]:
             state["completed_trigger"] = trigger
         _save_working_files_state(wd, state)
@@ -8111,10 +8124,9 @@ def _maybe_clean_working_files(wd: Path) -> None:
 
 
 def _sweep_working_files() -> None:
-    # Retry busy films and recover opted-in policies after a backend restart.
+    # Read the current style choice for existing films as well as new ones.
     for _label, work_dir in gapp._list_recent_jobs(max_results=1000):
-        if (Path(work_dir) / "working_files.json").is_file():
-            _maybe_clean_working_files(Path(work_dir))
+        _maybe_clean_working_files(Path(work_dir))
 
 
 @api.get("/api/films/working-files")
@@ -8126,29 +8138,16 @@ def film_working_files(work_dir: str = Query(...)) -> dict:
             "reclaimable": working_files.preview(wd, _working_files_final(wd))}
 
 
-@api.post("/api/films/working-files/policy")
-def film_working_files_policy(body: WorkingFilesPolicyBody) -> dict:
-    wd = _working_files_dir(body.work_dir)
-    lock = _reassemble_lock(wd)
-    if not lock.acquire(blocking=False):
-        raise HTTPException(409, "This film is being updated. Save the preference when it finishes.")
-    try:
-        state = _working_files_state(wd)
-        if state.get("policy") != body.policy:
-            state.pop("completed_trigger", None)
-        state["policy"] = body.policy
-        _save_working_files_state(wd, state)
-    finally:
-        lock.release()
-    _maybe_clean_working_files(wd)
-    return film_working_files(str(wd))
-
-
 @api.post("/api/films/working-files/clean")
 def film_working_files_clean(body: WorkingFilesBody) -> dict:
     wd = _working_files_dir(body.work_dir)
     result = _clean_working_files(wd)
     return {**film_working_files(str(wd)), "result": result}
+
+
+def _require_working_video(wd: Path) -> None:
+    if working_files.is_cleaned(wd):
+        raise HTTPException(409, "Working video files were cleaned up. Render a new copy from the saved script.")
 
 
 # ── remix ────────────────────────────────────────────────────────────────────
@@ -8228,15 +8227,14 @@ def remix_load(work_dir: str = Query("")) -> dict:
     wd = Path(work_dir) if work_dir else gapp._latest_work_dir()
     if wd is None:
         raise HTTPException(404, "No job available.")
-    combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     # A performance film has no score and no separate narration track — its
     # audio comes out of the video model with the picture — so a missing music
     # track is normal there, not a broken film. The mixer is reported as
     # unavailable instead of 404ing the whole screen.
-    if not combined.exists():
+    if not gapp._has_finished_video(wd):
         raise HTTPException(404, f"Required files not found in {wd.name}.")
-    can_remix = music.exists()
+    can_remix = music.exists() and not working_files.is_cleaned(wd)
     # Preview the actual published final (full voice/music/ambient mix) — the
     # same file Publish reads. Globbing the work dir returned combined.mp4
     # (narration only, no music) before any remix existed. See issue #14.
@@ -8257,6 +8255,8 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # False for performance films: there is no music or narration stem to
         # re-balance, so the mix controls have nothing to act on.
         "can_remix": can_remix,
+        "working_files_cleaned": working_files.is_cleaned(wd),
+        "retained_cut": _working_files_state(wd).get("retained_cut"),
         # A music video's levels are pinned to music-only (see _mix_volumes) —
         # the mixer card shows and offers exactly that.
         "voice_vol": mix_vols[0],
@@ -8309,6 +8309,7 @@ def remix_apply(body: RemixBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     ambient = wd / "ambient.wav"
@@ -8401,6 +8402,7 @@ def remix_subtitles(body: RemixSubtitlesBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     curated = _curated_final_version(wd)
     if body.burn and curated:
         return _burn_subtitles_onto_cut(wd, curated)
@@ -8543,7 +8545,8 @@ def remix_narrator(body: RemixNarratorBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
-    if not (wd / "combined.mp4").exists():
+    _require_working_video(wd)
+    if not gapp._has_finished_video(wd):
         raise HTTPException(404, f"combined.mp4 not found in {wd.name}.")
     voice = (body.voice or "").strip()
     if voice and voice not in gapp.get_voice_choices():
@@ -8663,7 +8666,8 @@ def remix_localize(body: LocalizeFilmBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
-    if not (wd / "combined.mp4").exists():
+    _require_working_video(wd)
+    if not gapp._has_finished_video(wd):
         raise HTTPException(404, f"combined.mp4 not found in {wd.name}.")
     lang = norm_language(body.language)
     if body.language not in LANGUAGES:
@@ -9279,7 +9283,8 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
-    if not (wd / "combined.mp4").exists():
+    _require_working_video(wd)
+    if not gapp._has_finished_video(wd):
         raise HTTPException(404, f"combined.mp4 not found in {wd.name} — render the film first.")
 
     # Capture the current track as the first kept version BEFORE overwriting the
@@ -9383,6 +9388,7 @@ def remix_song_voice(body: SongRevoiceBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     if not (wd / "song.json").exists():
         raise HTTPException(404, "This film has no song.")
     if not (wd / "background_music.wav").exists():
@@ -9423,6 +9429,7 @@ def select_music(body: MusicSelectBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     try:
         music_path = music_history.select(wd, int(body.version_id))
     except (ValueError, FileNotFoundError) as e:
@@ -9897,6 +9904,7 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     target_name = (body.target_resolution or "").strip()
     try:
         mode = _normalize_upscale_mode(body.upscale_mode)
@@ -10071,6 +10079,7 @@ def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     cover = wd / "cover.png"
     if not (cover.exists() and cover.stat().st_size > 1000):
         raise HTTPException(400, "No cover image found — generate the cover first.")
@@ -10158,6 +10167,7 @@ def remix_fade_ending(body: FadeEndingBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     final_path = gapp._final_path_for_work_dir(wd)
     if not final_path.exists():
         raise HTTPException(404, f"Final video not found for {wd.name}.")
@@ -10219,6 +10229,7 @@ def remix_fade_ending_remove(body: FadeEndingRemoveBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     final_path = gapp._final_path_for_work_dir(wd)
     jc = _film_job_config(wd)
     jc.pop("fade_ending", None)
@@ -10373,6 +10384,7 @@ def remix_title_cards(body: TitleCardsBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     if not gapp._final_path_for_work_dir(wd).exists():
         raise HTTPException(404, f"Final video not found for {wd.name}.")
     cfg = _title_cards.norm_title_cards(body.title_cards)
@@ -10405,6 +10417,7 @@ def remix_title_cards_remove(body: TitleCardsRemoveBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     final_path = gapp._final_path_for_work_dir(wd)
     jc = _film_job_config(wd)
     cards = _title_cards.norm_title_cards(jc.get("title_cards"))
@@ -10493,6 +10506,7 @@ def select_remix_video(body: RemixVideoSelectBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    _require_working_video(wd)
     final_path = gapp._final_path_for_work_dir(wd)
     try:
         final_video_history.select(wd, int(body.version_id), final_path)
@@ -10551,7 +10565,7 @@ def _queue_done(work_dir: str) -> tuple[bool, dict]:
     except Exception:
         meta = {}
     final = gapp._final_path_for_work_dir(p)
-    done = final.exists() and final.stat().st_size > 10_000 and (p / "combined.mp4").exists()
+    done = final.exists() and final.stat().st_size > 10_000 and gapp._has_finished_video(p)
     return bool(done or meta.get("status") == "done"), meta
 
 
@@ -13163,6 +13177,8 @@ def _published_cut_language(wd: Path, fallback: str) -> str:
     """Language of the currently selected final cut: a localized cut carries its
     localization's language; the original cut (or no history) falls back."""
     try:
+        if working_files.is_cleaned(wd):
+            return working_files.state(wd).get("retained_cut", {}).get("lang") or fallback
         hist = final_video_history.history(wd)
         sel = next((v for v in hist["versions"] if v["id"] == hist.get("selected")), None)
         return (sel or {}).get("lang") or fallback
@@ -15478,6 +15494,7 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
 
     return {
         "scenes": result,
+        "working_files_cleaned": working_files.is_cleaned(wd),
         "song_url": song_url,
         "job_id": job_id,
         "work_dir": str(wd),
@@ -15507,6 +15524,7 @@ def delete_film_scene(body: DeleteFilmSceneBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     sid = body.scene_id
     for fname in [
         f"scene_{sid:02d}_narration.wav",
@@ -15551,6 +15569,7 @@ def add_film_scene(body: AddFilmSceneBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     if not wd.exists():
         raise HTTPException(404, "Film directory not found.")
 
@@ -15595,6 +15614,7 @@ def reorder_film_scenes(body: ReorderFilmScenesBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     _save_scene_order(wd, [int(x) for x in body.order])
     return {"ok": True}
 
@@ -15668,6 +15688,8 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
     cover burns).
     Returns the scene count. Raises ValueError when the film has nothing to
     assemble; ffmpeg failures propagate as-is."""
+    if working_files.is_cleaned(wd):
+        raise ValueError("Working video files were cleaned up. Render a new copy from the saved script.")
     job_id = job_id_from_work_dir(wd)
     store = DurableStore.default()
     try:
@@ -15705,6 +15727,8 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
     voice_vol, music_vol, ambient_vol = (v / 100.0 for v in _mix_volumes(wd, jc, cfg))
 
     with _reassemble_lock(wd), _track_op(op_name, wd.name):
+        if working_files.is_cleaned(wd):
+            raise ValueError("Working video files were cleaned up. Render a new copy from the saved script.")
         from pipeline.assembler import (concatenate_scenes, ensure_video_resolution,
                                         mix_background_music, _get_video_dimensions)
         from pipeline.comfyui import ltx_dimensions
@@ -15869,6 +15893,8 @@ def _stale_final_films() -> list:
     stale = []
     for _label, wd in gapp._list_recent_jobs(max_results=50):
         p = Path(wd)
+        if working_files.is_cleaned(p):
+            continue
         try:
             meta = json.loads((p / "job.json").read_text())
         except Exception:
@@ -16488,6 +16514,8 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
     Shared by the endpoint and the startup requeue of journaled re-renders, so it
     raises ValueError (bad request) / LookupError (unknown scene) instead of HTTP
     errors."""
+    if working_files.is_cleaned(wd):
+        raise ValueError("Working video files were cleaned up. Render a new copy from the saved script.")
     if component not in ("narration", "image", "video"):
         raise ValueError(f"Unknown component: {component!r}")
 
@@ -16647,6 +16675,7 @@ def select_film_video(scene_id: int, body: FilmPreviewSelectBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     try:
         out = video_history.select(wd, int(scene_id), int(body.version_id))
     except (ValueError, FileNotFoundError) as e:
@@ -16760,6 +16789,7 @@ def trim_film_scene(scene_id: int, body: FilmTrimBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     sid = int(scene_id)
     final_path = wd / f"scene_{sid:02d}_final.mp4"
     if not final_path.exists():
@@ -16954,6 +16984,7 @@ def continue_film_scene(scene_id: int, body: FilmContinueBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
     sid = int(scene_id)
     final_path = wd / f"scene_{sid:02d}_final.mp4"
     if not final_path.exists():

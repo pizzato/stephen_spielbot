@@ -302,7 +302,6 @@ export const api = {
   deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   filmWorkingFiles: (workDir) => req('GET', `/films/working-files?work_dir=${encodeURIComponent(workDir)}`),
-  setFilmWorkingFilesPolicy: (workDir, policy) => req('POST', '/films/working-files/policy', { work_dir: workDir, policy }),
   cleanFilmWorkingFiles: (workDir) => req('POST', '/films/working-files/clean', { work_dir: workDir }),
   applyRemix: (body) => req('POST', '/remix', body),
   regenNarrator: (body) => req('POST', '/remix/narrator', body),

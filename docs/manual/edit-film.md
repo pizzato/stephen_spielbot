@@ -25,38 +25,45 @@ Also **Approve** when the film is held by the [approval gate](settings.md#publis
 
 ### Clean up working files
 
-The **Film** tab shows how much space can be reclaimed from **older versions**
-and **upscale caches** for this video. **Clean up now…** previews the scope, then
-**Delete … working files** confirms permanent deletion. The final video must be
-complete, and cleanup waits while this film is rendering, editing or uploading.
+Use **Film → Clean up working files → Clean up now…** when you want to keep the
+finished video and reusable assets. Expand **Files to remove** to see every
+candidate with its size, or **Files to keep / download** to inspect and download
+retained files. **Delete … working files** confirms permanent deletion. The final
+must be complete; rendering, editing and uploads block cleanup until they finish.
 
-**Automatic cleanup** is off by default. Choose **After final-video approval** or
-**After successful upload to YouTube or X**, then **Enable automatic cleanup**.
-This preference belongs only to this video. If it is already approved/uploaded,
-enabling the preference runs cleanup immediately; otherwise it waits for that
-milestone. Approval means the finished film's publishing approval, not script
-approval or a scene's review mark. A failed upload does not trigger cleanup.
-Busy films retry on the backend's regular check (about every three minutes),
-including after a restart. Each approval/upload triggers at most one successful
-cleanup, so later editing is left alone until another approval/upload or a manual
-cleanup. Choose **Off — keep working files** and save to cancel pending cleanup.
+Cleanup removes:
 
-Cleanup removes unselected scene-image, cover, scene-video, music and final-video
-versions, plus generated scene MP4s in the final-upscale caches. It keeps:
+- Generated scene video clips, including the current clips and localized copies.
+- Intermediate assembled videos (`combined.mp4`), duplicate final-video history
+  copies, scene-video histories and upscale caches.
+- Unselected image/cover history versions. Current images and selected image
+  versions remain.
 
-- The published final, combined video, current scene clips and images, and raw
-  scene video/audio needed by narration edits and reassembly.
-- Selected versions, including their language/processing metadata, the latest
-  base final cut needed to size another upscale correctly, and source song
-  versions needed to re-voice the selected track.
-- Captions, scripts, scene metadata, cover artwork, character references,
-  localizations, publishing records, settings and logs.
+It keeps:
 
-Unknown files and symbolic links are untouched. Removed versions cannot be
-restored, and another upscale rebuilds its deleted cache. This is a conservative
-space-saving cleanup, not a final-file-only archive: current editing assets stay
-available. The card reports actual bytes removed and any files that could not be
-deleted. The preference is not copied when creating a new version of a film.
+- The final video exactly as it is, with its language and processing metadata.
+- Scripts, scene descriptions, prompts, song lyrics, settings and publishing records.
+- **All music and narration files**, alternate music versions, source vocals,
+  ambient audio, soundtrack slices and localized narration. Speech held only in a
+  current scene video is extracted to a separate `scene_NN_original_audio.wav`
+  before deleting that clip; an extraction failure stops cleanup.
+- **Closed captions (SRT)**, saved with the final cut's timing before removing clips.
+- Current images, cover artwork, character/original reference assets and metadata.
+
+Unknown files and symbolic links are left alone. The finished film remains in
+Films and can still be played, downloaded or published, including its captions.
+Scene media editing, remixing and reassembly are unavailable after cleanup:
+**render a new copy from the saved script** to edit the video again. The Scenes
+tab still shows saved descriptions, images and narration. Deleted clips and old
+versions cannot be restored.
+
+The card reports actual files and bytes removed, any failures, and an expandable
+**Last cleanup** filename record. Older cleanups only recorded totals, so their
+filenames cannot be recovered. Empty folders and retained WAVs are expected.
+
+Automatic cleanup belongs to **[Settings → Styles](settings.md#automatic-working-file-cleanup)**,
+not individual videos. There is no per-video automatic-cleanup control, and
+legacy per-video preferences are ignored. Manual cleanup remains available here.
 
 ### Cover image
 
