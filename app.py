@@ -67,6 +67,7 @@ from pipeline.orchestrator import DurableStore
 from pipeline.worker_pool import WorkerPool, idle_workers
 from pipeline import ui_activity
 from pipeline import image_history
+from pipeline import working_files
 from pipeline import prompts as prompt_store
 from pipeline import engines
 from pipeline.cover_typography import DEFAULT_COVER_TYPOGRAPHY
@@ -1164,6 +1165,10 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         if parent == name or parent == NO_STYLE:
             parent = ""
         row = {"name": name}
+        # Cleanup requires an explicit choice on this style, never inheritance
+        # or a global/default-style fallback.
+        if s.get("working_files_cleanup") in ("off", "after_approval", "after_upload"):
+            row["working_files_cleanup"] = s["working_files_cleanup"]
         # Character inheritance is an opt-out on this style only.
         if s.get("exclude_inherited_characters"):
             row["exclude_inherited_characters"] = True
@@ -1707,8 +1712,7 @@ def _is_job_running() -> bool:
             if not d.is_dir():
                 continue
             cfg_file = d / "job_config.json"
-            combined = d / "combined.mp4"
-            if cfg_file.exists() and not combined.exists():
+            if cfg_file.exists() and not _has_finished_video(d):
                 if cfg_file.stat().st_mtime > cutoff:
                     # Skip jobs that have already errored or been cancelled —
                     # they have no combined.mp4 but are not "running".
@@ -2169,8 +2173,7 @@ def _status_for_work_dir(work_dir: Path) -> tuple[float, str]:
             pass
 
     final_path = _final_path_for_work_dir(work_dir)
-    combined_check = work_dir / "combined.mp4"
-    if final_path.exists() and final_path.stat().st_size > 10_000 and combined_check.exists():
+    if final_path.exists() and final_path.stat().st_size > 10_000 and _has_finished_video(work_dir):
         return 100.0, f"Done - {final_path.name} ({final_path.stat().st_size / 1024 / 1024:.1f} MB)"
 
     try:
@@ -2452,8 +2455,18 @@ def on_pause_active_job(active_job_dir: str) -> str:
     return f"Paused {work_dir.name}" + (" — process terminated" if killed else " — process was not running")
 
 
+def _has_finished_video(work_dir: Path) -> bool:
+    return (work_dir / "combined.mp4").exists() or working_files.is_cleaned(work_dir)
+
+
+def working_files_cleanup_policy(cfg: dict, style_name: str) -> str:
+    style = next((s for s in cfg.get("styles", []) if s.get("name") == style_name), {})
+    policy = style.get("working_files_cleanup")
+    return policy if policy in ("after_approval", "after_upload") else "off"
+
+
 def _list_resumable_jobs() -> list[tuple[str, str]]:
-    """Jobs that were started (have job.json) but not yet completed (no combined.mp4)."""
+    """Started jobs without a completed or cleaned final video."""
     results = []
     try:
         dirs = sorted(
@@ -2467,7 +2480,7 @@ def _list_resumable_jobs() -> list[tuple[str, str]]:
             # but the work dir keeps every scene rendered so far — hiding it
             # left the only "Continue" affordance out of reach for a film that
             # was one scene short of finishing.
-            if (d / "job.json").exists() and not (d / "combined.mp4").exists():
+            if (d / "job.json").exists() and not _has_finished_video(d):
                 results.append((_job_folder_label(d), str(d)))
     except Exception:
         pass
@@ -4781,8 +4794,7 @@ def _list_recent_jobs(max_results: int = 10) -> list[tuple[str, str]]:
             reverse=True,
         )
         for d in dirs:
-            combined = d / "combined.mp4"
-            if combined.exists():
+            if _has_finished_video(d):
                 results.append((_job_folder_label(d), str(d)))
             if len(results) >= max_results:
                 break

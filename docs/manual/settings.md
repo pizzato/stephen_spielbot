@@ -209,6 +209,27 @@ monitor](#news-monitoring) is configured on the Styles tab.
     for ideas without publishing anywhere. It is never silently mapped to your first
     channel.
 
+### Automatic working-file cleanup
+
+Under **Styles → Identity & destination**, each style has **Automatic working-file
+cleanup**: **Off — clean up manually** (default), **After final-video approval**,
+or **After successful upload to YouTube or X**. Save Settings to apply the choice.
+This is an explicit setting on that style: it is not inherited by child styles,
+there is no global fallback, and a missing/deleted style does not enable cleanup.
+
+The choice applies to existing and future videos of that style. Already eligible
+videos are cleaned on the next regular backend check (about every three minutes).
+Approval means the final video's publishing approval, not a script or scene
+review. Successful uploads also trigger it immediately; failed uploads never do.
+Busy films retry later, including after a backend restart. Each milestone runs
+at most once successfully. Turning the setting off cancels pending cleanup.
+
+Cleanup permanently removes working scene videos, duplicate renders, old visual
+versions and caches. It preserves the final video, scripts, closed captions,
+music, narration and reusable current/reference images. Editing the video after
+cleanup requires rendering a new copy. See **[Clean up working files](edit-film.md#clean-up-working-files)**
+for the exact scope and the per-video manual action, preview and deletion record.
+
 ### Cover & first frame
 
 **Opening cover** (`none` / `image`) and **cover hold** — how long the cover stays on
