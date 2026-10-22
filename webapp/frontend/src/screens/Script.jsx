@@ -554,7 +554,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     return () => { alive = false; clearTimeout(timer) }
   }, [view, job?.work_dir])
 
-  const refreshScripts = () => api.listJobs()
+  const refreshScripts = () => api.listJobs('scripts')
     .then((d) => setSavedScripts(d.scripts || []))
     .catch(() => {})
   useEffect(() => { refreshScripts() }, [])

@@ -121,6 +121,7 @@ nav:
       - Cluster & workers: cluster.md
       - Models: models.md
       - Architecture: architecture.md
+      - Browsing performance: browsing-performance.md
       - Durable orchestration: orchestration.md
       - Security: security.md
       - Model licensing: tts_licensing.md

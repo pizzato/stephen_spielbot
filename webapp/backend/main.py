@@ -7795,22 +7795,26 @@ def _x_account_display_name(cfg: dict, key: str) -> str:
     return ((entry.get("name") if entry else "") or "").strip() or "X"
 
 
-def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
+def _film_publish_status(wd: Path, meta: dict, cfg: dict, *,
+                         style_name: str | None = None, job_config: dict | None = None,
+                         publish_items: dict | None = None) -> dict:
     """Where a finished film has been published. 'New' (published=False) means it
     hasn't been posted anywhere yet. Channel/account names resolve from the film's
     style — the same mapping the Publish screen uses — since job.json records only
     the resulting video/tweet id, not the destination key."""
     dests = []
+    if style_name is None and (meta.get("youtube_video_id") or meta.get("x_tweet_id")):
+        style_name = _work_dir_style_name(wd)
     if meta.get("youtube_video_id"):
         dests.append({
             "platform": "youtube",
-            "name": _channel_display_name(cfg, _channel_for_work_dir(wd)),
+            "name": _channel_display_name(cfg, gapp.channel_for_style(cfg, style_name)),
             "url": meta.get("youtube_url") or "",
         })
     if meta.get("x_tweet_id"):
         dests.append({
             "platform": "x",
-            "name": _x_account_display_name(cfg, _x_account_for_work_dir(wd)),
+            "name": _x_account_display_name(cfg, gapp.x_account_for_style(cfg, style_name)),
             "url": meta.get("x_url") or "",
         })
     out = {"published": bool(dests), "destinations": dests}
@@ -7818,8 +7822,9 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
     # a thumbs-up in the Films tab. Comment-requested videos bypass it, as does the
     # automation override that publishes unapproved films.
     if cfg.get("publish_require_approval") and not cfg.get("publish_auto_publish_unapproved") and not dests:
-        e = pq.item_by_work_dir(str(wd))
-        jc = _film_job_config(wd)
+        e = (publish_items.get(str(wd)) if publish_items is not None
+             else pq.item_by_work_dir(str(wd)))
+        jc = job_config if job_config is not None else _film_job_config(wd)
         source = (e or {}).get("source") or _publish_source_for(jc)
         bypass = source == "comment" and cfg.get("publish_schedule_skip_comment_requests", True)
         if not bypass:
@@ -7831,7 +7836,7 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
     return out
 
 
-def _style_names_for_work_dirs(dirs: list[str]) -> dict[str, str]:
+def _style_names_for_work_dirs(dirs: list[str], configs: dict) -> dict[str, str]:
     """style_name per work dir, for list payloads. Same resolution order as
     _work_dir_style_name (job_config.json → durable job config), but the
     durable-store fallback runs in ONE store session — the per-item helper
@@ -7839,7 +7844,7 @@ def _style_names_for_work_dirs(dirs: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     missing = []
     for d in dirs:
-        name = str(_film_job_config(Path(d)).get("style_name") or "")
+        name = str(configs[d].get("style_name") or "")
         if name:
             out[d] = name
         else:
@@ -7861,7 +7866,7 @@ def _style_names_for_work_dirs(dirs: list[str]) -> dict[str, str]:
     return out
 
 
-def _video_titles_for_work_dirs(dirs: list[str]) -> dict[str, str]:
+def _video_titles_for_work_dirs(dirs: list[str], configs: dict) -> dict[str, str]:
     """Display title per work dir, for the Films list. Same resolution order as
     _video_title_for (job_config.json → durable job record) but batched into ONE
     store session — the per-item helper opens sqlite per call, too slow for the
@@ -7870,7 +7875,7 @@ def _video_titles_for_work_dirs(dirs: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     missing = []
     for d in dirs:
-        title = str(_film_job_config(Path(d)).get("video_title") or "").strip()
+        title = str(configs[d].get("video_title") or "").strip()
         if title:
             out[d] = title
         else:
@@ -7893,12 +7898,22 @@ def _video_titles_for_work_dirs(dirs: list[str]) -> dict[str, str]:
 
 
 @api.get("/api/jobs")
-def list_jobs() -> dict:
-    # The Library lists every finished film (it filters client-side, no paging),
+def list_jobs(view: Literal["all", "films", "scripts", "recent"] = "all") -> dict:
+    # The Library filters the full metadata list before paging its cards,
     # so the cap is only a runaway guard — a 50-film cut silently hid older ones
     # that were still live in the publish queue.
-    finished_rows = gapp._list_recent_jobs(max_results=1000)
+    finished_rows = gapp._list_recent_jobs(max_results=1000) if view != "scripts" else []
     cfg = gapp.load_config()
+    configs = {}
+    if view == "recent":
+        recent = []
+        for label, d in finished_rows:
+            configs[d] = _film_job_config(Path(d))
+            if not configs[d].get("archived"):
+                recent.append((label, d))
+                if len(recent) == 5:
+                    break
+        finished_rows = recent
     def _cover_url(work_dir: str) -> str:
         cover = Path(work_dir) / "cover.png"
         if cover.exists() and cover.stat().st_size > 1000:
@@ -7906,10 +7921,16 @@ def list_jobs() -> dict:
         return ""
     # Style + publish-target channel per item, so the Films/Scripts lists can
     # filter by them. Resolved in one batch (the per-item helper hits sqlite).
-    script_rows = list(gapp._list_script_jobs())
-    styles = _style_names_for_work_dirs(
-        [d for _, d in finished_rows] + [d for _, d in script_rows])
-    titles = _video_titles_for_work_dirs([d for _, d in finished_rows])
+    script_rows = list(gapp._list_script_jobs()) if view in ("all", "scripts") else []
+    dirs = list(dict.fromkeys(d for _, d in finished_rows + script_rows))
+    for d in dirs:
+        if d not in configs:
+            configs[d] = _film_job_config(Path(d))
+    styles = _style_names_for_work_dirs(dirs, configs)
+    titles = _video_titles_for_work_dirs([d for _, d in finished_rows], configs)
+    publish_items = {}
+    if finished_rows and cfg.get("publish_require_approval") and not cfg.get("publish_auto_publish_unapproved"):
+        publish_items = {e.get("work_dir"): e for e in pq.load_queue()}
     chan_cache: dict[str, str] = {}
     def _channel_disp(style: str) -> str:
         if style not in chan_cache:
@@ -7922,7 +7943,7 @@ def list_jobs() -> dict:
             meta = json.loads((Path(d) / "job.json").read_text())
         except Exception:
             meta = {}
-        jc = _film_job_config(Path(d))
+        jc = configs[d]
         finished.append({"label": l, "work_dir": d, "cover_url": _cover_url(d),
                          # Saved display title (rename / Publish-screen edit);
                          # the card falls back to the pretty folder label.
@@ -7935,7 +7956,8 @@ def list_jobs() -> dict:
                          "channel": _channel_disp(styles.get(d, "")),
                          "starred": bool(jc.get("starred")),
                          "archived": bool(jc.get("archived")),
-                         **_film_publish_status(Path(d), meta, cfg)})
+                         **_film_publish_status(Path(d), meta, cfg, style_name=styles.get(d, ""),
+                                                job_config=jc, publish_items=publish_items)})
     scripts = [{"label": l, "work_dir": d,
                 # a finished film exists for this script — same marker the
                 # finished list keys on, so "Not rendered" can filter on it
@@ -7951,6 +7973,8 @@ def list_jobs() -> dict:
                 "style_name": styles.get(d, ""),
                 "channel": _channel_disp(styles.get(d, ""))}
                for l, d in script_rows]
+    if view in ("scripts", "recent"):
+        return {"finished": finished, "scripts": scripts, "resumable": []}
     resumable = []
     active_wd = gapp._preferred_work_dir("")
     active_key = _work_dir_title_key(active_wd) if active_wd else ""

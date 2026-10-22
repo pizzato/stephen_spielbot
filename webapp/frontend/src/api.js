@@ -296,7 +296,7 @@ export const api = {
   deleteJob: (workDir) => req('POST', '/jobs/delete', { work_dir: workDir }),
   markJobSeen: (workDir) => req('POST', '/jobs/seen', { work_dir: workDir }),
 
-  listJobs: () => req('GET', '/jobs'),
+  listJobs: (view = 'all') => req('GET', `/jobs?view=${encodeURIComponent(view)}`),
   // Library metadata for one film: { work_dir, title?, starred?, archived? }.
   setFilmMeta: (body) => req('POST', '/films/meta', body),
   deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),

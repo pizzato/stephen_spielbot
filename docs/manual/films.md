@@ -42,6 +42,11 @@ narrowed set. The active filters live in the URL (`#/films?status=published&chan
 so the browser's Back button returns you to the same filtered view, and a filtered URL
 can be bookmarked or shared. Clicking **Films** in the sidebar starts fresh, unfiltered.
 
+Finished films are shown **24 per page**, with **Previous** and **Next** controls above
+the cards. Filters and their counts apply across the loaded library, not just the current
+page. Changing a filter returns to page 1; the page number also lives in the URL so Back
+returns to the same page. Covers load as they approach the visible area.
+
 ## The cards
 
 Each film shows its cover, its title, and a state chip — **Published**, **Needs
