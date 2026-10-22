@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
 
 _MANIFEST = "final_video_history.json"
 _SUBDIR = "final_video_history"
+_LOCK = threading.RLock()
+
+
+def _locked(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapped
 
 
 def _manifest_path(work_dir: str | Path) -> Path:
@@ -46,6 +57,7 @@ def _save(work_dir: str | Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+@_locked
 def seed_if_empty(
     work_dir: str | Path,
     video_path: str | Path | None = None,
@@ -61,6 +73,7 @@ def seed_if_empty(
     return record(work_dir, source, label=label, lang=lang)
 
 
+@_locked
 def record(
     work_dir: str | Path,
     video_path: str | Path,
@@ -101,6 +114,7 @@ def record(
     return history(work_dir)
 
 
+@_locked
 def record_or_replace(
     work_dir: str | Path,
     video_path: str | Path,
@@ -144,6 +158,7 @@ def is_base(entry: dict[str, Any]) -> bool:
     return not str(kind).strip()
 
 
+@_locked
 def select(
     work_dir: str | Path,
     version_id: int,
@@ -165,6 +180,7 @@ def select(
     raise ValueError(f"Unknown final video version {version_id}")
 
 
+@_locked
 def delete(work_dir: str | Path, version_id: int) -> dict[str, Any]:
     """Delete a kept final-video version (not the one in use — the manifest's
     selected id, falling back to the newest like ``history``). Returns the history
