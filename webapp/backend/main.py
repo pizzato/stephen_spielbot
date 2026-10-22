@@ -69,6 +69,7 @@ from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
 from pipeline import music_history  # noqa: E402
 from pipeline import final_video_history  # noqa: E402
+from pipeline import working_files  # noqa: E402
 from pipeline import scene_context  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     COVER_PHRASE_FILE,
@@ -7981,6 +7982,151 @@ def list_jobs() -> dict:
     return {"finished": finished, "scripts": scripts, "resumable": resumable}
 
 
+# ── working-file cleanup ─────────────────────────────────────────────────────
+
+class WorkingFilesBody(BaseModel):
+    work_dir: str
+
+
+class WorkingFilesPolicyBody(WorkingFilesBody):
+    policy: Literal["manual", "after_approval", "after_upload"] = "manual"
+
+
+def _working_files_dir(work_dir: str) -> Path:
+    raw = Path(work_dir)
+    wd = raw.resolve()
+    if raw.is_symlink() or wd.parent != gapp.OUTPUT_DIR.resolve():
+        raise HTTPException(400, "Choose a film folder inside the output folder.")
+    if not wd.is_dir() or not (wd / "job_config.json").is_file():
+        raise HTTPException(404, "Film directory not found.")
+    if (wd / "working_files.json").is_symlink():
+        raise HTTPException(400, "Cleanup settings cannot be a symbolic link.")
+    return wd
+
+
+def _working_files_state(wd: Path) -> dict:
+    path = wd / "working_files.json"
+    return json.loads(path.read_text()) if path.exists() else {"policy": "manual"}
+
+
+def _save_working_files_state(wd: Path, state: dict) -> None:
+    path = wd / "working_files.json"
+    with tempfile.NamedTemporaryFile(mode="w", dir=wd, delete=False) as tmp:
+        json.dump(state, tmp, indent=2)
+    os.replace(tmp.name, path)
+
+
+def _working_files_trigger(wd: Path, policy: str) -> str:
+    if policy == "after_approval":
+        jc = _film_job_config(wd)
+        if jc.get("publish_approved"):
+            return f"approved:{jc.get('publish_approved_at') or True}"
+    if policy == "after_upload":
+        meta = json.loads((wd / "job.json").read_text()) if (wd / "job.json").exists() else {}
+        published = {key: meta.get(key) for key in (
+            "youtube_video_id", "youtube_published_at", "x_tweet_id", "x_published_at")}
+        if published["youtube_video_id"] or published["x_tweet_id"]:
+            return json.dumps(published, sort_keys=True)
+    return ""
+
+
+def _working_files_final(wd: Path) -> Path:
+    # Cleanup must not use the legacy size/recency heuristics that can find a
+    # different film when this one's final has gone missing.
+    meta = json.loads((wd / "job.json").read_text()) if (wd / "job.json").exists() else {}
+    final = Path(meta.get("final_path") or wd.parent / f"{wd.name}.mp4")
+    if (final.is_file() and _safe_under(final, gapp.OUTPUT_DIR)
+            and not gapp._is_another_films_final(final, wd)):
+        return final
+    return wd.parent / f"{wd.name}.mp4"
+
+
+def _working_files_blocked(wd: Path) -> str:
+    final = _working_files_final(wd)
+    if (not (wd / "combined.mp4").is_file() or not final.is_file()
+            or final.stat().st_size <= 10_000):
+        return "Cleanup is available once the final video is complete."
+    meta = json.loads((wd / "job.json").read_text()) if (wd / "job.json").exists() else {}
+    if meta.get("status") not in (None, "done") or _film_edit_busy(wd):
+        return "Wait for this film's render, edit or upload to finish."
+    return ""
+
+
+def _clean_working_files(wd: Path, *, automatic: bool = False) -> dict | None:
+    lock = _reassemble_lock(wd)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, "This film is being updated. Try cleanup again when it finishes.")
+    try:
+        state = _working_files_state(wd)
+        trigger = _working_files_trigger(wd, state.get("policy", "manual"))
+        if automatic and (not trigger or state.get("completed_trigger") == trigger):
+            return None
+        reason = _working_files_blocked(wd)
+        if reason:
+            raise HTTPException(409, reason)
+        result = working_files.clean(wd, _working_files_final(wd))
+        state["last_cleanup"] = {**result, "at": time.time(), "automatic": automatic}
+        if not result["errors"]:
+            state["completed_trigger"] = trigger
+        _save_working_files_state(wd, state)
+        return result
+    finally:
+        lock.release()
+
+
+def _maybe_clean_working_files(wd: Path) -> None:
+    # Cleanup is best-effort: an upload/approval must never fail because of it.
+    try:
+        wd = _working_files_dir(str(wd))
+        _clean_working_files(wd, automatic=True)
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            gapp.logger.warning("Working-file cleanup skipped for %s: %s", wd, exc.detail)
+    except Exception as exc:
+        gapp.logger.warning("Working-file cleanup failed for %s: %s", wd, exc)
+
+
+def _sweep_working_files() -> None:
+    # Retry busy films and recover opted-in policies after a backend restart.
+    for _label, work_dir in gapp._list_recent_jobs(max_results=1000):
+        if (Path(work_dir) / "working_files.json").is_file():
+            _maybe_clean_working_files(Path(work_dir))
+
+
+@api.get("/api/films/working-files")
+def film_working_files(work_dir: str = Query(...)) -> dict:
+    wd = _working_files_dir(work_dir)
+    state = _working_files_state(wd)
+    reason = _working_files_blocked(wd)
+    return {**state, "blocked_reason": reason,
+            "reclaimable": working_files.preview(wd, _working_files_final(wd))}
+
+
+@api.post("/api/films/working-files/policy")
+def film_working_files_policy(body: WorkingFilesPolicyBody) -> dict:
+    wd = _working_files_dir(body.work_dir)
+    lock = _reassemble_lock(wd)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, "This film is being updated. Save the preference when it finishes.")
+    try:
+        state = _working_files_state(wd)
+        if state.get("policy") != body.policy:
+            state.pop("completed_trigger", None)
+        state["policy"] = body.policy
+        _save_working_files_state(wd, state)
+    finally:
+        lock.release()
+    _maybe_clean_working_files(wd)
+    return film_working_files(str(wd))
+
+
+@api.post("/api/films/working-files/clean")
+def film_working_files_clean(body: WorkingFilesBody) -> dict:
+    wd = _working_files_dir(body.work_dir)
+    result = _clean_working_files(wd)
+    return {**film_working_files(str(wd)), "result": result}
+
+
 # ── remix ────────────────────────────────────────────────────────────────────
 
 class RemixBody(BaseModel):
@@ -9344,12 +9490,15 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         cfg = gapp.load_config()
         if mode != "fast":
             command_template = cfg.get("temporal_video_upscaler_cmd") or None
-            _temporal_upscale_scenes_to_final(
-                task_id, wd, staged, target_w, target_h, cfg,
-                command_template=command_template,
-                engine=mode,
-                film_dims=(actual_w, actual_h),
-            )
+            # A cleanup already in progress must finish before this task
+            # starts reading or reusing the per-scene upscale cache.
+            with _reassemble_lock(wd):
+                _temporal_upscale_scenes_to_final(
+                    task_id, wd, staged, target_w, target_h, cfg,
+                    command_template=command_template,
+                    engine=mode,
+                    film_dims=(actual_w, actual_h),
+                )
         else:
             upscale_video(final_path, staged, target_w, target_h)
 
@@ -13201,6 +13350,7 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
         "message": f"Uploaded — {url}" if url else "Uploaded to YouTube.",
         "completion_reply": completion_reply,
     }
+    _maybe_clean_working_files(wd)
 
 
 @api.post("/api/youtube/post")
@@ -13598,6 +13748,7 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
     _x_post_tasks[task_id] = {"status": "done", "tweet_id": tweet_id, "url": url,
                               "fell_back_to_link": bool(result.get("fell_back_to_link")),
                               "message": msg}
+    _maybe_clean_working_files(wd)
 
 
 @api.post("/api/x/post")
@@ -13611,7 +13762,7 @@ def x_post(body: XPostBody) -> dict:
     if not (final.exists() and final.stat().st_size > 10_000):
         raise HTTPException(400, "No final video found for this film.")
     task_id = uuid.uuid4().hex[:12]
-    _x_post_tasks[task_id] = {"status": "posting"}
+    _x_post_tasks[task_id] = {"status": "posting", "work_dir": str(wd)}
     account = body.account or _x_account_for_work_dir(wd)
     # A manual post (auto=False) claims the job so the scheduler/immediate
     # auto-poster won't also post it mid-upload (mirrors _claim_and_post_x;
@@ -13947,6 +14098,8 @@ def publish_approve(body: PublishApproveBody) -> dict:
     pq.update_item(e["id"], approved=bool(body.approved),
                    approved_at=(time.time() if body.approved else None))
     _record_publish_approval(p, bool(body.approved))
+    if body.approved:
+        _maybe_clean_working_files(p)
     return {"ok": True, "approved": bool(body.approved)}
 
 
@@ -15671,6 +15824,10 @@ def _film_edit_busy(wd: Path) -> bool:
             return True
     for task in list(_upload_tasks.values()):
         if isinstance(task, dict) and task.get("status") == "uploading" \
+                and task.get("work_dir") == swd:
+            return True
+    for task in list(_x_post_tasks.values()):
+        if isinstance(task, dict) and task.get("status") == "posting" \
                 and task.get("work_dir") == swd:
             return True
     entry = pq.item_by_work_dir(swd)
@@ -18123,6 +18280,12 @@ def _automation_loop():
                 if not any(t.name == "reassemble_stale" for t in threading.enumerate()):
                     threading.Thread(target=_reassemble_stale_finals, daemon=True,
                                      name="reassemble_stale").start()
+            except Exception:
+                pass
+            try:
+                if not any(t.name == "clean_working_files" for t in threading.enumerate()):
+                    threading.Thread(target=_sweep_working_files, daemon=True,
+                                     name="clean_working_files").start()
             except Exception:
                 pass
         try:

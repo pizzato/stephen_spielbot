@@ -89,3 +89,10 @@ film's parts have been quiet for ~5 minutes and nothing is editing or publishing
 sweep never touches a film whose published cut is a curated version (an upscale, a
 localization, or a hand-burnt cover) — use **Reassemble film** in
 [Edit film](edit-film.md) for those.
+
+To reclaim disk space without deleting the film, open **Edit → Film →
+[Clean up working files](edit-film.md#clean-up-working-files)**. It previews and
+removes older versions and upscale caches while keeping the final video, current
+scene assets and captions. Cleanup can be manual or enabled per video after
+approval or a successful upload. Archiving a film only hides it; it does not clean
+up its files.

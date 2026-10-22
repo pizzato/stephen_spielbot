@@ -163,6 +163,13 @@ change it — nothing else in the app un-approves a film.
 
 ## Published
 
+Per-video **[Clean up working files](edit-film.md#clean-up-working-files)** can
+automatically remove older versions and upscale caches after final-film approval
+or a successful YouTube/X upload (including manual publishing). It is off by
+default, preserves the final video, current scene assets and captions, and retries
+later if the film is still busy. Other pending publishing destinations keep the
+files they need. A failed upload never triggers cleanup.
+
 The record of everything finished with — published, skipped, or errored out — newest
 first, on its own tab so the Schedule view only loads what's still in play. Each entry
 shows where and when it went out, with a link to the upload. **Remove** only forgets the
