@@ -122,7 +122,7 @@ export function resolveStyle(styles, name) {
   const out = {}
   chain.forEach((s, i) => {
     for (const k of Object.keys(s)) {
-      if (k === 'name' || k === 'parent' || k === 'exclude_inherited_characters') continue
+      if (k === 'name' || k === 'parent' || k === 'exclude_inherited_characters' || k === 'working_files_cleanup') continue
       let v = s[k]
       if (k === 'automation') {
         // Sparse per-FLAG overrides, not a whole-object one: a child that sets
@@ -140,6 +140,7 @@ export function resolveStyle(styles, name) {
   out.name = target.name
   // Character inheritance is a choice on this style, not an inherited field.
   if ('exclude_inherited_characters' in target) out.exclude_inherited_characters = target.exclude_inherited_characters
+  if ('working_files_cleanup' in target) out.working_files_cleanup = target.working_files_cleanup
   if (target.parent) out.parent = target.parent
   return out
 }

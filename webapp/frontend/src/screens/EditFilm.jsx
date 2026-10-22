@@ -1582,6 +1582,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
 
   const refreshWorkingFileHistories = async () => {
     const d = await api.loadRemix(data.work_dir)
+    setData(d)
     setVideoHistory(d.video_history); setMusicHistory(d.music_history)
     const cover = await api.coverHistory(data.work_dir)
     setCoverHist(cover.history)
@@ -1619,7 +1620,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
-  const selVersion = videoHistory?.versions?.find((v) => v.id === videoHistory?.selected)
+  const selVersion = videoHistory?.versions?.find((v) => v.id === videoHistory?.selected) || data.retained_cut
   const cutLang = selVersion?.lang || locData?.original_lang || ''
   const isOriginalCut = !selVersion?.lang || selVersion?.lang === locData?.original_lang
   const cutLangName = cutLang ? (localizeLangs[cutLang] || cutLang.toUpperCase()) : ''
@@ -1646,6 +1647,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       <Banner tone="danger">{error}</Banner>
       {status && <Banner tone="ok">{status}</Banner>}
       {metaMsg && <Banner tone="ok">{metaMsg}</Banner>}
+      {data.working_files_cleaned && <Banner tone="info">
+        Working video files have been removed. Download reusable audio, captions and scripts
+        under “Files to keep / download” below. To edit the video, render a new copy from the saved script.
+      </Banner>}
 
       <div className="bento">
         <Card span={8} className="reveal reveal-d1" style={{ padding: 0, overflow: 'hidden' }}>
@@ -1708,6 +1713,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         <WorkingFiles workDir={data.work_dir} busy={anyBusy || approving} onBusyChange={setCleanupBusy}
           onClean={refreshWorkingFileHistories} />
 
+        {!data.working_files_cleaned && <>
         {/* Cover image (same endpoints as the Script Cover tab / Publish) */}
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm">Cover image</span>
@@ -2180,6 +2186,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </div>
         </Card>
 
+        </>}
+
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="clapperboard" style={{ color: 'var(--ink-3)', width: 16 }} /> Render at another size</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
@@ -2261,6 +2269,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           )}
         </Card>
 
+        {!data.working_files_cleaned && <>
         <Card span={8} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} />
             {data?.song ? 'The film’s song' : 'Background music'}</span>
@@ -2314,6 +2323,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
             onSelect={selectMusic} busy={anyBusy} />
         </Card>
+
+        </>}
 
         {coverEdit && (
           <InpaintModal src={coverUrl} aspect={aspect} busy={ytBusy === 'coveredit'} error={coverEditErr}
@@ -2682,6 +2693,7 @@ function CharactersTab({ workDir, onSwitchToScenes, reloadKey = 0 }) {
 
 function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const voiceMeta = voiceMetaMap(meta.config?.voices)
+  const [cleaned, setCleaned] = useState(false)
   const [scenes, setScenes] = useState([])
   const [performance, setPerformance] = useState(null)
   const [performanceError, setPerformanceError] = useState('')
@@ -2726,6 +2738,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
           .then((data) => ({ data, error: '' }))
           .catch((e) => ({ data: null, error: e.message })),
       ])
+      setCleaned(!!r.working_files_cleaned)
       setScenes(r.scenes || [])
       setPerformance(perfResult.data)
       setPerformanceError(perfResult.error)
@@ -2845,6 +2858,20 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   }
 
   if (!loaded) return <p className="muted">Loading scenes…</p>
+  if (cleaned) return <>
+    <Banner tone="info">Scene video files were cleaned up. The saved script, images and narration remain available.
+      Render a new copy from the script to edit the video.</Banner>
+    <div className="bento">
+      {scenes.map((scene) => <Card key={scene.id} span={6}>
+        <strong>{scene.title || `Scene ${scene.id}`}</strong>
+        {scene.preview_url && <img src={scene.preview_url} alt="Scene reference" style={{ maxWidth: '100%', maxHeight: 220, display: 'block', marginTop: 12 }} />}
+        <p style={{ whiteSpace: 'pre-wrap' }}>{scene.narration}</p>
+        {scene.narration_url && <audio src={scene.narration_url} controls />}
+        <details><summary>Prompts</summary><p>{scene.image_prompt}</p><p>{scene.video_prompt}</p></details>
+      </Card>)}
+    </div>
+  </>
+
 
   return (
     <div>

@@ -1734,7 +1734,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     // or any other field set to the parent's current effective value, stores
     // nothing — the field keeps following the parent live. Only real
     // differences are recorded, and they win until changed back.
-    const drop = cur.parent && k !== 'name' && k !== 'exclude_inherited_characters' && (
+    const drop = cur.parent && k !== 'name' && k !== 'exclude_inherited_characters' && k !== 'working_files_cleanup' && (
       STYLE_TEXT_FIELDS.has(k)
         ? v === '{parent}'
         : JSON.stringify(v ?? null) === JSON.stringify((resolveStyle(list, cur.parent) || {})[k] ?? null))
@@ -1805,7 +1805,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           if (Object.keys(kept).length) next.automation = kept
           continue
         }
-        if (k === 'exclude_inherited_characters' || JSON.stringify(v) !== JSON.stringify(pe[k])) next[k] = v
+        if (k === 'exclude_inherited_characters' || k === 'working_files_cleanup' || JSON.stringify(v) !== JSON.stringify(pe[k])) next[k] = v
       }
     } else {
       next = { ...(resolveStyle(list, cur.name) || cur) }
@@ -2624,6 +2624,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Check checked={!!eff.made_for_kids} onChange={(v) => setStyleField('made_for_kids', v)}
                 label="Made for Kids — self-declare this style's uploads as directed at children (disables personalized ads, comments and other features per YouTube's policy)" />
               <ParentVal k="made_for_kids" />
+              <Field label="Automatic working-file cleanup" hint="Applies only to this style, including existing videos that already meet the milestone. Not inherited by child styles. Keeps the final video, scripts, captions, music, narration and current images/references. Permanently removes scene video clips, duplicate renders, older visual versions and upscale caches; editing the video afterward requires rendering a new copy. Busy films wait until the next check.">
+                <select className="select" value={st.working_files_cleanup || 'off'}
+                  onChange={(e) => setStyleField('working_files_cleanup', e.target.value)}>
+                  <option value="off">Off — clean up manually</option>
+                  <option value="after_approval">After final-video approval</option>
+                  <option value="after_upload">After successful upload to YouTube or X</option>
+                </select>
+              </Field>
               <Field label="Opening cover" hint="After each render, burn the cover image into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
                 <select className="select" value={eff.first_frame_cover === 'text' ? 'image' : (eff.first_frame_cover || 'none')} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="none">Off — leave the opening as rendered</option>
