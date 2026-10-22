@@ -49,7 +49,8 @@ self-contained, sourced directions, people appearance references with best-guess
 character fallbacks and uncertainty warnings, and unattended news-to-video
 or news-to-song creation, per-scene editing with image
 inpainting, clip trimming, per-scene review marks (to be reviewed / to work on /
-approved) and version history, opening titles and end credits
+approved) and version history, per-video [working-file cleanup](docs/manual/edit-film.md#clean-up-working-files)
+(manual, after approval or after upload), opening titles and end credits
 joined onto the finished film, an ending fade that dips the last seconds to
 black, one-click **restyling** (the same script
 or finished film in another visual style), misspelling-proof cover thumbnails (text-free

@@ -23,6 +23,41 @@ The **title** (with a regenerate button) and the description that publishing wil
 Also **Approve** when the film is held by the [approval gate](settings.md#publishing-schedule),
 **Publish** to open [Publishing](publishing.md), and **Delete**.
 
+### Clean up working files
+
+The **Film** tab shows how much space can be reclaimed from **older versions**
+and **upscale caches** for this video. **Clean up now…** previews the scope, then
+**Delete … working files** confirms permanent deletion. The final video must be
+complete, and cleanup waits while this film is rendering, editing or uploading.
+
+**Automatic cleanup** is off by default. Choose **After final-video approval** or
+**After successful upload to YouTube or X**, then **Enable automatic cleanup**.
+This preference belongs only to this video. If it is already approved/uploaded,
+enabling the preference runs cleanup immediately; otherwise it waits for that
+milestone. Approval means the finished film's publishing approval, not script
+approval or a scene's review mark. A failed upload does not trigger cleanup.
+Busy films retry on the backend's regular check (about every three minutes),
+including after a restart. Each approval/upload triggers at most one successful
+cleanup, so later editing is left alone until another approval/upload or a manual
+cleanup. Choose **Off — keep working files** and save to cancel pending cleanup.
+
+Cleanup removes unselected scene-image, cover, scene-video, music and final-video
+versions, plus generated scene MP4s in the final-upscale caches. It keeps:
+
+- The published final, combined video, current scene clips and images, and raw
+  scene video/audio needed by narration edits and reassembly.
+- Selected versions, including their language/processing metadata, the latest
+  base final cut needed to size another upscale correctly, and source song
+  versions needed to re-voice the selected track.
+- Captions, scripts, scene metadata, cover artwork, character references,
+  localizations, publishing records, settings and logs.
+
+Unknown files and symbolic links are untouched. Removed versions cannot be
+restored, and another upscale rebuilds its deleted cache. This is a conservative
+space-saving cleanup, not a final-file-only archive: current editing assets stay
+available. The card reports actual bytes removed and any files that could not be
+deleted. The preference is not copied when creating a new version of a film.
+
 ### Cover image
 
 The thumbnail, plus the **cover phrase** — the short text drawn on the cover with the

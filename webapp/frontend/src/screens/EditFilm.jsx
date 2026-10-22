@@ -6,6 +6,7 @@ import {
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
+import WorkingFiles from './WorkingFiles.jsx'
 import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines } from '../acted.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -878,6 +879,7 @@ function TitleCardPreview({ workDir, card, imageUrl, aspect }) {
 
 function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [data, setData] = useState(null)
+  const [cleanupBusy, setCleanupBusy] = useState(false)
   const [vol, setVol] = useState({ voice: 100, music: 18, ambient: 0 })
   const [musicDesc, setMusicDesc] = useState('')
   const [voice, setVoice] = useState('')
@@ -1578,11 +1580,19 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
+  const refreshWorkingFileHistories = async () => {
+    const d = await api.loadRemix(data.work_dir)
+    setVideoHistory(d.video_history); setMusicHistory(d.music_history)
+    const cover = await api.coverHistory(data.work_dir)
+    setCoverHist(cover.history)
+  }
+
   const approve = async () => {
     setApproving(true); setError(''); setStatus('')
     try {
       await api.publishApprove(data.work_dir || workDir)
       setData((d) => ({ ...d, approved: true, awaiting_approval: false }))
+      await refreshWorkingFileHistories()
       setStatus('Approved — it will publish on the normal schedule.')
     } catch (e) { setError(e.message) } finally { setApproving(false) }
   }
@@ -1605,7 +1615,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || titleCardsBusy || fadeBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || titleCardsBusy || fadeBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy || cleanupBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -1694,6 +1704,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             </Button>
           </div>
         </Card>
+
+        <WorkingFiles workDir={data.work_dir} busy={anyBusy || approving} onBusyChange={setCleanupBusy}
+          onClean={refreshWorkingFileHistories} />
 
         {/* Cover image (same endpoints as the Script Cover tab / Publish) */}
         <Card span={4} padLg className="reveal reveal-d2">
