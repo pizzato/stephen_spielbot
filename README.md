@@ -115,6 +115,7 @@ Guides that also read well on GitHub:
 - [`docs/characters.md`](docs/characters.md) — recurring characters: consistent looks, reference images, voices
 - [`docs/performance_films.md`](docs/performance_films.md) — acted scenes and performance films: portraits + dialogue straight to video, no first frame or TTS
 - [`docs/orchestration.md`](docs/orchestration.md) — the durable SQLite task layer and how renders execute
+- [`docs/browsing-performance.md`](docs/browsing-performance.md) — browsing optimisations, measurements, and remaining bottlenecks
 - [`docs/youtube_setup.md`](docs/youtube_setup.md) — Google Cloud / OAuth setup for YouTube publishing
 - [`docs/x_setup.md`](docs/x_setup.md) — X (Twitter) developer app setup for posting
 - [`docker/README.md`](docker/README.md) — the containerized worker stack in detail

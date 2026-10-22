@@ -23,7 +23,7 @@ export default function Home({ go }) {
   })
 
   useEffect(() => {
-    api.listJobs().then((d) => setFilms((d.finished || []).filter((f) => !f.archived))).catch(() => {})
+    api.listJobs('recent').then((d) => setFilms(d.finished || [])).catch(() => {})
     api.getQueue().then((d) => setQueueCount((d.queue || []).filter((q) => q.status === 'pending').length)).catch(() => {})
   }, [])
 

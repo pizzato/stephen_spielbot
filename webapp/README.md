@@ -18,6 +18,12 @@ bookkeeping, job launching, progress polling) plus the `pipeline` package
 directly. The frontend talks to it over `/api/*` (JSON), and renders/uploads
 media through `/api/file`.
 
+Browsing uses on-demand screen bundles, a file-versioned settings cache, and
+screen-specific `/api/jobs?view=films|scripts|recent` payloads (`all` remains the default).
+The Films grid pages 24 cards at a time. See the
+[browsing performance review](../docs/browsing-performance.md) for measurements,
+cache freshness rules, database indexes, and the remaining bottlenecks.
+
 The wired end-to-end flow:
 
 **Create** (generate script) → **Script** (per-scene edit, regenerate preview)

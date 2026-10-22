@@ -8,7 +8,9 @@ Everything lives in **one YAML file**:
 
 The [**Settings** screen](manual/settings.md) is the intended editor — it writes this
 file, and a read-only cluster status panel sits alongside it. Editing the file by hand
-works too; restart the backend afterwards (`make restart-server`) so it reloads.
+works too; the next settings read detects the changed file. Parsed YAML is cached while
+the file is unchanged, and each caller receives its own mutable copy. A browser already
+editing Settings still needs a refresh to show externally changed values.
 
 Missing keys always fall back to their defaults, so a minimal `config.yaml` is perfectly
 valid. The full key set, with defaults and inline documentation, is `DEFAULT_CFG` in

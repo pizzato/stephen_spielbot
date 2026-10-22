@@ -1,22 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { Sidebar, Banner, Icon } from './components.jsx'
 import { api } from './api.js'
 import { parseHash, buildHash, nameOf, pathOf } from './nav.js'
 import Home from './screens/Home.jsx'
-import Create from './screens/Create.jsx'
-import Script from './screens/Script.jsx'
-import Progress from './screens/Progress.jsx'
-import Activity from './screens/Activity.jsx'
-import Queue from './screens/Queue.jsx'
-import ChannelAnalytics from './screens/ChannelAnalytics.jsx'
-import Community from './screens/Community.jsx'
-import Publishing from './screens/Publishing.jsx'
-import Ideas from './screens/Ideas.jsx'
-import Library from './screens/Library.jsx'
-import EditFilm from './screens/EditFilm.jsx'
-import Settings from './screens/Settings.jsx'
-import Prompts from './screens/Prompts.jsx'
-import About from './screens/About.jsx'
+const Create = lazy(() => import('./screens/Create.jsx'))
+const Script = lazy(() => import('./screens/Script.jsx'))
+const Progress = lazy(() => import('./screens/Progress.jsx'))
+const Activity = lazy(() => import('./screens/Activity.jsx'))
+const Queue = lazy(() => import('./screens/Queue.jsx'))
+const ChannelAnalytics = lazy(() => import('./screens/ChannelAnalytics.jsx'))
+const Community = lazy(() => import('./screens/Community.jsx'))
+const Publishing = lazy(() => import('./screens/Publishing.jsx'))
+const Ideas = lazy(() => import('./screens/Ideas.jsx'))
+const Library = lazy(() => import('./screens/Library.jsx'))
+const EditFilm = lazy(() => import('./screens/EditFilm.jsx'))
+const Settings = lazy(() => import('./screens/Settings.jsx'))
+const Prompts = lazy(() => import('./screens/Prompts.jsx'))
+const About = lazy(() => import('./screens/About.jsx'))
 
 export default function App() {
   // The URL hash is the single source of truth for which page is shown and, for
@@ -310,7 +310,7 @@ export default function App() {
             <a href="#" onClick={(e) => { e.preventDefault(); go('settings') }} style={{ color: 'inherit', fontWeight: 600 }}>Reconnect →</a>
           </Banner>
         )}
-        {screen}
+        <Suspense fallback={<p className="muted" role="status">Loading…</p>}>{screen}</Suspense>
       </main>
     </div>
   )
