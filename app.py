@@ -8,6 +8,7 @@ work-dir bookkeeping, job launching, progress polling, and automation.
 """
 
 import concurrent.futures
+import copy
 import fnmatch
 import io
 import threading
@@ -24,6 +25,7 @@ import time
 import uuid
 import zipfile
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -1726,6 +1728,13 @@ def _is_job_running() -> bool:
 
 # ── Config helpers ───────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=1)
+def _read_config_yaml(path: Path, version: tuple) -> dict:
+    # The stat signature changes for saves, external edits and atomic restores.
+    # Only parsing is cached; callers get independent mutable settings below.
+    return yaml.safe_load(path.read_text()) or {}
+
+
 def load_config() -> dict:
     """Load the single YAML config. Saved values are authoritative — worker
     lists (comfy_workers/tts_workers) live here and are edited from the Settings
@@ -1733,7 +1742,9 @@ def load_config() -> dict:
     cfg = DEFAULT_CFG.copy()
     data = {}
     if CONFIG_FILE.exists():
-        data = yaml.safe_load(CONFIG_FILE.read_text()) or {}
+        st = CONFIG_FILE.stat()
+        data = copy.deepcopy(_read_config_yaml(
+            CONFIG_FILE, (st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)))
         if isinstance(data, dict):
             cfg.update(data)
     # youtube_auto_ai_ideas was split out of youtube_auto_approve_script (which

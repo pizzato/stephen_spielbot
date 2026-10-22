@@ -17,12 +17,16 @@ If the frontend loads but looks stale, the backend is serving the last *build*. 
 
 ### Settings changes don't stick after pulling new code
 
-Almost always the backend wasn't restarted, not a bug. The service keeps config and styles
-in memory, and a schema change between versions can strip fields on the next save.
+Restart after pulling code that changes the settings schema: the running service still
+has the old field definitions and can strip new fields on the next save.
 
 ```bash
 make restart-server
 ```
+
+Ordinary edits to `config.yaml` are detected on the next settings read; the parsed-settings
+cache does not require a restart. Refresh any already-open Settings tab before saving so
+it does not overwrite newer values with its old form contents.
 
 ### `ffmpeg: not found`, but only under the service
 

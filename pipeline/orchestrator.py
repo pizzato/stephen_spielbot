@@ -313,6 +313,10 @@ class DurableStore:
 
                 CREATE INDEX IF NOT EXISTS idx_tasks_job_status
                     ON tasks(job_id, status);
+                CREATE INDEX IF NOT EXISTS idx_jobs_updated
+                    ON jobs(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_tasks_job_order
+                    ON tasks(job_id, priority, created_at);
                 CREATE INDEX IF NOT EXISTS idx_tasks_ready
                     ON tasks(worker_kind, status, priority, created_at);
                 CREATE INDEX IF NOT EXISTS idx_deps_depends

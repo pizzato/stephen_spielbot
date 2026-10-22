@@ -3,6 +3,8 @@ import { Card, Chip, Button, Icon, Banner, Segmented, FilterSelect } from '../co
 import { api } from '../api.js'
 import { useHashParams } from '../nav.js'
 
+const PAGE_SIZE = 24
+
 // Publish-state bucket for a finished film, mirroring the card chip priority
 // (published → needs approval → approved), so every film lands in exactly one
 // bucket and the filter counts add up to the total.
@@ -32,10 +34,11 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
   const [busyRename, setBusyRename] = useState('')
   // Filters live in the URL (#/films?status=…&channel=…&style=…) so they
   // accumulate and back-navigation returns to the same filtered view.
-  const [{ status: filter, channel, style }, setFilters] = useHashParams({ status: 'all', channel: '', style: '' })
+  const [{ status: filter, channel, style, page }, setParams] = useHashParams({ status: 'all', channel: '', style: '', page: '1' })
+  const setFilters = (patch) => setParams({ ...patch, page: '1' })
   const setFilter = (v) => setFilters({ status: v })
 
-  const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
+  const load = () => api.listJobs('films').then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { load() }, [])
 
   // Entering a finished film clears its "New" badge, then opens the Edit film
@@ -129,6 +132,10 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
     : filter === 'starred' ? live.filter((f) => f.starred)
       : filter === 'all' ? live : live.filter((f) => statusOf(f) === filter)
   const unfiltered = filter === 'all' && !channel && !style
+  const pages = Math.max(1, Math.ceil(shown.length / PAGE_SIZE))
+  const currentPage = Math.min(pages, Math.max(1, parseInt(page, 10) || 1))
+  const start = (currentPage - 1) * PAGE_SIZE
+  const visibleFilms = shown.slice(start, start + PAGE_SIZE)
 
   return (
     <div>
@@ -188,14 +195,26 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
       )}
 
       <div className="label-sm" style={{ marginBottom: 12 }}>Finished</div>
+      {shown.length > PAGE_SIZE && (
+        <div className="row center between gap-10" style={{ marginBottom: 16 }}>
+          <span className="muted">{start + 1}–{Math.min(start + PAGE_SIZE, shown.length)} of {shown.length} films</span>
+          <div className="row gap-6">
+            <Button variant="ghost" disabled={currentPage === 1}
+              onClick={() => setParams({ page: String(currentPage - 1) })}>Previous</Button>
+            <Button variant="ghost" disabled={currentPage === pages}
+              onClick={() => setParams({ page: String(currentPage + 1) })}>Next</Button>
+          </div>
+        </div>
+      )}
       <div className="bento">
+        {!loaded && <Card span={12}><p className="muted" role="status">Loading films…</p></Card>}
         {loaded && jobs.finished.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No finished films yet — create your first one.</p></Card>}
         {loaded && jobs.finished.length > 0 && shown.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No films match this filter.</p></Card>}
-        {shown.map((f, i) => (
+        {visibleFilms.map((f, i) => (
           <Card key={f.work_dir} span={4} link onClick={() => openCard(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ position: 'relative', aspectRatio: '16/9' }}>
               {f.cover_url
-                ? <img src={f.cover_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                ? <img src={f.cover_url} alt="" loading="lazy" decoding="async" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                 : <div className={`gfill g${i % 6}`} style={{ position: 'absolute', inset: 0 }}></div>
               }
               <div style={{ position: 'absolute', top: 12, left: 12 }}>
