@@ -18,8 +18,9 @@ services:
         BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
         # v0.31.0+ is required by the w4a8 H3 checkpoints (the default Ref2VA
         # engine): older builds render BLACK FRAMES rather than failing.
-        # 0.41.3 release: native FLUX 3, plus existing image/video/music engines.
-        COMFYUI_REF: ${COMFYUI_REF:-8713616fcc321624e306bbd36be5906203dcb0dc}
+        # 0.42.5 release: native FLUX 3 and PDD-head models (FastH3 Omni), plus
+        # existing image/video/music engines.
+        COMFYUI_REF: ${COMFYUI_REF:-483dae4326356b81de05d27aca3f433dd323cc25}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
         # -devel base used only to compile SageAttention (needs nvcc); it is not
         # part of the shipped image. Must match BASE_IMAGE's CUDA version.
