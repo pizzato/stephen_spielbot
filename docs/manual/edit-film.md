@@ -321,6 +321,11 @@ card becomes **The film's song**: the lyrics as sung (read-only here — the wor
 [Script screen's](script.md#song) to edit), the sound caption, **Sing it again**, and
 **Sing it as [voice]**.
 
+With MiniMax Music 3, **Sing it again** expands a short sound caption into detailed
+Global Metadata and Arrangement sections and supplies the saved vocalist separately.
+The expanded caption is kept for later takes. Voice and accent instructions still
+need a listening check; see the [Song tab](script.md#song).
+
 *Sing it as* uses the style's **Singing voice conversion** engine: **SoulX-Singer SVC**
 by default, or **Seed-VC** selected under [Settings → Styles → Narrator & audio](settings.md#narrator-audio).
 It converts the singer's timbre to a library voice while preserving the source song's

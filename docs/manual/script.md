@@ -56,9 +56,13 @@ the format does to the render.
   you give (or sharpen) here is what **Brief** restores, and what the story is later
   drafted from. Give the direction here rather than in a *tell it how* instruction:
   the instruction steers one re-write and is then forgotten.
-- **Sound** — what the music model is told about the song (genre, tempo, mood,
-  arrangement). The Vocalist below is appended to this automatically when the track is
-  sung, so leave the vocalist out of the Sound itself.
+- **Sound** — the song's genre, tempo, mood and arrangement. When generating a fresh
+  MiniMax Music 3 take, the app expands a short description into detailed **Global
+  Metadata** and **Arrangement** sections, following the lyrics' section order and
+  retaining your original musical direction verbatim. The expanded Sound is saved
+  here for editing and reused for subsequent takes. You can also write these sections
+  yourself. The Vocalist below supplies **Vocal Details** separately, so keep singer
+  descriptions in that field. ACE-Step uses the original compact description.
 - **Lead singer** — the news or catalogue character the story shows singing, cast by name
   from the film's current style. **Refresh singers** picks up newly saved catalogue
   characters without losing unsaved song edits. The choices also refresh when you open
@@ -82,8 +86,11 @@ the format does to the render.
   (e.g. *"adult male vocalist, Australian"*). Filled at draft time from the lead singer,
   or by the songwriter itself when the style has no usable cast (see
   [Singing films](../performance_films.md#singing-films-the-music-video-format)). Edit it
-  and generate again to change who sings — and the story follows: it casts a performer of
-  the sex and age this line says. Describing (or picking, below) a voice of the other sex
+  and generate again to request a different singer — and the story follows: it casts a
+  performer of the sex and age this line says. Vocal identity and accent remain model
+  requests, not guarantees; listen to the generated take. MiniMax receives this line
+  verbatim in its Vocal Details, replacing any older embedded vocalist description.
+  Describing (or picking, below) a voice of the other sex
   to a catalogue lead singer drops that character, so the story invents a performer to match the
   voice rather than casting the character against it. A selected news subject keeps
   their identity when the audio voice changes; choose a different Lead singer to

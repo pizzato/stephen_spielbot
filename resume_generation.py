@@ -1554,7 +1554,14 @@ def main(work_dir: Path) -> None:
             note = vocalist_note(cfg, cfg.get("style_name") or "", work_dir,
                                  singer_names)
         caption = (song.get("caption") or cfg.get("music_desc") or "").strip()
-        cfg["music_desc"] = ", ".join(x for x in (caption, note) if x)
+        from pipeline.music_prompt import song_caption
+        if (cfg.get("music_engine") == "minimax-music3" and song.get("lyrics")
+                and not (work_dir / "background_music.wav").exists()):
+            from pipeline.story import expand_song_sound
+            caption = expand_song_sound(caption, song.get("lyrics") or "", note)
+            song["caption"] = caption
+            (work_dir / "song.json").write_text(json.dumps(song, indent=2))
+        cfg["music_desc"] = song_caption(caption, note, cfg.get("music_engine"))
         cfg["music_lyrics"] = (song.get("lyrics") or "").strip()
         cfg["music_enabled"] = True
         cfg["music_vol"] = 100

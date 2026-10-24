@@ -368,6 +368,8 @@ end, never baked into a scene — off leaves a film with only its voices and roo
 — or the opt-in **MiniMax Music 3**, which is song-shaped and higher fidelity but takes
 minutes per film, caps at 6 minutes, and carries its own community licence. Download
 either under **Infrastructure → Music models**.
+For music videos, MiniMax expands short Sound descriptions into a detailed structured
+caption before generating a fresh take; see the [Song tab](script.md#song).
 
 **Singing voice conversion** chooses **SoulX-Singer SVC** (default) or **Seed-VC** for
 this style's **Sing this as…** / **Sing it as…** actions and automated song re-voicing.
