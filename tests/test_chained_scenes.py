@@ -195,6 +195,18 @@ class TestTurboChainGraphs(unittest.TestCase):
                              comfyui._node_id(wf, "MiniMaxH3TurboLoRA"), name)
             comfyui._node_id(wf, "MiniMaxH3TurboSampler")  # raises if absent
 
+    def test_fasth3_engine_swaps_easycache_for_the_sigma_shift(self):
+        for name in self.CHAIN_GRAPHS:
+            wf = self._load(name)
+            comfyui._apply_turbo_to_chain(wf, {"requires_node": "MiniMaxH3SigmaShift"})
+            kinds = {n["class_type"] for n in wf.values()}
+            self.assertNotIn("EasyCache", kinds, name)
+            self.assertNotIn("MiniMaxH3TurboLoRA", kinds, name)
+            self.assertIn("KSamplerSelect", kinds, name)
+            shift = comfyui._node_id(wf, "MiniMaxH3SigmaShift")
+            self.assertEqual(wf[comfyui._node_id(wf, "BasicScheduler")]["inputs"]["model"][0],
+                             shift, name)
+
     def test_base_engine_leaves_the_chain_graphs_alone(self):
         for name in self.CHAIN_GRAPHS:
             wf = self._load(name)

@@ -646,6 +646,48 @@ VIDEO_ENGINES: dict[str, dict] = {
                    "models/loras"),
         ],
     },
+    "minimax-h3-ref-fasth3-omni": {
+        "key": "minimax-h3-ref-fasth3-omni",
+        "label": "MiniMax H3 Ref2VA FastH3 Omni",
+        "sub": "8-step Ref2VA distill of the whole DiT · no LoRA · restricted license",
+        "family": "minimax",
+        "reference": True,
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        # FastVideo/Nuva Lab's distill of H3 Ref2VA itself (earlier FastH3
+        # releases were T2VA/FL2VA only). The distill is baked into the
+        # checkpoint, so there is no LoRA and so no LoRA motion prior: the
+        # turbo-lx2v engine's opening camera swing came from its LoRA. The model
+        # card asks for 8 steps, guidance 1.0 and shifts 12/3 set by
+        # MiniMaxH3SigmaShift; the sampler (res_multistep, simple schedule) is
+        # what ComfyUI's own FastH3 template uses. No EasyCache: skipping steps
+        # of an 8-step trajectory is skipping a real share of it.
+        "workflow": "h3_ref2v_fasth3.json",
+        "steps": 8,
+        "lease_seconds": 14400,
+        "unet": "fasth3_omniref_8step_pruned_int8_convrot.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        "requires_node": "MiniMaxH3SigmaShift",
+        "probe": ("UNETLoader", "unet_name",
+                  "fasth3_omniref_8step_pruned_int8_convrot.safetensors"),
+        "models": [
+            _model("FastVideo/FastH3-Omni-Comfy",
+                   "diffusion_models/fasth3_omniref_8step_pruned_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_fp16.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+        ],
+    },
     "minimax-h3-ref-w4a8": {
         "key": "minimax-h3-ref-w4a8",
         "label": "MiniMax H3 33B Ref2VA W4A8",

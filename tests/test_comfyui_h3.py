@@ -300,6 +300,21 @@ class H3ReferenceWorkflowTests(unittest.TestCase):
         unet = next(n for n in wf.values() if n["class_type"] == "UNETLoader")
         self.assertEqual(unet["inputs"]["unet_name"], eng["unet"])
 
+    def test_fasth3_omni_reference_graph(self):
+        # The distill is in the checkpoint: no LoRA, no cache skipping steps of
+        # an 8-step trajectory, and the model card's 12/3 shifts set explicitly.
+        eng, wf = self._generate(engine_key="minimax-h3-ref-fasth3-omni")
+        kinds = {n["class_type"] for n in wf.values()}
+        self.assertFalse(kinds & {"EasyCache", "MiniMaxH3TurboLoRA", "MiniMaxH3TurboSampler"})
+        shift = next(n for n in wf.values() if n["class_type"] == "MiniMaxH3SigmaShift")
+        self.assertEqual((shift["inputs"]["shift_video"], shift["inputs"]["shift_audio"]),
+                         (12.0, 3.0))
+        sched = next(n for n in wf.values() if n["class_type"] == "BasicScheduler")
+        self.assertEqual(sched["inputs"]["steps"], 8)
+        self.assertEqual(wf[sched["inputs"]["model"][0]]["class_type"], "MiniMaxH3SigmaShift")
+        unet = next(n for n in wf.values() if n["class_type"] == "UNETLoader")
+        self.assertEqual(unet["inputs"]["unet_name"], eng["unet"])
+
     def test_turbo_lora_strength_is_engine_settable(self):
         # The distill LoRA's own motion prior is what swings a locked-off sung
         # take sideways, so its strength has to be reachable — a graph that

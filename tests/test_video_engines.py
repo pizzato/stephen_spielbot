@@ -185,7 +185,8 @@ class ReferenceEngineRegistryTests(unittest.TestCase):
         self.assertIn("ltx25", i2v)
         self.assertNotIn("ltx23", i2v)
         self.assertEqual(ref, {"minimax-h3-ref", "minimax-h3-ref-turbo",
-                               "minimax-h3-ref-turbo-lx2v", "minimax-h3-ref-w4a8"})
+                               "minimax-h3-ref-turbo-lx2v", "minimax-h3-ref-w4a8",
+                               "minimax-h3-ref-fasth3-omni"})
 
     def test_lightx2v_reference_turbo_rides_the_converted_lora(self):
         # LightX2V's Ref2VA LoRA ships with generic-ComfyUI key names, which
@@ -201,11 +202,19 @@ class ReferenceEngineRegistryTests(unittest.TestCase):
         # Opt-in only: one scene at one seed is not grounds to move the default.
         self.assertNotEqual(engines.DEFAULT_REFERENCE_ENGINE, eng["key"])
 
+    def test_fasth3_omni_is_an_opt_in_8_step_distill_without_a_lora(self):
+        eng = engines.resolve_reference({}, "minimax-h3-ref-fasth3-omni")
+        self.assertEqual(eng["steps"], 8)
+        self.assertNotIn("lora", eng)
+        self.assertEqual(eng["workflow"], "h3_ref2v_fasth3.json")
+        self.assertIn(eng["unet"], {m["file"] for m in eng["models"]})
+        self.assertNotEqual(engines.DEFAULT_REFERENCE_ENGINE, eng["key"])
+
     def test_reference_workflows_exist_and_are_wired(self):
         import json
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent
-        for key in ("minimax-h3-ref", "minimax-h3-ref-turbo"):
+        for key in ("minimax-h3-ref", "minimax-h3-ref-turbo", "minimax-h3-ref-fasth3-omni"):
             eng = engines.resolve_reference({}, key)
             graph = json.loads((root / "workflows" / eng["workflow"]).read_text())
             node = next(n for n in graph.values()

@@ -1133,7 +1133,18 @@ def _apply_turbo_to_chain(workflow: dict, engine: dict) -> None:
     MiniMaxH3TurboLoRA (same node id, so the scheduler/guider model wires
     hold) and KSamplerSelect with MiniMaxH3TurboSampler, mirroring the
     engine's own workflow.
+
+    FastH3 Omni is distilled into the checkpoint itself, so its chain clips
+    keep res_multistep and only trade EasyCache for the sigma-shift node its
+    own workflow carries (h3_ref2v_fasth3.json).
     """
+    if engine.get("requires_node") == "MiniMaxH3SigmaShift":
+        workflow[_node_id(workflow, "EasyCache")] = {
+            "class_type": "MiniMaxH3SigmaShift",
+            "inputs": {"model": [_node_id(workflow, "UNETLoader"), 0],
+                       "shift_video": 12.0, "shift_audio": 3.0},
+        }
+        return
     if engine.get("requires_node") != "MiniMaxH3TurboSampler":
         return
     workflow[_node_id(workflow, "EasyCache")] = {
