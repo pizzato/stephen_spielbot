@@ -67,16 +67,23 @@ def _execute_scene_image(store: DurableStore, task: TaskRecord, endpoint: str) -
     if store.skip_task_if_artifact_exists(task.id, output, artifact_kind="image", min_size=1000):
         return
 
-    # The payload carries the style's engine key; resolve() falls back to the
-    # default engine, with flux1-schnell's filenames overridable by the
-    # payload's legacy flux_* keys.
+    engine = engines.resolve_first_frame(p)
+    if engine.get("lease_seconds"):
+        store.heartbeat_task(task.id, lease_seconds=int(engine["lease_seconds"]))
+    prompt, refs = p.get("image_prompt", ""), None
+    if engine.get("family") == "h3-first-frame":
+        from app import _characters_prompt_and_refs, load_config
+        prompt, refs = _characters_prompt_and_refs(
+            prompt, {"image_prompt": prompt, "metadata": p.get("metadata") or {}},
+            {**load_config(), **p}, p.get("style_name") or "", work_dir, engine=engine)
     generate_with_engine(
-        engines.resolve(p, p.get("image_engine")),
-        p.get("image_prompt", ""),
+        engine,
+        prompt,
         output,
         width=int(p.get("width", p.get("vid_width", 1024))),
         height=int(p.get("height", p.get("vid_height", 576))),
         comfy_url=endpoint,
+        **({"reference_images": refs} if refs is not None else {}),
     )
     store.record_artifact(task.job_id, task.id, "image", output, width=int(p.get("width", 0)) or None, height=int(p.get("height", 0)) or None)
     store.complete_task(task.id, result={"path": str(output)}, message="image ready")
@@ -165,14 +172,21 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         video_prompt=p.get("video_prompt", ""),
         narration=p.get("narration", ""),
         negative_prompt=p.get("negative_prompt", ""),
+        metadata_extra=p.get("metadata") or {},
     )
     first_frame = Path(p["first_frame"]).expanduser() if p.get("first_frame") else work_dir / f"scene_{sid:02d}_first_frame.png"
-    image_engine = engines.resolve(p, p.get("image_engine"))
+    image_engine = engines.resolve_first_frame(p)
     video_engine = engines.resolve_video(p, p.get("video_engine"))
-    if video_engine.get("lease_seconds"):
+    lease_seconds = max(int(video_engine.get("lease_seconds") or 0),
+                        int(image_engine.get("lease_seconds") or 0))
+    if lease_seconds:
         # Slow engines (MiniMax H3) outlive the agent's claim-time lease; extend
         # it so the controller doesn't re-lease this scene mid-render.
-        store.heartbeat_task(task.id, lease_seconds=int(video_engine["lease_seconds"]))
+        store.heartbeat_task(task.id, lease_seconds=lease_seconds)
+    frame_cfg = p
+    if image_engine.get("family") == "h3-first-frame":
+        from app import load_config
+        frame_cfg = {**load_config(), **p}
     scene_video, ambient = generate_scene_video_task(
         scene,
         work_dir,
@@ -189,6 +203,7 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         first_frame if first_frame.exists() else None,
         image_engine,
         video_engine=video_engine,
+        first_frame_cfg=frame_cfg,
     )
     store.record_artifact(task.job_id, task.id, "scene_video", scene_video, duration_seconds=_get_duration(scene_video))
     if ambient:

@@ -516,6 +516,8 @@ class DurableStore:
             "second_pass_cfg": config.get("second_pass_cfg"),
             "second_pass_steps": config.get("second_pass_steps"),
             "image_engine": config.get("image_engine"),
+            "first_frame_source": config.get("first_frame_source"),
+            "style_name": config.get("style_name"),
             "video_engine": config.get("video_engine"),
             "video_steps": config.get("video_steps"),
             # flux_* kept for flux1-schnell's legacy filename overrides.
@@ -549,6 +551,7 @@ class DurableStore:
                 "scene_id": sid,
                 "title": _scene_value(scene, "title", f"Scene {sid}"),
                 "image_prompt": _scene_value(scene, "image_prompt", ""),
+                "metadata": _scene_value(scene, "metadata", {}) or {},
                 "video_prompt": _scene_value(scene, "video_prompt", ""),
                 "negative_prompt": _scene_value(scene, "negative_prompt", ""),
                 "narration": _scene_value(scene, "narration", ""),

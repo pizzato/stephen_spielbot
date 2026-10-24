@@ -352,8 +352,8 @@ A film can hold two kinds of scene, and each has its own model, picked side by s
 | **Acted (dialogue) scenes** | Each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices (a MiniMax H3 Ref2VA variant) |
 
 **Sampling steps** beneath them is one knob for both: it overrides the step count of every
-MiniMax render in the style — narrated I2V and acted Ref2VA alike. 0 keeps each engine's
-default (Turbo 4, the others 15); LTX ignores it.
+full MiniMax scene video in the style — narrated I2V and acted Ref2VA alike. 0 keeps each engine's
+default (Turbo 4, the others 15); LTX ignores it. Short H3 first-frame clips always use four steps.
 
 ### Narrator & audio
 
@@ -410,6 +410,30 @@ upscaler and take real render time. If an AI mode fails on a scene, that scene f
 back to Fast rather than failing the film.
 
 ### Image model
+
+**Scene first frames** chooses **Image model** (default) or **MiniMax H3 Turbo ·
+short video (experimental)** (`first_frame_source: image` / `h3`). H3 generates a
+22-frame clip (about 0.9 seconds), extracts frame zero, and resizes it to the
+film's render size. This duration is below H3's trained clip range, so compare
+the result before committing to a full film. It uses the scene's image prompt
+and named character portraits, without an image-model pass. The temporary clip
+and its audio are discarded; the normal video render uses the extracted PNG.
+
+The option applies to script previews, film scene-image regeneration, and missing
+first frames during rendering, including silent and sung takes. It inherits through
+parent styles and is stamped into render jobs for resume. Existing frames are reused:
+regenerate a scene image to try the new source. **No first frame**, hand-picked
+locations and continuation handoffs retain their existing behaviour. Film-editor
+image regeneration uses the style's current source. Portraits, covers and masked
+edits keep their selected image engine.
+
+Install both **MiniMax H3 33B Turbo** (`minimax-h3-turbo`, for scenes without
+portraits) and **MiniMax H3 33B Ref2VA Turbo (LightX2V)**
+(`minimax-h3-ref-turbo-lx2v`, for portrait references) on each rendering worker
+under **Infrastructure → Video models** and **Acted-scene models**, respectively.
+First-frame clips always use these four-step engines; the style's video sampling-step override applies to full
+scene videos. The existing MiniMax H3 licence terms apply. A missing model fails
+the request instead of silently switching to an image engine.
 
 Separate engines for **generation** and for **edit (mask + prompt)** inpainting. Default is
 FLUX.2 Klein for both. **Qwen-Image 2.1**, **Qwen-Image 2.1 NVFP4** and

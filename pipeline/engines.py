@@ -331,6 +331,16 @@ def resolve(cfg: dict, key: str) -> dict:
     return eng
 
 
+def resolve_first_frame(cfg: dict, settings: dict | None = None) -> dict:
+    """Scene-only generation; portraits, covers and edits keep their image engine."""
+    settings = cfg if settings is None else settings
+    if settings.get("first_frame_source") == "h3":
+        return {"key": "minimax-h3-first-frame", "family": "h3-first-frame",
+                "can_generate": True, "t2i_ref_workflow": "h3_ref2v_turbo.json",
+                "lease_seconds": 14400}
+    return resolve(cfg, settings.get("image_engine") or cfg.get("default_image_engine"))
+
+
 def public_list(commercial_only: bool = False) -> list[dict]:
     """Compact engine descriptors for the Settings UI (no download internals)."""
     out = []

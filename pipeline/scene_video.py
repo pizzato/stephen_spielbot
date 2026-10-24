@@ -25,6 +25,7 @@ def ensure_first_frame(
     comfy_url: str,
     scene_first_frame: Path | None = None,
     image_engine: dict | None = None,
+    cfg: dict | None = None,
     on_first_frame: Callable[[Path], None] | None = None,
 ) -> Path:
     """The still a narrated scene opens on: *scene_first_frame* when it exists,
@@ -33,17 +34,29 @@ def ensure_first_frame(
     longer video step)."""
     if scene_first_frame is not None and scene_first_frame.exists():
         return scene_first_frame
+    if image_engine is None and cfg is not None:
+        from app import scene_frame_engine
+        image_engine = scene_frame_engine(cfg)
     engine = image_engine or engines.resolve({}, None)
     first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
     logger.info("  [%s] scene %d: generating first frame inline (%s)",
                 comfy_url, scene.id, engine.get("key"))
+    prompt, refs = scene.image_prompt, None
+    if engine.get("family") == "h3-first-frame":
+        from app import _characters_prompt_and_refs
+        from pipeline.performance import scene_meta
+        cfg = cfg or {}
+        prompt, refs = _characters_prompt_and_refs(
+            prompt, {"id": scene.id, "image_prompt": prompt, "metadata": scene_meta(scene)},
+            cfg, cfg.get("style_name") or "", work_dir, engine=engine)
     generate_with_engine(
         engine,
-        scene.image_prompt,
+        prompt,
         first_frame_path,
         width=vid_width,
         height=vid_height,
         comfy_url=comfy_url,
+        **({"reference_images": refs} if refs is not None else {}),
     )
     if on_first_frame is not None:
         on_first_frame(first_frame_path)
@@ -68,6 +81,7 @@ def generate_scene_video(
     on_first_frame: Callable[[Path], None] | None = None,
     video_engine: dict | None = None,
     chained: bool = False,
+    first_frame_cfg: dict | None = None,
 ) -> tuple[Path, Path | None]:
     """Generate one video clip for the full scene: image-engine first frame plus I2V.
 
@@ -85,6 +99,7 @@ def generate_scene_video(
     scene_first_frame = ensure_first_frame(
         scene, work_dir, vid_width, vid_height, comfy_url=comfy_url,
         scene_first_frame=scene_first_frame, image_engine=image_engine,
+        cfg=first_frame_cfg,
         on_first_frame=on_first_frame)
 
     request_dur = max(narration_dur, 0.5) + CLIP_BUFFER_SECS

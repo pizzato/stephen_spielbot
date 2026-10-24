@@ -300,7 +300,7 @@ A **narrated or silent** scene has:
 |---|---|
 | **Scene title** | Organisation only — not rendered |
 | **Narration** | The TTS voice (narration-mode scenes) |
-| **Image prompt** | FLUX — static, highly detailed first frame |
+| **Image prompt** | Static first frame, using the style's image model or experimental H3 short-video source (see [Settings → Image model](settings.md#image-model)) |
 | **Video prompt** | LTX — motion and camera |
 
 A **silent** scene also carries a **Duration** and an **On screen** cast. The cast matters

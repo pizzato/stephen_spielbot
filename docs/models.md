@@ -118,6 +118,16 @@ inherit both like every other style field. Download an engine per worker from
 | **Qwen-Image 2.1 NVFP4** (opt-in, faster on GB10) | Same graph and 25 steps. FP4 diffusion plus the official W4A8 text encoder — the faster weight set on these Blackwell workers | Qwen Research License |
 | **Qwen-Image 2.1 Turbo** (opt-in) | Official INT8 distill, 8 fixed steps with prefix caching and character references | Qwen Research License |
 
+Scene openings can instead use **Settings → Styles → Image model → Scene first
+frames → MiniMax H3 Turbo · short video (experimental)**. It renders 22 frames
+(~0.9 s, below the trained clip range) and uses frame zero as the still. Scenes
+with portraits use `minimax-h3-ref-turbo-lx2v` and named `<Picture N>` references;
+scenery-only scenes use `minimax-h3-turbo` with no image input. Install both
+existing video bundles on each worker. They always run four steps for this
+option. The PNG matches the film's render size; previews and renders reuse it.
+Portraits, covers and edits continue using the image engine. See
+[Settings → Image model](manual/settings.md#image-model) for scope and caching.
+
 FLUX 3 Image Klein NVFP4 notes:
 
 - Select `flux3-klein-nvfp4` under **Settings → Styles → Image model → Generation**.
