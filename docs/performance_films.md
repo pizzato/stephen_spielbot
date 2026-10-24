@@ -603,7 +603,7 @@ film can hold two kinds of scene:
 | `minimax-h3-ref-turbo` | ~6 min | Distilled 4-step LoRA on the full 34 GB checkpoint — fastest, but over-saturated and over-sharpened |
 | `minimax-h3-ref-turbo-lx2v` | half of w4a8 | LightX2V's 4-step LoRA on the same 34 GB checkpoint, this one distilled **on Ref2VA** — no distillation crunch, but softer than the base and looser on reference wardrobe |
 | `minimax-h3-ref` | ~23 min | 15 steps + EasyCache on the 21 GB pruned checkpoint — the fidelity reference |
-| `minimax-h3-ref-fasth3-omni` (experimental) | not yet measured | FastVideo's 8-step distill of H3 **Ref2VA** baked into a 22 GB checkpoint — no LoRA, so no LoRA motion prior. **Needs ComfyUI ≥ 0.42.0** (see below) |
+| `minimax-h3-ref-fasth3-omni` (experimental) | ~1.7× turbo-lx2v | FastVideo's 8-step distill of H3 **Ref2VA** baked into a 22 GB checkpoint — no LoRA, so no opening camera swing. **Needs ComfyUI ≥ 0.42.0** (see below) |
 
 Measured on a DGX Spark GB10, same shot and seed throughout (704×1280): edge
 energy 4.2 for w4a8 against turbo's 5.5 (and 6.1 at 8 steps), with the base
@@ -696,13 +696,37 @@ guidance 1.0. Chained scenes get the same swap.
 
 The engine **needs ComfyUI ≥ 0.42.0**. The checkpoint stores 32 per-timestep
 output heads (PDD), and native ComfyUI learned to pick each step's head in
-0.42.0 (Comfy-Org/ComfyUI#17157). On the current pin (0.41.3) the node exists
-and the checkpoint loads, but the first sampling step fails with all 32 heads
-stacked ("size of tensor a (24) must match … (768)"). The engine therefore
-refuses older workers up front. It has not been A/B'd against `ref-turbo-lx2v`
-yet: that needs the `COMFYUI_REF` bump first. FastH3 Omni was distilled with
-audio as a voice-timbre reference, so whether pinned-track sung takes still
-lip-sync on it is also untested.
+0.42.0 (Comfy-Org/ComfyUI#17157). On 0.41.x the first sampling step fails with
+all 32 heads stacked ("size of tensor a (24) must match … (768)"), so the engine
+refuses older workers up front.
+
+Measured against `ref-turbo-lx2v` (0.6) on one worker (s1, ComfyUI 0.42.5),
+same seeds, prompts and references, 704×1280:
+
+| Take | Engine | Wall clock | Drift (peak) | Edge energy | Spoken accuracy |
+|---|---|---|---|---|---|
+| 4.8 s sung, pinned track | `ref-turbo-lx2v` | 4.7 min | −15.1% | 3.96 | — |
+| 4.8 s sung, pinned track | **FastH3 Omni** | 7.9 min | **−1.0%** | 5.07 | — |
+| 14.2 s two-speaker dialogue | `ref-turbo-lx2v` | 21.4 min | 0% | 3.46 | 0.909 |
+| 14.2 s two-speaker dialogue | **FastH3 Omni** | 39.4 min | 0% | 5.27 | 0.857 |
+
+- **Speed:** each step is slightly cheaper (48 s against 54 s on the sung
+  take), but there are twice as many steps, so a take costs about 1.7–1.8×.
+- **Camera:** Omni holds a locked-off sung shot, where the LoRA engine pushes
+  in and swings right in the opening two seconds. On the dialogue take, Omni
+  holds the requested locked-off two-shot for all 14 s. `ref-turbo-lx2v` hard-cuts
+  to a single at ~7 s (the drift score reads 0% for both because a cut is not a
+  pan).
+- **Lip-sync on pinned tracks holds.** Omni was distilled with audio as a
+  voice-timbre reference, but a pinned song still drives the mouth: in the sung
+  take both engines open and close the mouth on the same frames.
+- **Speech:** both engines say every scripted word. Omni's lower score comes
+  from ad-libbing a few words after the last line. The LoRA engine instead
+  drops "right now" and repeats "study".
+- **Look:** at full resolution the two engines are hard to tell apart.
+  Omni is a little crisper, with no distillation crunch.
+
+One scene of each kind, at one seed, which is why the engine stays opt-in.
 
 !!! warning "w4a8 needs ComfyUI ≥ 0.31.0 on every worker"
     Below that version the checkpoint does not error — it renders **black
