@@ -245,6 +245,7 @@ DEFAULT_CFG = {
     # scene generation vs the "Edit image" inpaint. Flat keys mirror the DEFAULT
     # style like every other STYLE_FIELD_TO_FLAT entry. Default = FLUX.2 Klein.
     "default_image_engine": "flux2-klein",
+    "default_first_frame_source": "image",
     "default_edit_engine":  "flux2-klein",
     # Video engine per style (see pipeline/engines.py VIDEO_ENGINES): which I2V
     # model animates each scene. Default = LTX 2.5.
@@ -570,6 +571,7 @@ STYLE_FIELD_TO_FLAT = {
     "x_account":            "x_account",
     # Image engine selection (generation vs edit) — see pipeline/engines.py
     "image_engine":         "default_image_engine",
+    "first_frame_source":   "default_first_frame_source",
     "edit_engine":          "default_edit_engine",
     # Video engine selection (scene I2V) — see pipeline/engines.py VIDEO_ENGINES
     "video_engine":         "default_video_engine",
@@ -1062,6 +1064,18 @@ def _norm_h3_first_frames(value) -> bool:
     return _norm_h3_chain_scenes(value)
 
 
+def _norm_first_frame_source(value) -> str:
+    return "h3" if str(value or "").strip().lower() == "h3" else "image"
+
+
+def scene_frame_engine(cfg: dict, style_name: str = "") -> dict:
+    """Resolve a scene's generator, including settings stamped into render jobs."""
+    settings = style_settings(cfg, style_name or cfg.get("style_name") or "")
+    settings.update({k: cfg[k] for k in ("first_frame_source", "image_engine")
+                     if cfg.get(k) is not None})
+    return engines.resolve_first_frame(cfg, settings)
+
+
 def _norm_song_align_lyrics(value) -> bool:
     """Coerce the lyric-alignment toggle to a plain bool (YAML/JSON/form)."""
     return _norm_h3_chain_scenes(value)
@@ -1248,6 +1262,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "news_monitor", normalize_monitor)
         _coerce(row, "size_presets", _norm_size_presets)
         _coerce(row, "image_engine", lambda v: _norm_engine(v, "generate"))
+        _coerce(row, "first_frame_source", _norm_first_frame_source)
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "video_engine", _norm_video_engine)
         _coerce(row, "video_steps", _norm_video_steps)
@@ -3647,6 +3662,12 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
                 _FLUX3_REF_MATCH_NOTE.format(name=c.get("name", "").strip(), n=i)
                 for i, (c, _p) in enumerate(pairs)
                 if (c.get("name") or "").strip())
+        elif engine.get("family") == "h3-first-frame":
+            notes = " ".join(
+                _REF_MATCH_NOTE.format(name=c.get("name", "").strip()).replace(
+                    "their provided reference image", f"<Picture {i}>")
+                for i, (c, _p) in enumerate(pairs, 1)
+                if (c.get("name") or "").strip())
         else:
             notes = " ".join(_REF_MATCH_NOTE.format(name=c.get("name", "").strip())
                              for c, _p in pairs if (c.get("name") or "").strip())
@@ -4701,8 +4722,7 @@ def _generate_active_scene_preview(
     # skips content that is already the kept selected version.
     image_history.capture_current(work_dir, sid, out)
     image_history.capture_current(work_dir, sid, first_frame)
-    # Which model bundle generates this style's scenes (defaults to flux1-schnell).
-    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    engine = scene_frame_engine(cfg, style_name)
     # An upscale-only target (QHD/4K) renders at its underlying render size, so
     # previews must match that size — not fall back to the default dims.
     img_width, img_height = _RESOLUTIONS.get(

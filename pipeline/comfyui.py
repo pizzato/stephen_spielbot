@@ -2321,6 +2321,56 @@ def _generate_flux3(engine: dict, prompt: str, output_path: Path, *,
                          timeout=int(engine["timeout"]))
 
 
+def _generate_h3_first_frame(prompt: str, output_path: Path, *, width: int,
+                             height: int, seed: int | None, refs: list[Path],
+                             comfy_url: str) -> Path:
+    """Experimental 22-frame (~0.9 s) H3 take, decoded at frame zero.
+
+    This deliberately bypasses the normal clip-duration floor; full video
+    renders retain their supported duration range. No image model is used.
+    """
+    import tempfile
+    from PIL import Image
+    from pipeline.assembler import extract_first_frame
+
+    engine = (_engines.resolve_reference({}, "minimax-h3-ref-turbo-lx2v") if refs
+              else _engines.resolve_video({}, "minimax-h3-turbo"))
+    check_engine_supported(engine, comfy_url)
+    gen_w, gen_h = h3_dimensions(width, height)
+    length = 22
+    workflow = _fill_template(_load_workflow(engine["workflow"]), {
+        "UNET_NAME": engine["unet"], "CLIP_NAME": engine["clip"],
+        "VIDEO_VAE": engine["video_vae"], "AUDIO_VAE": engine["audio_vae"],
+        "POSITIVE_PROMPT": f"{prompt} One continuous shot, steady camera, minimal motion.",
+        "WIDTH": gen_w, "HEIGHT": gen_h, "LENGTH": length,
+        "SEED": seed if seed is not None else random.randint(0, 2**32 - 1),
+        "STEPS": engine["steps"], "LORA_NAME": engine["lora"],
+        "LORA_STRENGTH": _lora_strength(engine),
+    })
+    if refs:
+        if len(refs) > H3_MAX_REF_IMAGES:
+            raise ValueError(f"H3 first frames support up to {H3_MAX_REF_IMAGES} reference images")
+        _wire_ref_slots(workflow, [_upload_image(p, comfy_url=comfy_url) for p in refs], [])
+    else:
+        # The I2V node is also H3's text-to-video node when no keyframe is wired.
+        workflow[_node_id(workflow, "MiniMaxH3ImageToVideo")]["inputs"].pop("first_frame")
+        for nid in [k for k, n in workflow.items()
+                    if n["class_type"] in ("LoadImage", "ImageScale")]:
+            del workflow[nid]
+    logger.info("[comfy] H3 first frame %dx%d length=%d refs=%d",
+                gen_w, gen_h, length, len(refs))
+    with tempfile.TemporaryDirectory(prefix="h3-first-frame-") as td:
+        clip, frame = Path(td) / "opening.mp4", Path(td) / "frame.png"
+        _h3_submit(workflow, clip, gen_w=gen_w, gen_h=gen_h, length=length,
+                   what="H3 first frame", comfy_url=comfy_url)
+        extract_first_frame(clip, frame)
+        # Match the requested render canvas so preview caching and I2V reuse it.
+        with Image.open(frame) as im:
+            im.convert("RGB").resize((width, height), Image.Resampling.LANCZOS).save(
+                output_path, "PNG")
+    return output_path
+
+
 def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
                          width: int, height: int, seed: int | None = None,
                          reference_images: list[Path] | None = None,
@@ -2336,6 +2386,9 @@ def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
         raise RuntimeError(f"Engine {engine.get('key')!r} cannot generate images.")
     check_engine_supported(engine, comfy_url)
     refs = [Path(p) for p in (reference_images or []) if p]
+    if engine.get("family") == "h3-first-frame":
+        return _generate_h3_first_frame(prompt, output_path, width=width, height=height,
+                                        seed=seed, refs=refs, comfy_url=comfy_url)
     if engine.get("family") == "flux3":
         return _generate_flux3(engine, prompt, output_path, width=width, height=height,
                                seed=seed, refs=refs, comfy_url=comfy_url)

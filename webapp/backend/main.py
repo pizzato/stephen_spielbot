@@ -7456,6 +7456,7 @@ def start_generation(body: GenerateBody) -> dict:
         # in resume_generation.py (previously those fell back to FLUX.1 via the
         # legacy flux_* keys, breaking installs without the opt-in FLUX.1 models).
         "image_engine": ss.get("image_engine"),
+        "first_frame_source": gapp._norm_first_frame_source(ss.get("first_frame_source")),
         # The style's video engine drives the scene I2V model (LTX / MiniMax H3).
         "video_engine": ss.get("video_engine"),
         # Ref2VA model for performance films (portraits + dialogue, no first
@@ -16120,7 +16121,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
     from pipeline.comfyui import generate_with_engine, ltx_dimensions
 
     cfg = gapp.load_config()
-    engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
+    engine = gapp.scene_frame_engine(cfg, jc.get("style_name", ""))
     pool = _shared_edit_render_pool()
     if pool is None:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
@@ -16229,7 +16230,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
     from pipeline.scene_video import generate_scene_video as gen_scene_video
 
     cfg = gapp.load_config()
-    engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
+    engine = gapp.scene_frame_engine(cfg, jc.get("style_name", ""))
     pool = _shared_edit_render_pool()
     if pool is None:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
@@ -16357,8 +16358,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                     int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
                     url,
                     scene_first_frame if scene_first_frame.exists() else None,
-                    gapp.engines.resolve(cfg, jc.get("image_engine")
-                                         or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine")),
+                    engine,
                     video_engine=_resolve_video_for_job(cfg, jc),
                     chained=_chain_scenes_for_job(cfg, jc),
                 )

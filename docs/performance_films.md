@@ -434,6 +434,12 @@ has one, it supersedes the location asset for that scene (the frame IS the place
 photographed), keeping the reference budget tight — measured, three picture references
 hold; more and the weakest starts dropping.
 
+The source of that still is selected under **Settings → Styles → Image model →
+Scene first frames**: the image engine by default, or an experimental 22-frame
+H3 Turbo clip whose first frame becomes the opening image. This applies to
+silent, sung and opted-in dialogue openings alike; it does not change which
+scenes receive a frame. See [Settings → Image model](manual/settings.md#image-model).
+
 Which acted scenes open on a painted frame follows one rule, asked by the renderer and
 both editors alike (`performance.takes_first_frame`):
 

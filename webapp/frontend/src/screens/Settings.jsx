@@ -1652,6 +1652,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       case 'image_engine':
       case 'edit_engine':
         return (engineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
+      case 'first_frame_source':
+        return v === 'h3' ? 'MiniMax H3 Turbo · short video' : 'Image model'
       case 'video_engine':
         return (engineInfo?.video_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'music_engine':
@@ -3012,10 +3014,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           {/* ── Image model (engine) ── */}
           <Card span={6} className="reveal reveal-d3">
             <span className="label-sm">Image model</span>
-            <div className="field__hint" style={{ marginTop: 6 }}>Which engine generates this style's scenes and powers “Edit image”. Download models under <strong>Infrastructure</strong>.</div>
+            <div className="field__hint" style={{ marginTop: 6 }}>Choose how this style generates images and scene openings. Download models under <strong>Infrastructure</strong>.</div>
             <div className="stack gap-22 mt-16">
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {engineInfo && (<>
+                <Field label="Scene first frames" hint="H3 renders a short 22-frame clip (~0.9 s) and uses its first frame. Experimental: shorter than H3's trained clip range. Uses character portraits when present. Needs H3 Turbo I2V and Ref2VA Turbo (LightX2V) models. Existing images are reused; regenerate a scene image to try it. Portraits, covers and edits keep their image model.">
+                  <select className="select" value={eff.first_frame_source || 'image'} onChange={(e) => setStyleField('first_frame_source', e.target.value)}>
+                    <option value="image">Image model (default)</option>
+                    <option value="h3">MiniMax H3 Turbo · short video (experimental)</option>
+                  </select>
+                  <ParentVal k="first_frame_source" />
+                </Field>
                 <Field label="Generation">
                   <select className="select" value={eff.image_engine || 'flux1-schnell'} onChange={(e) => setStyleField('image_engine', e.target.value)}>
                     {(engineInfo.engines || []).filter((e) => e.can_generate).map((e) => (
@@ -3080,8 +3089,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               )}
               {engineInfo && (String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax')
                 || String(eff.reference_engine || engineInfo.default_reference_engine || '').startsWith('minimax')) && (
-                <Field label="Sampling steps — every MiniMax render"
-                  hint="ONE knob for both pickers above: it overrides the step count of every MiniMax H3 render in this style — narrated-scene I2V and acted-scene Ref2VA alike. 0 = each engine's own default (Turbo: 4, the others: 15). More steps = sharper but slower (~2.5 min per step per scene on a GB10). LTX ignores it.">
+                <Field label="Sampling steps — scene videos"
+                  hint="ONE knob for both pickers above: it overrides the step count of every full MiniMax H3 scene video in this style — narrated-scene I2V and acted-scene Ref2VA alike. 0 = each engine's own default (Turbo: 4, the others: 15). More steps = sharper but slower (~2.5 min per step per scene on a GB10). LTX ignores it; H3 first-frame clips always use 4 steps.">
                   <input className="input" type="number" min={0} max={50} style={{ width: 120 }}
                     value={eff.video_steps ?? 0}
                     onChange={(e) => setStyleField('video_steps', Math.max(0, Math.min(50, Math.round(+e.target.value || 0))))} />
@@ -3112,7 +3121,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               )}
               {engineInfo && (
                 <Field label="First frames — open every acted scene on a painted image"
-                  hint="An acted scene normally renders from its cast's portraits alone — no opening image. With this on, every acted scene FIRST gets a first-frame image (from its image prompt, or composed from its setting when there is none) and the take is told to open on that picture. Use it in styles where the opening composition matters more than letting the model choose its own. A hand-picked location reference still outranks painting one, and any frame can be regenerated, replaced or removed per scene in the editors. Adds one FLUX render per acted scene.">
+                  hint="An acted scene normally renders from its cast's portraits alone — no opening image. With this on, every acted scene FIRST gets a first-frame image (from its image prompt, or composed from its setting when there is none) and the take is told to open on that picture. Use it in styles where the opening composition matters more than letting the model choose its own. A hand-picked location reference still outranks generating one, and any frame can be regenerated, replaced or removed per scene in the editors. Adds one first-frame render per acted scene, using Scene first frames under Image model.">
                   <label className="check">
                     <input type="checkbox" checked={!!eff.h3_first_frames}
                       onChange={(e) => setStyleField('h3_first_frames', e.target.checked)} />

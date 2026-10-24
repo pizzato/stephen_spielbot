@@ -455,7 +455,8 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
         logger.info("Scene %d: acted scene has no image prompt or setting — the "
                     "take opens on its references alone", scene.id)
         return None
-    engine = _engines.resolve(cfg, cfg.get("image_engine"))
+    from app import scene_frame_engine
+    engine = scene_frame_engine(cfg, style_name)
     # Anchor every character named in the frame to their reference portrait —
     # the same binding the Create-screen preview and the film editor's image
     # re-render use. Without it this painter alone invents a face, and the
@@ -685,7 +686,7 @@ def render_narrated_take(scene: Scene, work_dir: Path, cfg: dict, narration_dur:
     if handoff_frame is None:
         ensure_first_frame(scene, work_dir, vid_width, vid_height, comfy_url=comfy_url,
                            scene_first_frame=scene_first_frame, image_engine=image_engine,
-                           on_first_frame=on_first_frame)
+                           on_first_frame=on_first_frame, cfg=cfg)
     text = " ".join(x for x in (scene.image_prompt, scene.video_prompt, scene.narration) if x)
     cast = [c["name"] for c in _characters_for_scene(text, cfg, style_name, work_dir)
             if c.get("name")]
@@ -1626,6 +1627,8 @@ def main(work_dir: Path) -> None:
                 engine_key = s.get("image_engine")
                 break
     image_engine = _engines.resolve(cfg, engine_key or cfg.get("default_image_engine"))
+    from app import scene_frame_engine
+    frame_engine = scene_frame_engine(cfg)
     # Same three-step fallback for the style's video engine (scene I2V model).
     video_key = cfg.get("video_engine")
     if not video_key:
@@ -1682,6 +1685,7 @@ def main(work_dir: Path) -> None:
         "voice_speed": voice_speed,
         "h3_silent_scenes": bool(silent_flag),
         "h3_first_frames": first_frames_flag(cfg),
+        "first_frame_source": "h3" if frame_engine.get("family") == "h3-first-frame" else "image",
     }
     store.ensure_generation_plan(durable_job_id, work_dir, title, scenes, plan_cfg)
     store.recover_incomplete_tasks(durable_job_id)
@@ -2146,7 +2150,7 @@ def main(work_dir: Path) -> None:
                     store.start_task(
                         image_task,
                         worker_id_value=comfy_worker,
-                        lease_seconds=900,
+                        lease_seconds=int(frame_engine.get("lease_seconds") or 900),
                         message=f"first frame on {url}",
                     )
                 clip_engine = (_engines.resolve_reference(plan_cfg, plan_cfg.get("reference_engine"))
@@ -2157,7 +2161,8 @@ def main(work_dir: Path) -> None:
                     worker_id_value=comfy_worker,
                     # Slow engines (MiniMax H3) declare a longer lease so the
                     # controller doesn't re-lease the scene mid-render.
-                    lease_seconds=int(clip_engine.get("lease_seconds") or 3600),
+                    lease_seconds=max(int(clip_engine.get("lease_seconds") or 3600),
+                                      int(frame_engine.get("lease_seconds") or 0)),
                     start_message=f"video on {url}",
                 ) as run:
                     if acted_narration:
@@ -2166,7 +2171,7 @@ def main(work_dir: Path) -> None:
                             comfy_url=url, vid_width=vid_width, vid_height=vid_height,
                             style_name=plan_cfg.get("style_name") or "",
                             scene_first_frame=scene_first_frame,
-                            image_engine=image_engine, on_first_frame=_finish_image,
+                            image_engine=frame_engine, on_first_frame=_finish_image,
                             handoff_frame=(handoff_frame
                                            if scene_first_frame is handoff_frame else None))
                     else:
@@ -2178,10 +2183,11 @@ def main(work_dir: Path) -> None:
                             second_pass_cfg, second_pass_steps,
                             comfy_url=url,
                             scene_first_frame=scene_first_frame,
-                            image_engine=image_engine,
+                            image_engine=frame_engine,
                             on_first_frame=_finish_image,
                             video_engine=video_engine,
                             chained=chain_scenes,
+                            first_frame_cfg=plan_cfg,
                         )
                     store.record_artifact(
                         durable_job_id,
