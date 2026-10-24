@@ -303,7 +303,7 @@ if source.is_dir():
 
 
 def test_all_worker_install_paths_pin_the_native_flux3_revision():
-    revision = "8713616fcc321624e306bbd36be5906203dcb0dc"
+    revision = "483dae4326356b81de05d27aca3f433dd323cc25"
     for file in ("docker/comfyui/Dockerfile", "docker/docker-compose.yml",
                  "scripts/install_worker_container.sh"):
         assert revision in (ROOT / file).read_text()
