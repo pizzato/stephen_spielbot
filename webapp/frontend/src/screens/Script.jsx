@@ -1574,8 +1574,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <RegenLabel busy={busy === 'song-regen-caption'} disabled={!!busy}
                   onRegen={(instr) => regenSong('caption', instr)}
                   chips={REGEN_CHIPS.sound}>Sound</RegenLabel>}
-                hint="What the music model is told about the song — genre, tempo, mood, arrangement. The Vocalist below is appended to this automatically when the track is sung. Re-generating it writes a new sound for the lyrics below.">
-                <textarea className="textarea" rows={3}
+                hint="Genre, tempo, mood and arrangement. MiniMax expands a short description into editable Global Metadata and Arrangement sections when you generate the song. The Vocalist below supplies its Vocal Details. Re-generating Sound writes a new description for these lyrics.">
+                <textarea className="textarea" rows={(songDraft ?? song).caption?.includes('Arrangement:') ? 10 : 3}
                   value={(songDraft ?? song).caption}
                   onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
               </Field>
@@ -1602,7 +1602,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   onClick={refreshSingers}>{singersBusy ? 'Refreshing…' : 'Refresh singers'}</Button>
               </Field>
               <Field label="Vocalist"
-                hint="Who sings — sex, age, background, voice quality. Appended to the Sound description when the track is generated, so the voice matches the singer on camera, and the story casts a performer of this sex and age. Picking a Singing voice below overrides it.">
+                hint="Who sings — sex, age, background, voice quality. Supplied to the music model, and used to cast the story's performer. Gender, voice and accent are generation requests; listen to check the result. Picking a Singing voice below overrides this description.">
                 <input className="input"
                   placeholder="e.g. young female vocalist, Brazilian, warm airy voice"
                   value={(songDraft ?? song).vocalist || ''}

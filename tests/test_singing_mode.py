@@ -725,6 +725,64 @@ class _SongFilmCase(TempConfigCase):
             store.close()
 
 
+class StructuredSongGenerationTests(_SongFilmCase):
+    def setUp(self):
+        super().setUp()
+        self.write_config({"styles": [_style("Hero", music_engine="minimax-music3")],
+                           "default_style": "Hero", "voices": []})
+        data = json.loads((self.wd / "song.json").read_text())
+        data.update(caption="techno, drum & bass, fast and slow, no piano",
+                    vocalist="young male vocalist, Swiss German, strong German accent")
+        (self.wd / "song.json").write_text(json.dumps(data))
+
+    def _generate(self, add=0):
+        captions = []
+
+        def generate(title, secs, staged, caption, **kwargs):
+            captions.append(caption)
+            Path(staged).write_bytes(b"generated")
+
+        def keep(original, generated, out, seconds):
+            Path(out).write_bytes(b"continued")
+
+        call = unittest.mock.Mock(return_value=json.dumps({
+            "global_metadata": "Dark electronic club production.",
+            "arrangement": "Half-time verses; fast rolling breakbeats in the choruses.",
+        }))
+        with unittest.mock.patch.object(backend.story_mode, "_call_fn", return_value=call), \
+             unittest.mock.patch.object(backend.gapp, "_preview_worker_urls", return_value=["http://w:8188"]), \
+             unittest.mock.patch("pipeline.comfyui.generate_music", side_effect=generate), \
+             unittest.mock.patch("pipeline.assembler.keep_audio_head", side_effect=keep):
+            backend._do_song_generate(self.wd, add)
+            if not add:
+                backend._do_song_generate(self.wd)
+        return captions, call
+
+    def test_mini_max_expands_once_and_records_the_prompt_with_the_exact_vocalist(self):
+        from pipeline.music_prompt import sections
+
+        captions, call = self._generate()
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(captions[0], captions[1])
+        parts = sections(captions[0])
+        self.assertIn("techno, drum & bass, fast and slow, no piano", parts["global metadata"])
+        self.assertEqual(parts["vocal details"], "young male vocalist, Swiss German, strong German accent")
+        self.assertIn("fast rolling breakbeats", parts["arrangement"])
+        shown = backend.get_job_song(self.job_id)
+        self.assertIn("Arrangement:", shown["caption"])
+        self.assertNotIn("Vocal Details:", shown["caption"])
+        self.assertEqual(shown["versions"][-1]["desc"], captions[-1])
+
+    def test_legacy_continuation_does_not_change_the_prompt_or_call_the_arranger(self):
+        data = json.loads((self.wd / "song.json").read_text())
+        data["seed"] = 42
+        (self.wd / "song.json").write_text(json.dumps(data))
+        captions, call = self._generate(add=5)
+        call.assert_not_called()
+        self.assertEqual(captions, [f"{data['caption']}, {data['vocalist']}"])
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["caption"], data["caption"])
+
+
 class SongVersionTests(_SongFilmCase):
     """Every song a film has sung is kept and can be put back: the engine's
     own vocals, and each seed-vc re-voicing of them. Both sides of a
@@ -1031,6 +1089,7 @@ class SongEndingTests(_SongFilmCase):
             return out
 
         with unittest.mock.patch("pipeline.comfyui.generate_music", fake_generate_music), \
+             unittest.mock.patch.object(backend.story_mode, "expand_song_sound", side_effect=lambda c, *a: c), \
              unittest.mock.patch("pipeline.comfyui.music_engine_can_extend",
                                  return_value=can_extend), \
              unittest.mock.patch.object(backend.gapp, "_preview_worker_urls",

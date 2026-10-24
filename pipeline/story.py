@@ -784,6 +784,32 @@ def write_song(story: dict | None, target_seconds: float,
     return {"caption": caption, "lyrics": lyrics, "vocalist": vocalist}
 
 
+def expand_song_sound(caption: str, lyrics: str, vocalist: str = "") -> str:
+    """Expand a compact MiniMax brief once; the saved Sound remains editable.
+
+    Keep the user's original direction verbatim and compose Vocal Details
+    separately, so the arranger cannot replace the requested singer or accent.
+    """
+    from pipeline.music_prompt import is_structured
+
+    if is_structured(caption):
+        return caption
+    call = _call_fn(_load_cfg())
+    raw = call(
+        _prompts.system("song_sound"),
+        _prompts.user("song_sound", caption=caption, lyrics=lyrics, vocalist=vocalist),
+        1400, "song sound", retries=2,
+    )
+    data = _parse_claude_response(raw, "song sound")
+    metadata = str(data.get("global_metadata") or "").strip()
+    arrangement = str(data.get("arrangement") or "").strip()
+    if not metadata or not arrangement:
+        raise RuntimeError("Song sound returned no global metadata or arrangement")
+    direction = f"{caption.strip()}\n\n" if caption.strip() else ""
+    return (f"Global Metadata:\n{direction}{metadata}\n\n"
+            f"Arrangement:\n{arrangement}")
+
+
 def critique_song(song: dict, target_seconds: float, *,
                   topic: str = "", video_title: str = "",
                   source_text: str = "") -> str:

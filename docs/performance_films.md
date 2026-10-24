@@ -251,8 +251,16 @@ At generation time the vocalist is *described*, in this order: an explicitly cho
 **Singing voice**'s casting metadata wins; else the **vocalist line cast at draft time**
 (the lead singer's sex/age/background, e.g. *"young female vocalist, Brazilian, warm
 smoky voice, light Portuguese accent"*); films predating both fall back to describing the
-lead performer's cast library voice. The description is appended to the caption: the
-singer on screen and the voice on the track are matched by description, not by cloning.
+lead performer's cast library voice. MiniMax Music 3 receives the description verbatim
+in a **Vocal Details** section. Before a fresh take, a short Sound brief is expanded into
+detailed **Global Metadata** and a section-by-section **Arrangement**, preserving the
+original musical constraints. That expanded Sound stays editable in the Song tab and
+is reused for later takes; continuing an existing take retains its conditioning. The
+finished-film editor's **Sing it again** also expands short MiniMax song descriptions.
+ACE-Step appends the vocalist to its compact caption. Vocal gender, identity and accent
+are requests to the model, so the result needs a listening check; prompt formatting
+does not guarantee an accent. The singer on screen and the voice on the track are
+matched by description, not by cloning.
 Lip movement is a performance, not a phoneme-accurate sync — exactly like a real music
 video shot without playback.
 

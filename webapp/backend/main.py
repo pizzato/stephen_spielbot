@@ -3586,6 +3586,7 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     from pipeline import engines as music_engines
     from pipeline.assembler import _get_duration, _resolve_media_tool, keep_audio_head
     from pipeline.comfyui import generate_music, music_engine_can_extend
+    from pipeline.music_prompt import song_caption
     from pipeline.worker_pool import WorkerPool
 
     cfg = gapp.load_config()
@@ -3598,7 +3599,7 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     # is the one whose voice never matches the person shown singing.
     vocal = (gapp.voice_descriptor(voices.get((data.get("voice") or "").strip()))
              or (data.get("vocalist") or "").strip())
-    caption = ", ".join(x for x in ((data.get("caption") or "").strip(), vocal) if x)
+    sound = (data.get("caption") or "").strip()
     ss = gapp.style_settings(cfg, data.get("style_name") or "")
     engine = gapp._norm_music_engine(ss.get("music_engine"))
     urls = gapp._preview_worker_urls()
@@ -3613,6 +3614,16 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
         keep = float(_get_duration(final) or 0.0)
         if keep > 0:
             secs = round(keep + float(add_seconds), 1)
+    # Preparing the sound must not change the conditioning of a take being
+    # continued with its saved seed. Fresh MiniMax takes expand legacy briefs
+    # once, then reuse the editable structured Sound on later generations.
+    if engine == "minimax-music3" and not (keep > 0 and data.get("seed") is not None):
+        with _track_op("Preparing the song's sound", data.get("title") or wd.name,
+                       work_dir=str(wd), category="film"):
+            sound = story_mode.expand_song_sound(sound, data.get("lyrics") or "", vocal)
+        data["caption"] = sound
+        (wd / "song.json").write_text(json.dumps(data, indent=2))
+    caption = song_caption(sound, vocal, engine)
     pool = WorkerPool(urls)
     staged = wd / "background_music.staging.wav"
     padded = wd / "background_music.extend-src.wav"
@@ -9195,6 +9206,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
     is tracked in _film_tasks so the Remix screen can poll /api/films/task."""
     from pipeline.assembler import _get_duration
     from pipeline.comfyui import generate_music
+    from pipeline.music_prompt import song_caption, sections
     from pipeline.worker_pool import WorkerPool
 
     combined = wd / "combined.mp4"
@@ -9216,16 +9228,26 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         music_dur = _get_duration(combined) if combined.exists() else _get_duration(music_path)
         # Re-generate on the engine the film was scored with; job dirs from
         # before the setting existed fall back to the style's current choice.
+        cfg = gapp.load_config()
         music_engine = jc.get("music_engine") or gapp.style_settings(
-            gapp.load_config(), jc.get("style_name") or "").get("music_engine")
+            cfg, jc.get("style_name") or "").get("music_engine")
         # A song film re-sings its lyrics (stamped into job_config at render
         # time; song.json is the source for dirs rendered before that stamp).
         lyrics = (jc.get("music_lyrics") or "").strip()
-        if not lyrics:
-            try:
-                lyrics = str(json.loads((wd / "song.json").read_text()).get("lyrics") or "")
-            except Exception:
-                lyrics = ""
+        try:
+            song = json.loads((wd / "song.json").read_text())
+        except Exception:
+            song = {}
+        lyrics = lyrics or str(song.get("lyrics") or "")
+        if lyrics and gapp._norm_music_engine(music_engine) == "minimax-music3":
+            voices = {v.get("name"): v for v in (cfg.get("voices") or []) if v.get("name")}
+            vocal = (sections(music_desc).get("vocal details")
+                     or gapp.voice_descriptor(voices.get(song.get("voice") or ""))
+                     or (song.get("vocalist") or "").strip())
+            sound = story_mode.expand_song_sound(music_desc, lyrics, vocal)
+            music_desc = song_caption(sound, vocal, "minimax-music3")
+            jc["music_desc"] = music_desc
+            (wd / "job_config.json").write_text(json.dumps(jc, indent=2))
 
         # The original track was already seeded (with its own prompt) by the endpoint,
         # before the prompt was overwritten — see remix_regen_music.
