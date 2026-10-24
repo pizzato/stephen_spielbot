@@ -673,6 +673,13 @@ VIDEO_ENGINES: dict[str, dict] = {
         "video_vae": "minimax_h3_video_vae_fp16.safetensors",
         "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
         "requires_node": "MiniMaxH3SigmaShift",
+        # The checkpoint carries 32 PDD output heads (one per timestep interval);
+        # native ComfyUI learned to pick the step's head in PR #17157, first
+        # released in 0.42.0. On 0.41.x the node exists and the model loads, but
+        # the sampler fails on the first step with all 32 heads stacked
+        # ("size of tensor a (24) must match ... (768)").
+        "min_comfyui": (0, 42, 0),
+        "too_old_note": "it cannot read FastH3 Omni's per-step PDD heads",
         "probe": ("UNETLoader", "unet_name",
                   "fasth3_omniref_8step_pruned_int8_convrot.safetensors"),
         "models": [

@@ -603,6 +603,7 @@ film can hold two kinds of scene:
 | `minimax-h3-ref-turbo` | ~6 min | Distilled 4-step LoRA on the full 34 GB checkpoint — fastest, but over-saturated and over-sharpened |
 | `minimax-h3-ref-turbo-lx2v` | half of w4a8 | LightX2V's 4-step LoRA on the same 34 GB checkpoint, this one distilled **on Ref2VA** — no distillation crunch, but softer than the base and looser on reference wardrobe |
 | `minimax-h3-ref` | ~23 min | 15 steps + EasyCache on the 21 GB pruned checkpoint — the fidelity reference |
+| `minimax-h3-ref-fasth3-omni` (experimental) | not yet measured | FastVideo's 8-step distill of H3 **Ref2VA** baked into a 22 GB checkpoint — no LoRA, so no LoRA motion prior. **Needs ComfyUI ≥ 0.42.0** (see below) |
 
 Measured on a DGX Spark GB10, same shot and seed throughout (704×1280): edge
 energy 4.2 for w4a8 against turbo's 5.5 (and 6.1 at 8 steps), with the base
@@ -681,6 +682,27 @@ re-measured.
 LightX2V's later `ref2v_turbo_8step_v1.0_768p` LoRA was tried on the same scene
 and rejected: its −14.6% drift is no better than 0.6, it takes 75% longer (8 steps),
 and at 9:16 it ghosts — a translucent double of the singer in most frames.
+
+### FastH3 Omni (experimental)
+
+`minimax-h3-ref-fasth3-omni` runs FastVideo's FastH3 Omni, an 8-step
+distillation of the whole H3 Ref2VA DiT (`FastVideo/FastH3-Omni-Comfy`,
+int8 ConvRot, 22 GB). Because the distillation is baked into the checkpoint
+rather than carried by a LoRA, it is a candidate fix for the opening camera
+swing above. Its graph (`workflows/h3_ref2v_fasth3.json`) is the base Ref2VA
+graph with EasyCache swapped for `MiniMaxH3SigmaShift` (video 12, audio 3, as
+the model card asks), 8 steps of `res_multistep` on the `simple` schedule, and
+guidance 1.0. Chained scenes get the same swap.
+
+The engine **needs ComfyUI ≥ 0.42.0**. The checkpoint stores 32 per-timestep
+output heads (PDD), and native ComfyUI learned to pick each step's head in
+0.42.0 (Comfy-Org/ComfyUI#17157). On the current pin (0.41.3) the node exists
+and the checkpoint loads, but the first sampling step fails with all 32 heads
+stacked ("size of tensor a (24) must match … (768)"). The engine therefore
+refuses older workers up front. It has not been A/B'd against `ref-turbo-lx2v`
+yet: that needs the `COMFYUI_REF` bump first. FastH3 Omni was distilled with
+audio as a voice-timbre reference, so whether pinned-track sung takes still
+lip-sync on it is also untested.
 
 !!! warning "w4a8 needs ComfyUI ≥ 0.31.0 on every worker"
     Below that version the checkpoint does not error — it renders **black

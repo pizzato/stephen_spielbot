@@ -435,6 +435,9 @@ huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va
 
 # performance films — minimax-h3-ref-turbo-lx2v (same full DiT, Ref2VA-trained LoRA):
 huggingface-cli download lightx2v/Minimax-h3-Turbo minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors --local-dir models/loras --local-dir-use-symlinks False
+
+# performance films — minimax-h3-ref-fasth3-omni (8-step Ref2VA distill, 22 GB, no LoRA):
+huggingface-cli download FastVideo/FastH3-Omni-Comfy diffusion_models/fasth3_omniref_8step_pruned_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 ```
 
 !!! note "That last LoRA needs its keys renamed"

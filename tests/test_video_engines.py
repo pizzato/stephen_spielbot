@@ -209,6 +209,8 @@ class ReferenceEngineRegistryTests(unittest.TestCase):
         self.assertEqual(eng["workflow"], "h3_ref2v_fasth3.json")
         self.assertIn(eng["unet"], {m["file"] for m in eng["models"]})
         self.assertNotEqual(engines.DEFAULT_REFERENCE_ENGINE, eng["key"])
+        # PDD-head support (ComfyUI #17157) first shipped in 0.42.0.
+        self.assertEqual(eng["min_comfyui"], (0, 42, 0))
 
     def test_reference_workflows_exist_and_are_wired(self):
         import json
