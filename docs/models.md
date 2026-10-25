@@ -289,6 +289,10 @@ LTX 2.5 notes:
   pass knobs and the per-style video negative prompt apply as before. The
   distilled transformer replaces 2.3's distill LoRA, so the LoRA-strength knob
   has no effect on this engine.
+- Video decoding uses spatial tiling with a **4096-frame temporal tile**, keeping
+  each supported clip in one temporal window. This avoids the brief blur/pulse
+  every ~2.33 seconds caused by the former 64-frame tiles. It uses more decoder
+  memory; see [the measured tradeoff and memory guidance](troubleshooting.md#ltx-25-scenes-briefly-blur-or-pulse-every-two-seconds).
 - Same license family as 2.3: free commercial use under US$10M annual revenue,
   no territory restrictions.
 
