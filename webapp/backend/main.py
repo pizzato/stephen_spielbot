@@ -2633,6 +2633,11 @@ class DivideStoryBody(BaseModel):
     style_name: str = ""
     # Automation only — see GenerateScriptBody.auto_critic.
     auto_critic: bool = False
+    # Re-plan the scene lengths from the style's CURRENT settings (keeping the
+    # film's length) instead of the plan stored at draft time — the fix the
+    # Script screen offers when Chained scenes was switched off after the
+    # story was planned for chained takes (see _chain_plan_mismatch).
+    replan: bool = False
 
 
 def _story_path(wd: Path) -> Path:
@@ -2984,6 +2989,11 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     # the film's length into longer or shorter scenes) so the acted budgets the
     # writer works to match the clips the renderer will actually shoot.
     plan = story.get("scene_plan") or brief.get("scene_plan") or {}
+    if body.replan:
+        plan = _story_style_plan(ss, brief, minutes=plan.get("minutes") if isinstance(plan, dict) else None)
+        # divide_story and the persisted brief read both from the story.
+        story["scene_plan"] = plan
+        story["n_scenes"] = plan["n_scenes"]
     # A song film's cast singer: read before the divide so the scene prompts
     # cast them by name, preserving their outfit unless a change is requested.
     song_data: dict = {}
@@ -4234,6 +4244,42 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
             "direction": _brief_direction(wd, saved)}
 
 
+def _story_style_plan(ss: dict, brief: dict, minutes: float | None = None) -> dict:
+    """The cadence plan the style would give this film NOW, at the narrator
+    the brief chose (cadence is per voice)."""
+    plan_ss = dict(ss)
+    if (brief.get("voice") or "").strip():
+        plan_ss["voice"] = brief["voice"].strip()
+    return gapp.style_script_plan(plan_ss, minutes=minutes)
+
+
+def _chain_plan_mismatch(wd: Path, story: dict) -> dict | None:
+    """A script divided for CHAINED H3 scenes that its style now renders
+    unchained (Chained scenes switched off while the engine is still MiniMax
+    H3). The scene lengths were fixed at divide time, so each scene's
+    narration outruns the single ~15 s clip it now gets and the picture stops
+    while the voice carries on. None when the plan still fits the render."""
+    brief = _read_create_brief(wd)
+    plan = story.get("scene_plan") or brief.get("scene_plan")
+    if not isinstance(plan, dict) or not plan.get("chained"):
+        return None
+    ss = gapp.style_settings(gapp.load_config(), brief.get("style_name", ""))
+    if gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")) or \
+            not str(ss.get("video_engine") or "").startswith("minimax-h3"):
+        return None
+    fresh = _story_style_plan(ss, brief, minutes=plan.get("minutes"))
+    return {"planned_scenes": int(plan.get("n_scenes") or 0),
+            "planned_secs": round(float(plan.get("scene_secs_target") or 0), 1),
+            # one unchained H3 pass — what each scene now gets on screen
+            "clip_secs": round(cadence.scene_window(False)[2], 1),
+            "replan_scenes": int(fresh["n_scenes"]),
+            "replan_secs": round(float(fresh["scene_secs_target"]), 1)}
+
+
+def _story_payload(wd: Path, story: dict) -> dict:
+    return {**story, "chain_mismatch": _chain_plan_mismatch(wd, story)}
+
+
 @api.get("/api/jobs/{job_id}/story")
 def get_job_story(job_id: str) -> dict:
     """The story.json behind a story-mode script (404 for classic scripts)."""
@@ -4241,7 +4287,7 @@ def get_job_story(job_id: str) -> dict:
     story = _read_story(wd)
     if not story:
         raise HTTPException(404, "This script has no story draft.")
-    return story
+    return _story_payload(wd, story)
 
 
 class StorySaveBody(BaseModel):
@@ -4259,7 +4305,7 @@ def save_job_story(job_id: str, body: StorySaveBody) -> dict:
     _merge_story_edits(story, body.chapters)
     story["updated_at"] = time.time()
     _story_path(wd).write_text(json.dumps(story, indent=2))
-    return story
+    return _story_payload(wd, story)
 
 
 class StoryRedraftBody(BaseModel):

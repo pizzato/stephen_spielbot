@@ -344,6 +344,9 @@ It covers both kinds of scene, on different gates:
 
 - **Narrated scenes** chain when the style's *video engine* is MiniMax. LTX
   narrated scenes ignore the toggle — LTX continues clips natively.
+- The plan is fixed when the story is **divided**. Switching the toggle off later does
+  not shorten an existing script's scenes; the Script screen warns and offers to
+  re-divide it (see [Script](manual/script.md)).
 - **Acted scenes** (dialogue, rendered through Ref2VA) chain on the toggle
   alone — reference engines are always MiniMax, so even an LTX-narrated style
   chains its dialogue. The script budget doubles (~6 lines / ~45 spoken words

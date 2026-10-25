@@ -525,6 +525,66 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(fork_story["status"], "divided")
         self.assertNotEqual(second["job_id"], first["job_id"])
 
+    # ── chained plan, unchained render ───────────────────────────────────────
+
+    def _chained_draft(self):
+        self.write_config({
+            "styles": [_style("Hero", video_engine="minimax-h3-turbo", h3_chain_scenes=True)],
+            "default_style": "Hero", "characters": [], "characters_migrated_v2": True,
+        })
+        body = backend.GenerateScriptBody(video_title="Tides", topic="A topic",
+                                          minutes=1.25, style_name="Hero")
+        with mock.patch.object(backend.story_mode, "generate_story",
+                               # the real draft stores its plan on the story
+                               side_effect=lambda topic, n, **kw: {
+                                   **_fake_story(n), "scene_plan": kw["scene_plan"]}):
+            draft = backend._do_story_generate(body)
+        return draft, Path(draft["work_dir"])
+
+    def _set_chain(self, on, engine="minimax-h3-turbo"):
+        self.write_config({
+            "styles": [_style("Hero", video_engine=engine, h3_chain_scenes=on)],
+            "default_style": "Hero", "characters": [], "characters_migrated_v2": True,
+        })
+
+    def test_story_flags_a_chained_plan_the_style_no_longer_chains(self):
+        # Chained scenes switched off after the story was planned for ~23 s
+        # chained takes: each scene would outrun its single ~15 s H3 clip.
+        draft, wd = self._chained_draft()
+        self.assertIsNone(backend.get_job_story(draft["job_id"])["chain_mismatch"])
+        self._set_chain(False)
+        mm = backend.get_job_story(draft["job_id"])["chain_mismatch"]
+        self.assertIsNotNone(mm)
+        self.assertGreater(mm["planned_secs"], mm["clip_secs"])
+        self.assertGreater(mm["replan_scenes"], mm["planned_scenes"])
+        self.assertLessEqual(mm["replan_secs"], mm["clip_secs"])
+        # the flag is computed, never written into story.json
+        self.assertNotIn("chain_mismatch", json.loads((wd / "story.json").read_text()))
+
+    def test_long_chained_scenes_are_fine_on_ltx(self):
+        # LTX renders up to 40 s in one pass, so the long scenes still fit.
+        draft, _ = self._chained_draft()
+        self._set_chain(False, engine="ltx25")
+        self.assertIsNone(backend.get_job_story(draft["job_id"])["chain_mismatch"])
+
+    def test_replan_divide_resizes_scenes_to_unchained_takes(self):
+        draft, wd = self._chained_draft()
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               side_effect=lambda st, **kw: (_fake_scenes(int(st["n_scenes"])),
+                                                              "m", "st", [])):
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+            self._set_chain(False)
+            mm = backend.get_job_story(draft["job_id"])["chain_mismatch"]
+            res = backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd), replan=True))
+        self.assertEqual(len(res["scenes"]), mm["replan_scenes"])
+        fork_story = json.loads((Path(res["work_dir"]) / "story.json").read_text())
+        self.assertFalse(fork_story["scene_plan"]["chained"])
+        self.assertEqual(fork_story["n_scenes"], mm["replan_scenes"])
+        # same runtime, just more, shorter scenes
+        old_plan = json.loads((wd / "story.json").read_text())["scene_plan"]
+        self.assertTrue(old_plan["chained"])
+        self.assertIsNone(backend.get_job_story(res["job_id"])["chain_mismatch"])
+
     def test_fork_carries_cast_and_visual_references(self):
         # A music-video fork was seen losing its location + wardrobe refs and
         # per-script cast (kinho-song-20260816): the fork copied only the song

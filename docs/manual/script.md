@@ -188,6 +188,15 @@ only *adds* newly identified characters, it never overwrites what you approved),
 any visual that was scoped to specific scenes widens to *every* scene — re-scope it on
 the wall if it should stay narrow.
 
+Scene lengths are fixed when the story is divided. If it was divided for
+[chained scenes](../models.md#chained-scenes) (~23 s each on MiniMax H3) and
+**Chained scenes** has since been switched off for the style, a warning appears on the
+Scenes and Story views: each scene's narration would outrun the single ~15 s H3 clip it
+now gets, so the picture stops while the voice carries on. **Re-divide into N scenes**
+forks the story into a new script with the scenes re-planned from the style's current
+settings — same runtime, more and shorter scenes — or turn Chained scenes back on.
+Switching the style to LTX instead needs neither: LTX renders the long scenes in one pass.
+
 The **AI editor verdict** card shows the critique the drafter ran on itself: *pass*,
 *revise* (issues were flagged and fixed before division), or *skipped*, plus the notes.
 
