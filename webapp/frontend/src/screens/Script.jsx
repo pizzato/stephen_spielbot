@@ -126,6 +126,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Length control (minutes): editing it away from the story's own length
   // swaps Divide for "Redraft to N min" — a full prose retell at the new
   // length (the scene count then follows the narrator's cadence).
+  // Set by the backend when the story was divided for chained H3 takes that
+  // the style no longer chains (see _chain_plan_mismatch).
+  const chainMismatch = story?.chain_mismatch || null
   const storyMinutes = (s) => s?.scene_plan?.minutes
     || Math.round(((Number(s?.n_scenes) || 6) * 9 / 60) * 100) / 100
   const [minutesTarget, setMinutesTarget] = useState('')
@@ -356,10 +359,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       setStoryMsg(`Story redrafted for ${fmtDuration(storyMinutes(s))} (${s.n_scenes} scenes) — review it, then divide into scenes.`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
-  const divideStory = async () => {
+  // replan: size the scenes from the style's current settings rather than the
+  // plan stored when the story was drafted (the chain-mismatch fix below).
+  const divideStory = async (replan = false) => {
     setBusy('story-divide'); setError(''); setStoryMsg('')
     try {
       const data = await api.divideStory({
+        replan,
         work_dir: job.work_dir,
         chapters: storyChapters(),
         voice: job.voice || '',
@@ -1515,6 +1521,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
       <Banner tone="danger">{error}</Banner>
       {(view === 'scenes' || view === 'song') && songFit && <Banner tone={songFit.tone}>{songFit.text}</Banner>}
+      {(view === 'scenes' || view === 'story') && chainMismatch && (
+        <Banner tone="warn">
+          These scenes were divided for chained H3 takes (~{Math.round(chainMismatch.planned_secs)} s each), but Chained scenes is now off for this style — one H3 clip runs at most ~{Math.round(chainMismatch.clip_secs)} s, so each scene's picture would stop while its narration carries on.
+          {' '}Re-divide the story into {chainMismatch.replan_scenes} scenes of ~{Math.round(chainMismatch.replan_secs)} s (a new script; this one is kept), or turn Chained scenes back on in Settings → Styles.
+          {' '}<Button size="sm" variant="primary" iconRight="scissors" disabled={!!busy} onClick={() => divideStory(true)}>
+            {busy === 'story-divide' ? 'Dividing into scenes…' : `Re-divide into ${chainMismatch.replan_scenes} scenes`}
+          </Button>
+        </Banner>
+      )}
       {job?.queue_item_id && view === 'scenes' && <Banner tone="info">Editing a queued request — “Save to queue slot” keeps its position and lets it render straight from this script.</Banner>}
       {genAll && <Banner tone="info">{genAllMsg}</Banner>}
       {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}
@@ -1795,7 +1810,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                         placeholder="e.g. the singer is a man, set it at night, end on the reunion…"
                         label={minutesTargetChanged ? `Redraft to ${fmtDuration(minutesTargetN)}…` : 'Redraft the story…'} />
                       {!minutesTargetChanged && (
-                        <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={divideStory}>
+                        <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={() => divideStory()}>
                           {busy === 'story-divide'
                             ? 'Dividing into scenes…'
                             : (scenes.length
