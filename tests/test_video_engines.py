@@ -99,6 +99,22 @@ class VideoEngineRegistryTests(unittest.TestCase):
         for node in ("13", "25"):
             self.assertEqual(graph[node]["inputs"]["model"], ["1", 0])
 
+    def test_ltx25_decoder_covers_the_longest_supported_clip(self):
+        import json
+        from pathlib import Path
+        from pipeline import comfyui
+
+        eng = engines.resolve_video({}, "ltx25")
+        root = Path(__file__).resolve().parent.parent
+        graph = json.loads((root / "workflows" / eng["workflow"]).read_text())
+        frames = comfyui._frame_count(comfyui.LTX_MAX_FRAMES, None,
+                                      fps=eng["fps"], multiple=eng["frame_multiple"])
+        # The LTX VAE compresses time by 8. Keep the entire clip in one
+        # temporal tile so short decode joins cannot introduce regular pulses.
+        latent_frames = (frames - 1) // 8 + 1
+        self.assertGreaterEqual(graph["31"]["inputs"]["temporal_size"] // 8,
+                                latent_frames)
+
 
 class VideoEngineStyleTests(TempConfigCase):
     def test_bogus_video_engine_is_coerced_to_default(self):

@@ -158,6 +158,29 @@ editing or publishing it. If the published cut is a curated version — an upsca
 localization, or a hand-burnt cover — the sweep never touches it: press
 **Reassemble film** in [Edit film](manual/edit-film.md) to rebuild it anyway.
 
+### LTX 2.5 scenes briefly blur or pulse every two seconds
+
+Older scene workflows split VAE decoding into 64-frame temporal tiles with an
+8-frame overlap. At 24 fps, those joins recur every `(64 - 8) / 24 = 2.33`
+seconds and can produce a brief softening that looks like a shake.
+
+The bundled `ltx25_i2v.json` workflow now uses `temporal_size: 4096`, covering
+the full supported clip in one temporal tile while retaining spatial tiling.
+Existing videos keep their rendered artifacts; regenerate affected scenes with
+the updated workflow.
+
+In a controlled 15.375-second, 704×1280 comparison on a GB10 with ComfyUI
+0.42.5, both settings decoded the same saved latent sequence twice. The average
+sharpness dip at the six former join positions fell from 41.4% to no meaningful
+dip. Decode time was 119 seconds versus 120–122 seconds; sampled peak Torch
+memory reservation increased from 5.5 to 21.0 GiB. These are measurements for
+one scene, not a memory requirement for every resolution or duration.
+
+For custom workflows with limited decoder memory, retain the larger temporal
+tile and try reducing the spatial `tile_size` from 512 to 384 or 256. Returning
+to short temporal tiles can reintroduce the pulse. See
+[video engines](models.md#video-engines-per-style) for the LTX setup.
+
 ## Song re-voicing
 
 ### The re-voice button is disabled or reports missing models

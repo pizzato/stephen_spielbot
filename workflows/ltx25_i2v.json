@@ -353,7 +353,7 @@
       ],
       "tile_size": 512,
       "overlap": 64,
-      "temporal_size": 64,
+      "temporal_size": 4096,
       "temporal_overlap": 8
     }
   },
