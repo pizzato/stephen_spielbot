@@ -59,6 +59,45 @@ class NarratorEditCase(unittest.TestCase):
 
 
 class SceneNarratorTests(NarratorEditCase):
+    def test_narration_rerender_uses_current_style_engine(self):
+        wd = self._work_dir()
+        self._register_scene(wd)
+        (wd / "job_config.json").write_text(json.dumps({
+            "style_name": "Amelia", "tts_engine": "openf5", "tts_language": "en",
+            "tts_sentence_pause": 0.4, "voice_cadence_wpm": 165, "voice_robotic_amount": 0,
+        }))
+        (wd / "scene_01_video.mp4").write_bytes(b"x" * 20000)
+        cfg = {
+            "default_tts_engine": "openf5",
+            "styles": [{"name": "Amelia", "tts_engine": "chatterbox-multilingual",
+                        "tts_language": "es", "tts_sentence_pause": 1.0,
+                        "voice_cadence_wpm": 220, "voice_robotic_amount": 0.6}],
+        }
+
+        def fake_tts(_text, out_path, **kwargs):
+            Path(out_path).write_bytes(b"RIFF" + b"x" * 2000)
+
+        def fake_mux(_video, _audio, out_path, **kwargs):
+            Path(out_path).write_bytes(b"muxed" * 5000)
+
+        with mock.patch.object(app, "load_config", return_value=cfg), \
+                mock.patch.object(backend.threading, "Thread") as thread, \
+                mock.patch("pipeline.tts_worker.generate_narration", side_effect=fake_tts) as tts, \
+                mock.patch("pipeline.assembler.mux_video_audio", side_effect=fake_mux):
+            result = backend.rerender_film_scene(
+                1, backend.RerenderSceneBody(work_dir=str(wd), component="narration"))
+            thread.call_args.kwargs["target"](*thread.call_args.kwargs["args"])
+
+        self.assertEqual(backend._film_tasks[result["task_id"]]["status"], "done")
+        self.assertEqual(tts.call_args.kwargs["tts_engine"], "chatterbox-multilingual")
+        self.assertEqual(tts.call_args.kwargs["language"], "en")
+        self.assertEqual(tts.call_args.kwargs["sentence_pause"], 0.4)
+        self.assertEqual(tts.call_args.kwargs["robotic_amount"], 0)
+        jc = json.loads((wd / "job_config.json").read_text())
+        self.assertEqual(jc["tts_engine"], "chatterbox-multilingual")
+        self.assertEqual(jc["tts_language"], "en")
+        self.assertEqual(jc["voice_cadence_wpm"], 165)
+
     def test_update_scene_persists_voice_metadata_and_script_snapshot(self):
         wd = self._work_dir()
         job_id = self._register_scene(wd)
@@ -90,13 +129,15 @@ class SceneNarratorTests(NarratorEditCase):
 
 
 class RemixNarratorTests(NarratorEditCase):
-    def test_remix_narrator_updates_film_and_every_scene(self):
+    def test_remix_narrator_uses_current_inherited_engine_for_narrated_scenes(self):
         wd = self._work_dir()
         self._register_scene(wd, 1)
         self._register_scene(wd, 2)
         voice_path = self.voices_dir / "narrator-b.wav"
         voice_path.write_bytes(b"voice")
         (wd / "job_config.json").write_text(json.dumps({
+            "style_name": "Amelia",
+            "tts_engine": "openf5",
             "default_voice": "Old",
             "voice_ref": "",
             "voice_vol": 100,
@@ -104,9 +145,17 @@ class RemixNarratorTests(NarratorEditCase):
             "ambient_vol": 0,
         }))
         (wd / "background_music.wav").write_bytes(b"music")
-        for sid in (1, 2):
+        for sid in (1, 2, 3, 4):
             (wd / f"scene_{sid:02d}_video.mp4").write_bytes(b"x" * 20000)
             (wd / f"scene_{sid:02d}_final.mp4").write_bytes(b"old" * 7000)
+        store = DurableStore.default()
+        try:
+            for sid, mode in ((3, "dialogue"), (4, "silent")):
+                store.upsert_scene(
+                    job_id_from_work_dir(wd), sid, title=f"Scene {sid}",
+                    narration="", metadata={"mode": mode, "voice": "Actor A"})
+        finally:
+            store.close()
 
         def fake_tts(_text, out_path, **kwargs):
             Path(out_path).write_bytes(b"RIFF" + b"x" * 2000)
@@ -123,6 +172,13 @@ class RemixNarratorTests(NarratorEditCase):
         cfg = {
             "voices": [{"name": "Narrator B", "path": str(voice_path)}],
             "tts_workers": [],
+            "default_style": "Default",
+            "default_tts_engine": "openf5",
+            "styles": [
+                {"name": "Default", "tts_engine": "openf5"},
+                {"name": "Parent", "tts_engine": "chatterbox-multilingual"},
+                {"name": "Amelia", "parent": "Parent"},
+            ],
         }
         with mock.patch.object(app, "load_config", return_value=cfg), \
                 mock.patch("pipeline.tts_worker.generate_narration", side_effect=fake_tts) as tts, \
@@ -135,9 +191,15 @@ class RemixNarratorTests(NarratorEditCase):
         jc = json.loads((wd / "job_config.json").read_text())
         self.assertEqual(jc["default_voice"], "Narrator B")
         self.assertEqual(jc["voice_ref"], str(voice_path))
+        self.assertEqual(jc["tts_engine"], "chatterbox-multilingual")
         self.assertEqual(tts.call_count, 2)
         for call in tts.call_args_list:
             self.assertEqual(call.kwargs["reference_wav"], voice_path)
+            self.assertEqual(call.kwargs["tts_engine"], "chatterbox-multilingual")
+        for sid in (3, 4):
+            self.assertEqual((wd / f"scene_{sid:02d}_final.mp4").read_bytes(), b"old" * 7000)
+            self.assertFalse((wd / f"scene_{sid:02d}_narration.wav").exists())
+        self.assertEqual(backend._film_tasks["narrator-test"]["scene_count"], 4)
 
         job_id = job_id_from_work_dir(wd)
         store = DurableStore.default()
@@ -145,7 +207,8 @@ class RemixNarratorTests(NarratorEditCase):
             rows = store.scene_rows(job_id)
         finally:
             store.close()
-        self.assertEqual([r["metadata"]["voice"] for r in rows], ["Narrator B", "Narrator B"])
+        self.assertEqual([r["metadata"]["voice"] for r in rows],
+                         ["Narrator B", "Narrator B", "Actor A", "Actor A"])
 
 
 if __name__ == "__main__":

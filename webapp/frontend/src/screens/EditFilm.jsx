@@ -2015,7 +2015,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narrator</span>
-          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Change the narrator for every scene and rebuild the final audio.</p>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Regenerate narration using this voice and the style's current voice model.</p>
           <div className="mt-24">
             <Field label="Narrator voice">
               <select className="select" value={voice} disabled={anyBusy}

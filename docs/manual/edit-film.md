@@ -198,8 +198,14 @@ on its own.
 
 ### Narrator
 
-Change the narrator voice for **every** scene and rebuild the final audio. Per-scene voices
-set in the Scenes tab are preserved.
+Regenerate the narrated scenes with the selected narrator voice and rebuild the final
+audio. This uses the film style's **current Voice model**, including an inherited model,
+and saves that engine on the film. Change **Settings → Styles → Narrator & audio → Voice
+model**, then press **Regenerate narration** to switch an already-rendered film to it.
+Dialogue and silent scenes keep their existing takes.
+
+The per-scene **Narration** re-render button also uses the style's current voice model.
+The film's saved narration language, pacing and mix settings stay in effect.
 
 ### Localize this film
 
