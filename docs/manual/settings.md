@@ -363,6 +363,11 @@ language on multilingual engines — and **narrator voice**. Plus the audio mix,
 end, never baked into a scene — off leaves a film with only its voices and room tone, and
 [Create](create.md#music) can override the choice per film. Acted films never get a score.
 
+Changing **Voice model** also applies when you next regenerate narration on an existing
+film, either from its **Narrator** card or a scene's **Narration** button. The new engine
+is saved on that film; its language, pacing and mix settings stay as recorded. See
+[Edit film → Narrator](edit-film.md#narrator).
+
 **Music model** (shown when music is on) picks what writes the bed:
 [ACE-Step 1.5](../models.md#music-engines-per-style) — the default, instrumental and quick
 — or the opt-in **MiniMax Music 3**, which is song-shaped and higher fidelity but takes

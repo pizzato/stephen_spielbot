@@ -8501,7 +8501,7 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
         jc = _film_job_config(wd)
         jc["default_voice"] = voice_name
         jc["voice_ref"] = str(_voice_ref_for_name(voice_name) or "")
-        _write_film_job_config(wd, jc)
+        _refresh_narration_engine(wd, jc)
 
         job_id = job_id_from_work_dir(wd)
         store = DurableStore.default()
@@ -8511,6 +8511,8 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
                 raise RuntimeError("No scene data found.")
             for row in rows:
                 meta = dict(row.get("metadata") or {})
+                if (meta.get("mode") or "narration") != "narration":
+                    continue
                 if voice_name:
                     meta["voice"] = voice_name
                 else:
@@ -8531,17 +8533,19 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
         gapp._persist_script_snapshot(wd, rows)
 
         order = _load_scene_order(wd) or [int(r.get("id") or 0) for r in rows]
-        row_by_id = {int(r.get("id") or 0): r for r in rows}
-        for idx, sid in enumerate(order, start=1):
-            row = row_by_id.get(int(sid))
-            if not row:
-                continue
+        narration_by_id = {
+            int(r.get("id") or 0): r for r in rows
+            if ((r.get("metadata") or {}).get("mode") or "narration") == "narration"
+        }
+        narration_order = [sid for sid in order if int(sid) in narration_by_id]
+        for idx, sid in enumerate(narration_order, start=1):
+            row = narration_by_id[int(sid)]
             _film_tasks[task_id] = {
                 "status": "running",
                 "step": "narration",
                 "scene_id": int(sid),
                 "current": idx,
-                "total": len(order),
+                "total": len(narration_order),
             }
             video_history.capture_current(wd, int(sid), wd / f"scene_{int(sid):02d}_final.mp4")
             _render_scene_narration(task_id, wd, int(sid), jc, row, voice_name)
@@ -15402,6 +15406,14 @@ def _write_film_job_config(work_dir: Path, jc: dict) -> None:
     (work_dir / "job_config.json").write_text(json.dumps(jc, indent=2))
 
 
+def _refresh_narration_engine(work_dir: Path, jc: dict) -> None:
+    """Use the style's current voice model when re-speaking an existing film."""
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, jc.get("style_name") or "")
+    jc["tts_engine"] = gapp.tts_engines.norm(ss.get("tts_engine"))
+    _write_film_job_config(work_dir, jc)
+
+
 def _scene_voice_name(row: dict, jc: dict) -> str:
     meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     voice = str(meta.get("voice") or "").strip()
@@ -16610,6 +16622,7 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
 
     # Delete stale files for the component and its dependents
     if component == "narration":
+        _refresh_narration_engine(wd, jc)
         # Don't delete anything up front: generate_narration overwrites the wav,
         # and the new final.mp4 is swapped in atomically (see _run_narration_rerender).
         # Pre-deleting final.mp4 would leave the scene with no video if the re-mux is
