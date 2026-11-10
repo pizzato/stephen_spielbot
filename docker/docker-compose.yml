@@ -14,6 +14,8 @@ services:
     build:
       context: ..
       dockerfile: docker/comfyui/Dockerfile
+      secrets:
+        - hf_token
       args:
         BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
         # v0.31.0+ is required by the w4a8 H3 checkpoints (the default Ref2VA
@@ -122,6 +124,12 @@ services:
       CURL_TIMEOUT: 30
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+
+secrets:
+  hf_token:
+    # The deploy script streams the controller's token to a temporary file.
+    # Direct anonymous builds work too; credentials never enter image layers.
+    file: ${HF_TOKEN_FILE:-/dev/null}
 
 volumes:
   comfyui-output:

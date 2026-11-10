@@ -70,7 +70,9 @@ CPU fallback is slower. Engine failures never silently switch SoulX to Seed-VC o
 vice versa.
 
 `make install` installs both engines and prefetches the SoulX conversion checkpoint,
-RMVPE pitch model and Whisper-base content encoder. To repair or update the controller
+RMVPE pitch model and Whisper-base content encoder. SoulX uses resumable HTTP and
+a per-worker Docker build cache; controller Hugging Face credentials are forwarded
+as a temporary build secret and over stdin for repairs. To repair or update the controller
 and existing workers:
 
 ```bash

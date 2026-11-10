@@ -15,6 +15,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/_config.sh
 source "$REPO_ROOT/scripts/_config.sh"
+# shellcheck source=scripts/_hf_token.sh
+source "$REPO_ROOT/scripts/_hf_token.sh"
 
 CONTAINER="${SVC_CONTAINER:-spielbot-worker-comfyui-1}"
 HOSTS=("$@")
@@ -69,8 +71,8 @@ INSIDE
     INSTALL_DIR="$("${DOCKER[@]}" exec -u root "$CONTAINER" mktemp -d /tmp/spielbot-soulx-install.XXXXXX)"
     tar -C "$REPO_ROOT/docker/comfyui/singing" -cf - . \
         | "${DOCKER[@]}" exec -i -u root "$CONTAINER" tar -xf - -C "$INSTALL_DIR"
-    "${DOCKER[@]}" exec -u root "$CONTAINER" bash "$INSTALL_DIR/install_soulx.sh" \
-        /opt/soulx-singer python3 --system-site-packages
+    hf_token | "${DOCKER[@]}" exec -i -u root "$CONTAINER" bash "$INSTALL_DIR/install_soulx.sh" \
+        /opt/soulx-singer python3 --system-site-packages --token-stdin
     "${DOCKER[@]}" exec -u root "$CONTAINER" rm -rf -- "$INSTALL_DIR"
     echo "done: SoulX-Singer SVC and Seed-VC installed in $CONTAINER on $HOST"
 done

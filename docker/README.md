@@ -18,6 +18,15 @@ ComfyUI models (~49 GB) are **not** baked into the image — they live on the ho
 and are mounted in, so images stay small and rebuild fast. Chatterbox weights
 (~3.5 GB) land in the TTS container's HF cache (pre-warmed by `make install`).
 
+SoulX's SVC/RMVPE/Whisper weights are prefetched into the ComfyUI image for
+offline use. These use resumable HTTP downloads and a per-host BuildKit cache,
+so an interrupted build keeps its partial downloads. The deploy script forwards
+the controller's `HF_TOKEN` or saved Hugging Face CLI token as a temporary build
+secret; the token is not written into the image or `docker/.env`. For a direct
+`docker compose build`, set `HF_TOKEN_FILE` to a token file, or leave it unset
+to fetch the public SoulX models anonymously. Worker re-voicing repairs also
+receive the controller's token over stdin.
+
 ## Prerequisites (per worker machine)
 
 - Docker Engine + Docker Compose v2

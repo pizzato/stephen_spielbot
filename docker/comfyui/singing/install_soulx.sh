@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Shared by Docker builds, controller installation, and worker repair.
-# Usage: install_soulx.sh DEST PYTHON [--system-site-packages]
+# Usage: install_soulx.sh DEST PYTHON [--system-site-packages] [--token-stdin]
 set -euo pipefail
 DEST="${1:?pass the SoulX destination}"
 PY="${2:?pass a Python 3.10-3.12 interpreter}"
 MODE="${3:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REF=81aeb3ae772c70093c3de74dc23c92d983801ae4
+
+if [[ "${4:-}" == "--token-stdin" ]]; then
+    HF_TOKEN="$(cat)"
+    export HF_TOKEN
+fi
 
 "$PY" -c 'import sys; assert (3, 10) <= sys.version_info[:2] <= (3, 12), "SoulX requires Python 3.10-3.12"'
 mkdir -p "$DEST"
