@@ -32,6 +32,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # shellcheck source=scripts/_worker_build.sh
 source "$REPO_ROOT/scripts/_worker_build.sh"
+# shellcheck source=scripts/_hf_token.sh
+source "$REPO_ROOT/scripts/_hf_token.sh"
 
 COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 TTS_PORT="${TTS_PORT:-8189}"
@@ -243,7 +245,14 @@ fi
 # --force-recreate: always fresh containers, so they pick up the host's CURRENT
 # NVIDIA device nodes (see the note in worker.sh start).
 echo "[deploy] building + starting containers on $TARGET (first build downloads torch — a few minutes) ..."
-_sh "cd ~/$REMOTE_BUILD_DIR/docker && docker compose up -d --build --force-recreate"
+hf_token | _sh "set -e
+umask 077
+HF_TOKEN_FILE=\$(mktemp /tmp/spielbot-hf-token.XXXXXX)
+trap 'rm -f \"\$HF_TOKEN_FILE\"' EXIT
+cat > \"\$HF_TOKEN_FILE\"
+export HF_TOKEN_FILE
+cd ~/$REMOTE_BUILD_DIR/docker
+docker compose up -d --build --force-recreate"
 
 # ── 6. Wait for health ────────────────────────────────────────────────────────
 echo -n "[deploy] waiting for ComfyUI (:$COMFYUI_PORT) and F5-TTS (:$TTS_PORT) on $TARGET"

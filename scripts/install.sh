@@ -265,7 +265,7 @@ fi
 
 for host in $HOSTS; do
     banner "Deploying container worker: $host"
-    MODEL_SOURCE="$MODEL_SOURCE" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" INSTALL_QWEN_TURBO="${INSTALL_QWEN_TURBO:-0}" bash "$REPO_ROOT/scripts/install_worker_container.sh" "$host"
+    HF_TOKEN="$HF_TOKEN" MODEL_SOURCE="$MODEL_SOURCE" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" INSTALL_QWEN_TURBO="${INSTALL_QWEN_TURBO:-0}" bash "$REPO_ROOT/scripts/install_worker_container.sh" "$host"
 done
 
 # Point the config at the containers we just deployed:

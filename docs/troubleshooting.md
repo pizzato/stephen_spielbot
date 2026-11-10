@@ -5,6 +5,28 @@ and most problems announce themselves there.
 
 ## Installation and startup
 
+### `make start` waits at a SoulX model download
+
+The first start after a worker-image change rebuilds each worker in turn. The
+ComfyUI build prefetches the 2.79 GB SoulX conversion checkpoint, RMVPE and
+Whisper-base. Docker's `#26` / `#46` step numbers can differ between builds;
+the `Prefetching ...` line identifies the model being fetched.
+
+SoulX uses resumable HTTP downloads because Xet transfers can stall on worker
+networks. Its build cache preserves partial and complete downloads across build
+retries on that host. Each worker has its own cache, so the first build still
+downloads the models once per host. Normal starts reuse the built image.
+
+The installer forwards `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the controller's
+saved Hugging Face CLI token to the build as a temporary BuildKit secret and
+to worker repairs over stdin. `HF_TOKEN_PATH`, `HF_HOME`, and `XDG_CACHE_HOME`
+are respected when locating saved credentials. The log reports
+`authentication: token available` or `authentication: anonymous`, without
+printing the token. These public SoulX models also support anonymous downloads.
+
+After updating, retry only the affected worker with `make start W=s2`.
+An already-running build continues using the downloader it started with.
+
 ### The app doesn't come up on :8001
 
 ```bash

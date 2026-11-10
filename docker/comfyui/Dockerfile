@@ -295,7 +295,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
 # SoulX-Singer SVC (Apache-2.0) uses its own pinned environment. Reuse CUDA
 # torch read-only; prefetch SVC/RMVPE/Whisper so new workers can sing offline.
 COPY docker/comfyui/singing /opt/spielbot-singing-install
-RUN bash /opt/spielbot-singing-install/install_soulx.sh \
+RUN --mount=type=secret,id=hf_token \
+    --mount=type=cache,id=spielbot-soulx-downloads,target=/var/cache/spielbot-soulx,sharing=locked \
+    HF_TOKEN_PATH=/run/secrets/hf_token SOULX_DOWNLOAD_CACHE=/var/cache/spielbot-soulx \
+    bash /opt/spielbot-singing-install/install_soulx.sh \
     /opt/soulx-singer python3 --system-site-packages
 
 EXPOSE 8188

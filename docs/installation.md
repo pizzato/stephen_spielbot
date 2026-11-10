@@ -123,6 +123,14 @@ SoulX models produce an install error rather than switching to another voice eng
 SoulX uses its prefetched local models; Seed-VC weights and the shared faster-whisper
 lyric-alignment model are downloaded on their first use.
 
+SoulX prefetching uses resumable HTTP downloads. Worker builds retain downloads
+in a per-host Docker build cache and copy the models into the finished image
+for offline use. The controller's `HF_TOKEN` (or saved Hugging Face CLI login)
+is forwarded as a temporary build secret and over stdin for worker repairs;
+the token is not stored in the image or worker configuration. The download log
+reports whether a token is available. See
+[slow startup downloads](troubleshooting.md#make-start-waits-at-a-soulx-model-download).
+
 ## Day-to-day commands
 
 ```bash

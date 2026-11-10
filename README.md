@@ -83,7 +83,9 @@ with no args to be prompted. Then open [http://localhost:8001](http://localhost:
 
 `make install` also installs SoulX-Singer SVC and Seed-VC on the controller and workers,
 plus the controller's shared re-voicing tools. Re-run it to repair missing runtimes or
-models; no separate re-voicing script needs to be run.
+models; no separate re-voicing script needs to be run. SoulX model downloads use
+resumable HTTP and a per-worker Docker build cache; the controller's Hugging Face
+token or saved CLI login is forwarded securely during installation and repair.
 
 ```bash
 make stop      # stop everything
