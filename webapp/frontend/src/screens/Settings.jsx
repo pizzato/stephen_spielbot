@@ -81,6 +81,13 @@ function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
   const [picking, setPicking] = useState(false)
   const [err, setErr] = useState('')
   const rendering = sheet.status === 'rendering'
+  // Config carries metadata; fetch the current preview URLs when the card loads or refreshes.
+  useEffect(() => {
+    let active = true
+    api.characterSheet(char.id).then((r) => { if (active) setSheet(r.sheet) })
+      .catch((e) => { if (active) setErr(e.message) })
+    return () => { active = false }
+  }, [char.id, initial])
   // A render outlives the request that started it, so poll until it lands.
   useEffect(() => {
     if (!rendering) return undefined
@@ -106,7 +113,7 @@ function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
       <div className="stack gap-2">
         <span className="label-sm" style={{ whiteSpace: 'nowrap' }}>Turnaround sheet</span>
         {sheet.status === 'ready' && <span className="muted" style={{ fontSize: 11 }}>
-          {sheet.engine === 'orbit' ? 'From a camera orbit' : 'From the image model'}
+          {sheet.engine === 'upload' ? 'Uploaded sheet' : sheet.engine === 'orbit' ? 'From a camera orbit' : 'From the image model'}
         </span>}
       </div>
       {disabled
@@ -126,6 +133,19 @@ function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
                 busy={busy} onApply={apply} onCancel={() => setPicking(false)} />
             : (
               <div className="row gap-8 row--wrap" style={{ alignItems: 'center' }}>
+                <label className={`btn btn--ghost${busy || rendering ? ' btn--disabled' : ''}`}>
+                  <Icon name="upload" /> Upload sheet
+                  <input type="file" accept="image/png,image/jpeg,image/webp" style={{ display: 'none' }}
+                    disabled={busy || rendering} onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) run(async () => {
+                        const result = await api.uploadCharacterSheet(char.id, file.name, await fileToDataUrl(file))
+                        setPicking(false)
+                        return result
+                      })
+                      e.target.value = ''
+                    }} />
+                </label>
                 <select className="input" style={{ width: 150 }} value={engine} disabled={busy || rendering}
                   onChange={(e) => setEngine(e.target.value)}>
                   {SHEET_ENGINES.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
@@ -134,15 +154,16 @@ function CharacterSheet({ char, initial, disabled, disabledNote, onLightbox }) {
                   onClick={build}>{sheet.status === 'ready' ? 'Build again' : 'Build sheet'}</Button>
                 {sheet.has_clip && sheet.status === 'ready' && !rendering &&
                   <Button variant="ghost" icon="film" disabled={busy} onClick={() => setPicking(true)}>Adjust frames</Button>}
-                {sheet.status === 'ready' && !rendering &&
+                {sheet.sheet_url && !rendering &&
                   <Button variant="ghost" icon="trash" disabled={busy}
                     onClick={() => run(() => api.clearCharacterSheet(char.id))}>Remove sheet</Button>}
               </div>
             )}
           <span className="muted" style={{ fontSize: 11.5 }}>
+            {sheet.sheet_url && 'Used by default for scene images, covers and acted-scene wardrobe. Explicit outfits and Portrait clothes only take precedence. '}
             {char.ref_image
               ? SHEET_ENGINES.find((e) => e.key === engine)?.hint
-              : 'Add a reference image first — the sheet is built from it.'}
+              : 'Upload a sheet, or add a reference image to build one.'}
           </span>
         </>)}
     </div>
@@ -3319,7 +3340,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                             style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         </div>
                       : <div className="muted" style={{ width: '100%', aspectRatio: '1 / 1', borderRadius: 8, border: '1px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, textAlign: 'center', padding: 12 }}>
-                          No reference image — text only.
+                          No portrait — upload one or use a turnaround sheet.
                         </div>}
                     {dirty
                       ? <span className="muted" style={{ fontSize: 12 }}><Icon name="circle-info" /> Unsaved edits — <strong>Save settings</strong> to upload or re-roll the look.</span>
@@ -3341,7 +3362,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
                       aspect="1 / 1" busy={charBusy === c.id || dirty} />
                     <CharacterSheet char={c} initial={c.sheet} disabled={dirty}
-                      disabledNote="Unsaved edits — Save settings to build a sheet."
+                      disabledNote="Unsaved edits — Save settings to upload or build a sheet."
                       onLightbox={(url) => setSheetLightbox(url)} />
                   </>) : (
                     <span className="muted" style={{ fontSize: 12 }}>Save settings, then upload or generate a reference image that pins this character's look (FLUX.2 only).</span>

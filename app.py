@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import zipfile
@@ -3377,11 +3378,17 @@ def scene_visuals(work_dir, scene_id: int, cast: list | None = None,
     name — same precedence as characters, so a film can override the shared
     studio without editing the catalogue."""
     names = {str(n).strip().lower() for n in (cast or [])}
+    cfg = cfg if cfg is not None else load_config()
+    for char in _job_characters(cfg, style_name, Path(work_dir)):
+        aliases = {str(n).strip().lower() for n in
+                   [char.get("name", ""), *(char.get("aliases") or [])] if n}
+        if names & aliases:
+            names.update(aliases)
     own = read_script_visuals(work_dir)
     taken = {v["name"].strip().lower() for v in own}
     catalogue = [
         {**a, "scenes": []}          # catalogue assets are not scene-scoped
-        for a in style_assets(cfg if cfg is not None else load_config(), style_name)
+        for a in style_assets(cfg, style_name)
         if a["name"].strip().lower() not in taken
     ]
     pool = own + catalogue
@@ -3434,14 +3441,16 @@ def _job_characters(cfg: dict, style_name: str, work_dir: Path | None = None) ->
     """The characters a single job can use: the catalogue characters visible
     to the style (global pool + its lineage) plus the script's own
     (per-script) characters. Each entry carries
-    a resolved absolute reference-image path under '_ref_path', so callers need
-    not know where a character's image is stored. A per-script character shadows
-    a catalogue character of the same name (the editor's edits win). Returns fresh
+    a resolved portrait path under '_ref_path' and any catalogue sheet under
+    '_sheet_path', so callers need not know where an image is stored. A per-script
+    character shadows a catalogue character of the same name (the editor's edits win). Returns fresh
     shallow copies so '_ref_path' never leaks back into persisted config."""
     out: list[dict] = []
     for c in _style_characters(cfg, style_name):
         c = dict(c)
         c["_ref_path"] = _character_image_path(c.get("ref_image"))
+        sheet = _sheet_paths(c["id"])[1] if c.get("id") else None
+        c["_sheet_path"] = sheet if sheet and sheet.is_file() else None
         out.append(c)
     if work_dir is not None:
         for c in _read_script_characters(work_dir):
@@ -3533,7 +3542,7 @@ def _scene_reference_characters(base_prompt: str, scene: dict, cfg: dict, style_
                                 work_dir: Path | None = None) -> list[tuple[dict, Path]]:
     """(character, image_path) pairs for the characters featured in this scene,
     capped at _MAX_SCENE_REFERENCES. A character contributes its image when it's
-    enabled, has a stored ref_image, and its name/alias appears in the scene's
+    enabled, has a sheet or portrait, and its name/alias appears in the scene's
     image prompt — not the narration, which names off-screen people (Phase 2 —
     FLUX.2 reference conditioning). Includes the script's own characters when a
     work_dir is given. Empty list when nothing matches."""
@@ -3541,11 +3550,12 @@ def _scene_reference_characters(base_prompt: str, scene: dict, cfg: dict, style_
     scene_text = _scene_character_text(base_prompt, scene, cfg, style_name, work_dir)
     pairs = []
     for c in chars:
-        if not c.get("enabled", True) or not c.get("ref_image"):
+        if not c.get("enabled", True):
             continue
         if not _character_mentions(scene_text, c):
             continue
-        p = c.get("_ref_path") or _character_image_path(c.get("ref_image"))
+        p = None if (scene.get("metadata") or {}).get("no_wardrobe") else c.get("_sheet_path")
+        p = p or c.get("_ref_path")
         if p and p.exists():
             pairs.append((c, p))
     if len(pairs) > _MAX_SCENE_REFERENCES:
@@ -3591,9 +3601,9 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
                                 allow_appearance_override: bool = False) -> tuple[str, list[Path]]:
     """Character-consistent prompt + reference images for one scene image render.
 
-    Reference-capable engines receive portraits with named slot bindings, not
-    appearance descriptions. Music shots require those portraits for any named
-    cast and remove legacy style prefixes. Non-reference engines retain text
+    Reference-capable engines receive sheets (falling back to portraits) with
+    named slot bindings, not appearance descriptions. Music shots require references
+    for any named cast and remove legacy style prefixes. Non-reference engines retain text
     injection for other formats. Guided covers can allow appearance overrides."""
     music_shot = bool((scene.get("metadata") or {}).get("singing"))
     if music_shot:
@@ -3611,7 +3621,7 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
                    if not any(_character_mentions(name, c) for c, _p in pairs)]
         if missing:
             raise RuntimeError("Missing character reference image: " + ", ".join(missing)
-                               + ". Generate or attach their portraits before rendering.")
+                               + ". Upload a sheet or attach their portraits before rendering.")
         if required and not conditions_on_refs:
             raise RuntimeError("This music scene needs an image model with character "
                                "reference conditioning. Select a reference-capable image model.")
@@ -3853,7 +3863,9 @@ SHEET_ENGINES = ("image", "orbit")
 
 def _character_sheet_dir(char_id: str) -> Path:
     """Per-character sheet directory (basename-only id guards traversal)."""
-    return _characters_dir() / "sheets" / Path(str(char_id or "")).name
+    if not char_id or char_id in (".", "..") or Path(char_id).name != char_id:
+        raise ValueError("Invalid character id.")
+    return _characters_dir() / "sheets" / char_id
 
 
 def _sheet_paths(char_id: str) -> tuple[Path, Path, Path, Path]:
@@ -3892,6 +3904,27 @@ def _write_sheet_state(char_id: str, **fields) -> dict:
     state.pop("has_clip", None)
     meta.write_text(json.dumps(state, indent=2))
     return character_sheet_state(char_id)
+
+
+def set_character_sheet(char_id: str, raw: bytes) -> dict:
+    """Import a turnaround image without changing the character's portrait."""
+    from PIL import Image, ImageOps
+
+    _find_character(load_config(), char_id)
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+    except Exception as exc:
+        raise ValueError(f"Could not read that sheet image: {exc}") from exc
+    d, sheet, clip, _ = _sheet_paths(char_id)
+    d.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=d) as staging:
+        uploaded = Path(staging) / "sheet.png"
+        image.save(uploaded, "PNG")
+        uploaded.replace(sheet)
+    clip.unlink(missing_ok=True)
+    return _write_sheet_state(char_id, status="ready", engine="upload",
+                              panels=[], duration=0.0, error="")
 
 
 def _stitch_sheet(clip: Path, times: list[float], out: Path) -> Path:
@@ -3948,8 +3981,8 @@ def generate_character_sheet(char_id: str, engine: str = "image",
     *engine* is ``"image"`` (the owning style's image engine paints the whole
     strip) or ``"orbit"`` (H3 Ref2VA films a turn; the panels are its frames).
     Both anchor on the character's reference image, so one is required. The
-    sheet is stored beside that reference and never becomes it — promoting a
-    panel stays the user's call. Returns the new sheet state; raises RuntimeError
+    sheet is stored beside that portrait and used by default for generation,
+    while the portrait stays saved separately. Returns the new sheet state; raises RuntimeError
     when no worker is reachable, and stamps the failure into the state so the UI
     can show what went wrong instead of spinning forever.
     """
@@ -3969,46 +4002,49 @@ def generate_character_sheet(char_id: str, engine: str = "image",
     d, sheet, clip, _ = _sheet_paths(char_id)
     d.mkdir(parents=True, exist_ok=True)
 
-    worker_urls = _preview_worker_urls()
-    if not worker_urls:
-        raise RuntimeError("No cluster workers reachable to build a character sheet.")
-    pool = WorkerPool(worker_urls)
     _write_sheet_state(char_id, status="rendering", engine=engine, error="")
-    url = pool.acquire()
+    url = None
     try:
-        if engine == "orbit":
-            eng = engines.resolve_reference(cfg, settings.get("reference_engine"))
-            # The prompt quotes the clip's REAL seconds: H3 rounds the request up
-            # to its frame grid, and staging written for a shorter clip lands the
-            # push-in on top of the front view.
-            duration = h3_frame_count(SHEET_ORBIT_SECONDS) / H3_FPS
-            width, height = SHEET_ORBIT_SIZE
-            prompt = prompt_store.user(
-                "character_sheet_orbit", style_line=style_line, who=who, extra=extra,
-                orbit_end=f"{duration * SHEET_ORBIT_END:.1f}", duration=f"{duration:.1f}")
-            generate_video_h3_ref(eng, prompt, [ref], clip, width=width, height=height,
-                                  duration_seconds=SHEET_ORBIT_SECONDS, comfy_url=url)
-            duration = _clip_duration(clip) or duration
-            times = [round(duration * f, 2) for f in _SHEET_DEFAULT_TIMES]
-            _stitch_sheet(clip, times, sheet)
-            state = _write_sheet_state(char_id, status="ready", engine=engine,
-                                       panels=times, duration=round(duration, 2))
-        else:
-            eng = engines.resolve(cfg, settings.get("image_engine"))
-            width, height = SHEET_IMAGE_SIZE
-            prompt = prompt_store.user("character_sheet_image", style_line=style_line,
-                                       who=who, extra=extra, panels=SHEET_PANELS)
-            clip.unlink(missing_ok=True)   # an image sheet has no frames to re-pick
-            generate_with_engine(eng, prompt, sheet, width=width, height=height,
-                                 reference_images=[ref], comfy_url=url)
-            state = _write_sheet_state(char_id, status="ready", engine=engine,
-                                       panels=[], duration=0.0)
+        worker_urls = _preview_worker_urls()
+        if not worker_urls:
+            raise RuntimeError("No cluster workers reachable to build a character sheet.")
+        pool = WorkerPool(worker_urls)
+        url = pool.acquire()
+        with tempfile.TemporaryDirectory(dir=d) as staging:
+            rendered_sheet = Path(staging) / "sheet.png"
+            rendered_clip = Path(staging) / "orbit.mp4"
+            if engine == "orbit":
+                eng = engines.resolve_reference(cfg, settings.get("reference_engine"))
+                # H3 rounds to its own frame grid; stage the turn against the real length.
+                duration = h3_frame_count(SHEET_ORBIT_SECONDS) / H3_FPS
+                width, height = SHEET_ORBIT_SIZE
+                prompt = prompt_store.user(
+                    "character_sheet_orbit", style_line=style_line, who=who, extra=extra,
+                    orbit_end=f"{duration * SHEET_ORBIT_END:.1f}", duration=f"{duration:.1f}")
+                generate_video_h3_ref(eng, prompt, [ref], rendered_clip, width=width, height=height,
+                                      duration_seconds=SHEET_ORBIT_SECONDS, comfy_url=url)
+                duration = _clip_duration(rendered_clip) or duration
+                times = [round(duration * f, 2) for f in _SHEET_DEFAULT_TIMES]
+                _stitch_sheet(rendered_clip, times, rendered_sheet)
+                state = {"panels": times, "duration": round(duration, 2)}
+                rendered_clip.replace(clip)
+            else:
+                eng = engines.resolve(cfg, settings.get("image_engine"))
+                width, height = SHEET_IMAGE_SIZE
+                prompt = prompt_store.user("character_sheet_image", style_line=style_line,
+                                           who=who, extra=extra, panels=SHEET_PANELS)
+                generate_with_engine(eng, prompt, rendered_sheet, width=width, height=height,
+                                     reference_images=[ref], comfy_url=url)
+                state = {"panels": [], "duration": 0.0}
+                clip.unlink(missing_ok=True)
+            rendered_sheet.replace(sheet)
+        return _write_sheet_state(char_id, status="ready", engine=engine, error="", **state)
     except Exception as exc:
         _write_sheet_state(char_id, status="error", error=str(exc)[:300])
         raise
     finally:
-        pool.release(url)
-    return state
+        if url is not None:
+            pool.release(url)
 
 
 def repick_character_sheet(char_id: str, times: list[float]) -> dict:
@@ -4033,6 +4069,7 @@ def repick_character_sheet(char_id: str, times: list[float]) -> dict:
 
 def clear_character_sheet(char_id: str) -> dict:
     """Delete a character's sheet, its orbit clip and its metadata."""
+    _find_character(load_config(), char_id)
     d = _character_sheet_dir(char_id)
     if d.exists():
         shutil.rmtree(d, ignore_errors=True)
@@ -4607,11 +4644,20 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
             meta["cast"] = synced["cast"]
     portrait_for, voice_for, voice_name_for, looks_like = _performance_refs(
         cfg, work_dir, style_name)
+    sheets = {}
+    if not meta.get("no_wardrobe"):
+        for char in _job_characters(cfg, style_name, work_dir):
+            if not char.get("enabled", True) or not char.get("_sheet_path"):
+                continue
+            for name in [char.get("name", ""), *(char.get("aliases") or [])]:
+                sheets[str(name).strip().lower()] = char
     pictures, audios = [], []
     for name in (meta.get("cast") or []):
         if not name:
             continue
         path = portrait_for(name)
+        if path is None and name.strip().lower() in sheets:
+            path = sheets[name.strip().lower()]["_sheet_path"]
         if path is not None:
             pictures.append({"slot": len(pictures) + 1, "name": name,
                              "kind": "character",
@@ -4652,6 +4698,23 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
                          "description": vis.get("description", ""),
                          "usage": vis.get("usage", ""),
                          "id": vis["id"], "path": vis["_ref_path"]})
+    # Saved sheets supply the default clothes. An explicit outfit (including
+    # one named by alias) wins; a sheet already used for identity needs no second slot.
+    for name in (meta.get("cast") or []):
+        char = sheets.get(str(name or "").strip().lower())
+        if not char:
+            continue
+        aliases = {str(n).strip().lower() for n in
+                   [char["name"], *(char.get("aliases") or [])]}
+        if any(p["kind"] == "wardrobe" and
+               (not p.get("character") or p["character"].strip().lower() in aliases)
+               for p in pictures):
+            continue
+        sheet = str(char["_sheet_path"])
+        if any(p["path"] == sheet for p in pictures):
+            continue
+        pictures.append({"slot": len(pictures) + 1, "name": f"{name}'s sheet",
+                         "kind": "wardrobe", "character": name, "path": sheet})
     speakers = _perf.speakers_in(_perf.norm_lines(meta.get("lines")))
     for name in speakers[:_perf.MAX_SPEAKERS_PER_SCENE]:
         path = voice_for(name)

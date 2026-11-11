@@ -5,6 +5,9 @@ Drives the real FastAPI app with the generators mocked — the point under test 
 the bookkeeping (which engine ran, what state the UI sees, which frames were
 cut), not the models. The orbit's frame extraction runs for real against a tiny
 ffmpeg-generated clip, because that is where the timestamps have to line up."""
+import base64
+import io
+import json
 import os
 import subprocess
 import tempfile
@@ -46,7 +49,7 @@ class CharacterSheetTests(unittest.TestCase):
             p = mock.patch.object(gapp, attr, value)
             p.start()
             self.addCleanup(p.stop)
-        db = mock.patch.dict(os.environ, {"VIDEO_GEN_DB": str(tmp / "orchestrator.sqlite3")})
+        db = mock.patch.dict(os.environ, {"SPIELBOT_ORCHESTRATOR_DB": str(tmp / "orchestrator.sqlite3")})
         db.start()
         self.addCleanup(db.stop)
         self.config_file.write_text(yaml.safe_dump({
@@ -111,6 +114,10 @@ class CharacterSheetTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("reference image", r.json()["detail"])
 
+    def test_missing_portrait_file_is_rejected_before_starting_a_build(self):
+        (gapp._characters_dir() / "char_test.png").unlink()
+        self.assertEqual(self._build("image").status_code, 400)
+
     @unittest.skipUnless(_has_ffmpeg(), "ffmpeg not available")
     def test_orbit_sheet_keeps_its_clip_and_panels_can_be_repicked(self):
         with mock.patch.object(gapp, "generate_video_h3_ref", self._fake_orbit):
@@ -173,6 +180,107 @@ class CharacterSheetTests(unittest.TestCase):
     def test_config_payload_carries_each_character_s_sheet_state(self):
         cfg = self.client.get("/api/config").json()["config"]
         self.assertEqual(cfg["characters"][0]["sheet"]["status"], "none")
+
+    def _upload(self, raw=None, char_id="char_test"):
+        if raw is None:
+            data = io.BytesIO()
+            Image.new("RGB", (160, 40), "blue").save(data, "JPEG")
+            raw = data.getvalue()
+        return self.client.post("/api/characters/sheet/upload", json={
+            "char_id": char_id, "data": "data:image/jpeg;base64," + base64.b64encode(raw).decode()})
+
+    def test_upload_sheet_without_a_portrait_or_worker(self):
+        cfg = gapp.load_config()
+        cfg["characters"][0]["ref_image"] = ""
+        gapp.save_config(cfg)
+        with mock.patch.object(gapp, "_preview_worker_urls", return_value=[]):
+            response = self._upload()
+        self.assertEqual(response.status_code, 200)
+        state = response.json()["sheet"]
+        self.assertEqual((state["status"], state["engine"]), ("ready", "upload"))
+        self.assertTrue(state["sheet_url"])
+        self.assertFalse(state["has_clip"])
+        with Image.open(gapp._sheet_paths("char_test")[1]) as image:
+            self.assertEqual((image.format, image.size), ("PNG", (160, 40)))
+        self.assertEqual(gapp.load_config()["characters"][0]["ref_image"], "")
+
+    def test_upload_replaces_orbit_and_removes_obsolete_frame_choices(self):
+        d, _, clip, _ = gapp._sheet_paths("char_test")
+        d.mkdir(parents=True)
+        clip.write_bytes(b"old orbit")
+        gapp._write_sheet_state("char_test", status="ready", engine="orbit",
+                               panels=[0.5], duration=3)
+        state = self._upload().json()["sheet"]
+        self.assertEqual(state["panels"], [])
+        self.assertEqual(state["duration"], 0)
+        self.assertEqual(state["clip_url"], "")
+
+    def test_uploaded_sheet_is_visible_on_film_reference_and_cast_cards(self):
+        cfg = gapp.load_config()
+        cfg["characters"][0]["ref_image"] = ""
+        gapp.save_config(cfg)
+        self._upload()
+        wd = self.output_dir / "film"
+        wd.mkdir()
+        (wd / "script.json").write_text(json.dumps([
+            {"id": 1, "image_prompt": "Ada at a desk", "metadata": {"cast": ["Ada"]}}]))
+        with mock.patch.object(backend, "_job_style_name", return_value="Hero"):
+            card = backend._script_chars_ok(wd)["catalogue"][0]
+        self.assertTrue(card["has_image"])
+        self.assertIn("sheet.png", card["image_url"])
+        cast = backend._cast_member(wd, gapp.load_config(), "Hero", "Ada")
+        self.assertTrue(cast["has_image"])
+        self.assertIn("sheet.png", cast["image_url"])
+
+    def test_invalid_upload_keeps_the_existing_sheet(self):
+        self.assertEqual(self._upload().status_code, 200)
+        sheet = gapp._sheet_paths("char_test")[1]
+        before = sheet.read_bytes()
+        self.assertEqual(self._upload(b"not an image").status_code, 400)
+        self.assertEqual(sheet.read_bytes(), before)
+        self.assertEqual(gapp.character_sheet_state("char_test")["status"], "ready")
+
+    def test_upload_rejects_unknown_characters(self):
+        self.assertEqual(self._upload(char_id="unknown").status_code, 400)
+
+    def test_invalid_sheet_ids_cannot_clear_other_characters_sheets(self):
+        self._upload()
+        for char_id in ("", ".", "..", "../char_test"):
+            response = self.client.post("/api/characters/sheet/clear", json={"char_id": char_id})
+            self.assertEqual(response.status_code, 400)
+        self.assertTrue(gapp._sheet_paths("char_test")[1].exists())
+
+    def test_sheet_mutations_are_blocked_during_a_render(self):
+        with backend._sheet_lock:
+            backend._sheet_jobs.add("char_test")
+        self.addCleanup(backend._sheet_jobs.discard, "char_test")
+        self.assertEqual(self._upload().status_code, 409)
+        response = self.client.post("/api/characters/sheet/clear", json={"char_id": "char_test"})
+        self.assertEqual(response.status_code, 409)
+
+    def test_missing_worker_reports_error_in_sheet_state(self):
+        with mock.patch.object(gapp, "_preview_worker_urls", return_value=[]):
+            self._build("image")
+            self._wait()
+        state = gapp.character_sheet_state("char_test")
+        self.assertEqual(state["status"], "error")
+        self.assertIn("No cluster workers", state["error"])
+
+    def test_failed_rebuild_preserves_the_existing_sheet_and_orbit(self):
+        self._upload()
+        _, sheet, clip, _ = gapp._sheet_paths("char_test")
+        before = sheet.read_bytes()
+        clip.write_bytes(b"kept orbit")
+
+        def fail(engine, prompt, out, **kwargs):
+            out.write_bytes(b"partial image")
+            raise RuntimeError("worker disconnected")
+
+        with mock.patch.object(gapp, "generate_with_engine", fail):
+            self._build("image")
+            self._wait()
+        self.assertEqual(sheet.read_bytes(), before)
+        self.assertEqual(clip.read_bytes(), b"kept orbit")
 
     def _wait(self, timeout: float = 20.0):
         """Sheets render on a daemon thread; wait for it to leave 'rendering'."""

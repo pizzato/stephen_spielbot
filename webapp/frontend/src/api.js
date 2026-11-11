@@ -87,6 +87,7 @@ export const api = {
   // panels can be re-picked from its kept clip without another render.
   characterSheet: (charId) => req('GET', `/characters/sheet?char_id=${encodeURIComponent(charId)}`),
   buildCharacterSheet: (charId, engine, extraPrompt) => req('POST', '/characters/sheet', { char_id: charId, engine, extra_prompt: extraPrompt || '' }),
+  uploadCharacterSheet: (charId, filename, data) => req('POST', '/characters/sheet/upload', { char_id: charId, filename, data }),
   pickCharacterSheetPanels: (charId, times) => req('POST', '/characters/sheet/panels', { char_id: charId, times }),
   clearCharacterSheet: (charId) => req('POST', '/characters/sheet/clear', { char_id: charId }),
 

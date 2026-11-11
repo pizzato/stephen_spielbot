@@ -548,14 +548,20 @@ version picks apply after **Save settings**. Generated portraits use the owning 
 image model and visual look (global characters use the default style's). Films inherit
 their style's cast and can add film-specific characters of their own.
 
-Each card also builds a **turnaround sheet** — front, three-quarter, side and back views
-in one strip, from the character's reference image. Pick the engine each time you build
+Each saved card also has **Upload sheet** to import a PNG, JPEG or WebP turnaround
+image, even without a portrait or worker. Or build a **turnaround sheet** — front,
+three-quarter, side and back views in one strip, from the character's reference image.
+Pick the engine each time you build
 one: the **image model** takes seconds and lays out four clean panels but only
 approximates the face, while the **camera orbit** films the character turning on a worker
 (minutes) and keeps the real face and the real back of the head. An orbit keeps its clip,
 so **Adjust frames** lets you drag each panel to the frame you actually want and
-re-stitch without rendering again. The sheet is a reference for you — it never replaces
-the character's reference image.
+re-stitch without rendering again. Saved sheets are used by default for scene images,
+first frames and covers with reference-capable models, and as wardrobe references
+alongside portraits in acted and singing scenes. Explicit wardrobe assets take precedence;
+**Portrait clothes only** disables the default sheet for a scene. The portrait stays saved
+and is the fallback after removing a sheet. Uploading replaces any orbit clip and frame
+choices. Re-render existing images and takes to apply a changed sheet.
 
 See [Characters](../characters.md) for how consistency is enforced across scenes.
 

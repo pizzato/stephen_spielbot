@@ -42,7 +42,7 @@ def ensure_first_frame(
     logger.info("  [%s] scene %d: generating first frame inline (%s)",
                 comfy_url, scene.id, engine.get("key"))
     prompt, refs = scene.image_prompt, None
-    if engine.get("family") == "h3-first-frame":
+    if engine.get("t2i_ref_workflow"):
         from app import _characters_prompt_and_refs
         from pipeline.performance import scene_meta
         cfg = cfg or {}

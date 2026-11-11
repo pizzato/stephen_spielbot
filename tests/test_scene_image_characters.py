@@ -54,6 +54,86 @@ class SceneImageCharacterTests(TempConfigCase):
         self.assertIn("character identities in <image1>", prompt)
         self.assertIn("Scene: the referenced character beside a timber workbench", prompt)
 
+    def _sheet(self):
+        sheet = app._sheet_paths("mick")[1]
+        sheet.parent.mkdir(parents=True)
+        Image.new("RGB", (32, 8), "blue").save(sheet)
+        return sheet
+
+    def test_scene_and_film_rerender_prefer_available_sheet(self):
+        from webapp.backend.main import _film_scene_image_prompt
+        sheet = self._sheet()
+        self.assertEqual(self._prompt("Mick Dargo beside a workbench.")[1], [sheet])
+        row = {"image_prompt": "Mick Dargo beside a workbench.",
+               "metadata": {"singing": True}}
+        self.assertEqual(_film_scene_image_prompt(
+            {}, row, self.cfg, self.wd, self.engine)[1], [sheet])
+        sheet.unlink()
+        self.assertEqual(self._prompt("Mick Dargo beside a workbench.")[1], [self.ref])
+
+    def test_cover_prefers_sheet_and_retains_requested_changes(self):
+        sheet = self._sheet()
+        prompt, refs = app.build_cover_generation(
+            self.wd, self.cfg, "Mick", instruction="Mick Dargo in a red coat",
+            engine=self.engine)
+        self.assertEqual(refs, [sheet])
+        self.assertIn("Apply the requested changes", prompt)
+
+    def test_sheet_can_supply_identity_without_a_portrait(self):
+        sheet = self._sheet()
+        self.cfg["characters"][0]["ref_image"] = ""
+        self.assertEqual(self._prompt("Mick Dargo beside a workbench.")[1], [sheet])
+
+    def test_inline_first_frame_uses_the_sheet_with_an_image_model(self):
+        from pipeline.llm import Scene
+        from pipeline.scene_video import ensure_first_frame
+        sheet = self._sheet()
+        scene = Scene(1, "Workshop", "Mick Dargo beside a workbench.", "", "", "")
+        with mock.patch("pipeline.scene_video.generate_with_engine") as generate:
+            ensure_first_frame(scene, self.wd, 832, 480, comfy_url="http://worker",
+                               image_engine=self.engine,
+                               cfg={**self.cfg, "style_name": "Mick"})
+        self.assertEqual(generate.call_args.kwargs["reference_images"], [sheet])
+
+    def test_worker_image_task_uses_the_sheet_with_an_image_model(self):
+        import worker_agent
+        sheet = self._sheet()
+        task = mock.Mock()
+        task.payload = {"work_dir": str(self.wd), "scene_id": 1,
+                        "image_prompt": "Mick Dargo beside a workbench.", "style_name": "Mick"}
+        with mock.patch.object(worker_agent.engines, "resolve_first_frame", return_value=self.engine), \
+                mock.patch.object(app, "load_config", return_value=self.cfg), \
+                mock.patch.object(worker_agent, "generate_with_engine") as generate:
+            store = mock.Mock()
+            store.skip_task_if_artifact_exists.return_value = False
+            worker_agent._execute_scene_image(store, task, "http://worker")
+        self.assertEqual(generate.call_args.kwargs["reference_images"], [sheet])
+
+    def test_portrait_only_first_frame_ignores_sheet(self):
+        self._sheet()
+        scene = {"image_prompt": "Mick Dargo beside a workbench.",
+                 "metadata": {"cast": ["Mick Dargo"], "no_wardrobe": True}}
+        self.assertEqual(app._characters_prompt_and_refs(
+            scene["image_prompt"], scene, self.cfg, "Mick", self.wd,
+            engine=self.engine)[1], [self.ref])
+
+    def test_script_override_does_not_inherit_catalogue_sheet(self):
+        self._sheet()
+        local = self.wd / "characters" / "local.png"
+        local.parent.mkdir()
+        Image.new("RGB", (8, 8), "red").save(local)
+        (self.wd / "characters.json").write_text(json.dumps([{
+            "id": "local", "name": "Mick Dargo", "description": "a local look",
+            "ref_image": "local.png"}]))
+        self.assertEqual(self._prompt("Mick Dargo beside a workbench.")[1], [local])
+
+    def test_sheet_obeys_disabled_characters_and_style_scope(self):
+        self._sheet()
+        self.cfg["characters"][0]["enabled"] = False
+        self.assertEqual(app._scene_reference_images("Mick Dargo", {}, self.cfg, "Mick"), [])
+        self.cfg["characters"][0]["enabled"] = True
+        self.assertEqual(app._scene_reference_images("Mick Dargo", {}, self.cfg, "Music"), [])
+
     def test_authored_cast_keeps_reference_when_shot_uses_pronoun(self):
         prompt, refs = self._prompt("He waits beside a timber workbench.", ["Mick Dargo"])
         self.assertEqual(refs, [self.ref])

@@ -487,11 +487,16 @@ outfit — portrait-conditioned, so the face matches — which locks the exact g
 across scenes: measured on H3, the same outfit written in *text* stays "an emerald
 jacket" but is re-tailored in every scene (cravat becomes jabot, braid becomes leaf
 embroidery), while a worn sheet holds one costume. **Use character's sheet** copies the
-character's own [turnaround sheet](characters.md#turnaround-sheets) in instead. The
-usual cascade applies: a catalogue outfit reaches every film in its scope, a film's own
+character's own [turnaround sheet](characters.md#turnaround-sheets) in instead.
+Saved or uploaded character sheets already apply automatically as wardrobe references
+for cast members without an explicit applicable outfit; the portrait continues to anchor
+the face. A sheet can also supply identity when no portrait exists, using just one slot.
+Scene first frames and covers prefer the sheet when their image model supports references.
+The usual cascade applies: a catalogue outfit reaches every film in its scope, a film's own
 artifact of the same name shadows it, the artifact's *Used in* list scopes it to chosen
 scenes — and an acted scene can opt out entirely with **Portrait clothes only** (scene
-editor), which stands every wardrobe reference down. Without an opening frame, clothing
+editor), which stands every wardrobe reference down and uses the portrait for new scene
+images. Without an opening frame, clothing
 authority returns to the portraits (a flashback, or a costume change inside one film).
 With an opening frame, its visible outfit always remains unchanged throughout the take;
 wardrobe references can supply only unseen details consistent with that outfit. To change
