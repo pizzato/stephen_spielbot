@@ -115,7 +115,7 @@ Everything lives at **[pizzato.github.io/stephen_spielbot](https://pizzato.githu
 The source for that site is [`docs/`](docs/) — `make docs-serve` previews it locally.
 Guides that also read well on GitHub:
 
-- [`docs/characters.md`](docs/characters.md) — recurring characters: consistent looks, reference images, voices
+- [`docs/characters.md`](docs/characters.md) — recurring characters: consistent looks, reference images, voices, and uploaded or generated turnaround sheets used automatically for images and acted-scene wardrobe
 - [`docs/performance_films.md`](docs/performance_films.md) — acted scenes and performance films: portraits + dialogue straight to video, no first frame or TTS
 - [`docs/orchestration.md`](docs/orchestration.md) — the durable SQLite task layer and how renders execute
 - [`docs/browsing-performance.md`](docs/browsing-performance.md) — browsing optimisations, measurements, and remaining bottlenecks

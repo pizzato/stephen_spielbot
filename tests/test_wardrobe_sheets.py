@@ -101,6 +101,58 @@ class WardrobeSheetTests(unittest.TestCase):
         self.assertTrue((gapp._script_visuals_dir(self.work_dir) / "vis_1.png").exists())
 
     # ── the per-scene off-switch ────────────────────────────────────────────
+    def _default_sheet_refs(self, **meta):
+        return gapp.resolve_performance_references(
+            {"cast": ["Ada"], "lines": [], **meta}, gapp.load_config(),
+            self.work_dir, "Hero", scene_id=1)
+
+    def _sheet(self):
+        sheet = gapp._sheet_paths("char_a")[1]
+        sheet.parent.mkdir(parents=True)
+        Image.new("RGB", (40, 10), "blue").save(sheet)
+        return sheet
+
+    def test_sheet_is_default_wardrobe_for_acted_and_singing_scenes(self):
+        from pipeline.performance import build_h3_prompt
+        sheet = self._sheet()
+        for singing in (False, True):
+            refs = self._default_sheet_refs(singing=singing)["pictures"]
+            self.assertEqual([p["kind"] for p in refs], ["character", "wardrobe"])
+            self.assertEqual(refs[1]["path"], str(sheet))
+            prompt = build_h3_prompt({"cast": ["Ada"], "singing": singing}, picture_names=refs)
+            self.assertIn("defines Ada's face, hair and build only", prompt)
+            self.assertIn("defines the clothes Ada wears only", prompt)
+        self.assertEqual(len(self._default_sheet_refs(no_wardrobe=True)["pictures"]), 1)
+        self.assertEqual(self._default_sheet_refs(cast=[])["pictures"], [])
+
+    def test_explicit_film_outfit_by_alias_overrides_default_sheet(self):
+        self._sheet()
+        d = gapp._script_visuals_dir(self.work_dir)
+        d.mkdir(parents=True)
+        Image.new("RGB", (8, 8), "red").save(d / "outfit.png")
+        gapp.write_script_visuals(self.work_dir, [{
+            "id": "outfit", "name": "Gala", "kind": "wardrobe", "character": "Miss A",
+            "ref_image": "outfit.png", "scenes": [1]}])
+        refs = self._default_sheet_refs()["pictures"]
+        self.assertEqual([p["name"] for p in refs], ["Ada", "Gala"])
+
+    def test_sheet_without_portrait_supplies_one_identity_reference(self):
+        sheet = self._sheet()
+        cfg = gapp.load_config()
+        cfg["characters"][0]["ref_image"] = ""
+        gapp.save_config(cfg)
+        refs = self._default_sheet_refs()["pictures"]
+        self.assertEqual([(p["kind"], p["path"]) for p in refs], [("character", str(sheet))])
+
+    def test_default_sheet_respects_opening_frame_outfit(self):
+        from pipeline.performance import build_h3_prompt
+        self._sheet()
+        Image.new("RGB", (8, 8), "red").save(self.work_dir / "scene_01_preview.png")
+        refs = self._default_sheet_refs()["pictures"]
+        self.assertEqual([p["kind"] for p in refs], ["character", "frame", "wardrobe"])
+        prompt = build_h3_prompt({"cast": ["Ada"]}, picture_names=refs)
+        self.assertIn("never replace or change the clothes visible in the opening image", prompt)
+
     def test_no_wardrobe_drops_only_the_wardrobe_reference(self):
         img = gapp._assets_dir(); img.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (8, 8), "red").save(img / "ast_w.png")

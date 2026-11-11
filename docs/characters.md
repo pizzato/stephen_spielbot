@@ -138,8 +138,9 @@ placeholder with no UI.
   image prompt whenever the scene mentions the character's name/alias and the canonical
   description isn't already present. Matching: `_character_mentions()`; scene cast
   selection: `_characters_for_scene()`. Reference-capable models instead receive the
-  portrait and a named reference-slot binding, without this descriptive injection.
-  A scene using a reference-capable model fails if any named character lacks a portrait.
+  sheet (or portrait when no sheet exists) and a named reference-slot binding,
+  without this descriptive injection. A scene using a reference-capable model fails
+  if any named character lacks both a sheet and a portrait.
   Music scenes with named characters also require a reference-capable image model;
   they cannot silently fall back to generating a similar person from words.
 
@@ -179,9 +180,17 @@ FLUX.1 schnell ignores them (logged, no crash).
 ## Turnaround sheets
 
 A **turnaround sheet** is several views of one character — front, three-quarter, side,
-back — in a single strip, built from that character's reference image. It is a reference
-*for you*: nothing in the pipeline consumes it automatically, and it never replaces the
-character's reference image.
+back — in a single image. **Upload sheet** on a saved character's card imports a
+PNG, JPEG or WebP without needing a portrait or a worker. You can also build one from
+the character's portrait with either engine below. The portrait remains saved separately.
+
+An available sheet is **used automatically** for that character's scene images,
+first frames and covers, with the portrait as fallback. This applies to initial
+generation, previews and re-renders, including music videos. Reference-capable image
+models are required to condition on either image; text-only models still use the
+character's appearance description. Each sheet occupies one character reference slot,
+regardless of its panel count. Style visibility, enabled status, name/alias matching
+and film-specific character overrides still apply.
 
 Which engine builds it is chosen **per generation**, on the character's card, because the
 two fail in opposite directions:
@@ -209,8 +218,13 @@ A sheet's strongest measured use is as a **wardrobe reference** in acted films: 
 text alone holds the *idea* of a costume but re-tailors the garment scene by scene,
 while a sheet under the `wardrobe` picture role holds the exact garments (and never
 leaked a second person in testing — the role bounds it to the clothes and demotes the
-portrait to face-only). Wardrobe artifacts and catalogue outfits can copy a character's
-sheet in directly, or paint a film-specific **worn sheet** of the character in a
+portrait to face-only). Acted and singing scenes automatically attach a cast member's
+sheet in this wardrobe role alongside their portrait. An explicit applicable wardrobe
+artifact or catalogue outfit takes precedence over the default sheet. **Portrait clothes
+only** disables sheets for that scene's images and acted takes. A character with only a
+sheet uses it once as their identity reference, without a duplicate wardrobe slot.
+Wardrobe artifacts and catalogue outfits can also copy a character's sheet in directly,
+or paint a film-specific **worn sheet** of the character in a
 described costume. When a take has an opening frame, its visible outfit takes precedence:
 the sheet supplies only consistent unseen garment details, so the clothes do not switch
 to the portrait or sheet outfit mid-scene. Update the opening image to change the outfit —
@@ -222,12 +236,17 @@ Sheets live beside the reference images, one directory per character:
 `~/.config/video-generator/characters/sheets/<char_id>/` holding `sheet.png`, the orbit's
 `orbit.mp4` (orbit only) and `sheet.json` (status, engine, panel times, clip length).
 Removing a sheet deletes the directory. The state rides along with every character in the
-config payload, so the Settings UI knows what exists without asking.
+config payload; the Settings card fetches current preview URLs when opened. Uploads
+replace the sheet and remove any previous orbit clip and frame choices. Invalid uploads
+and failed rebuilds preserve the previous image. Removing the sheet restores the
+portrait fallback. Existing scene images and rendered clips need regeneration to change.
 
 Rendering happens on a daemon thread — an orbit outlives any HTTP request — and the UI
 polls until the status leaves `rendering`. Endpoints: `POST /api/characters/sheet`
 (start; `engine` is `image` or `orbit`), `GET /api/characters/sheet?char_id=…` (poll),
+`POST /api/characters/sheet/upload` (`char_id`, base64/data-URL `data`, optional `filename`),
 `POST /api/characters/sheet/panels` (re-pick frames), `POST /api/characters/sheet/clear`.
+Upload, removal and frame re-picking are blocked while that character's sheet is building.
 
 ## Casting is opt-in, by name
 

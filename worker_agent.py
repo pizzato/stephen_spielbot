@@ -71,7 +71,7 @@ def _execute_scene_image(store: DurableStore, task: TaskRecord, endpoint: str) -
     if engine.get("lease_seconds"):
         store.heartbeat_task(task.id, lease_seconds=int(engine["lease_seconds"]))
     prompt, refs = p.get("image_prompt", ""), None
-    if engine.get("family") == "h3-first-frame":
+    if engine.get("t2i_ref_workflow"):
         from app import _characters_prompt_and_refs, load_config
         prompt, refs = _characters_prompt_and_refs(
             prompt, {"image_prompt": prompt, "metadata": p.get("metadata") or {}},
@@ -184,7 +184,7 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         # it so the controller doesn't re-lease this scene mid-render.
         store.heartbeat_task(task.id, lease_seconds=lease_seconds)
     frame_cfg = p
-    if image_engine.get("family") == "h3-first-frame":
+    if image_engine.get("t2i_ref_workflow"):
         from app import load_config
         frame_cfg = {**load_config(), **p}
     scene_video, ambient = generate_scene_video_task(

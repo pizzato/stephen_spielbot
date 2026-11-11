@@ -1409,7 +1409,8 @@ def characters_sheet(body: CharacterSheet) -> dict:
         char = gapp._find_character(gapp.load_config(), body.char_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    if not char.get("ref_image"):
+    ref = gapp._character_image_path(char.get("ref_image"))
+    if not ref or not ref.is_file():
         raise HTTPException(400, "This character needs a reference image before a sheet can be built.")
     with _sheet_lock:
         if body.char_id in _sheet_jobs:
@@ -1424,7 +1425,24 @@ def characters_sheet(body: CharacterSheet) -> dict:
 
 @api.get("/api/characters/sheet")
 def characters_sheet_state(char_id: str = Query(...)) -> dict:
-    return _sheet_payload(char_id)
+    try:
+        gapp._find_character(gapp.load_config(), char_id)
+        return _sheet_payload(char_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@api.post("/api/characters/sheet/upload")
+def characters_sheet_upload(body: CharacterImage) -> dict:
+    raw = _decode_image(body.data)
+    with _sheet_lock:
+        if body.char_id in _sheet_jobs:
+            raise HTTPException(409, "This character's sheet is still being built.")
+        try:
+            gapp.set_character_sheet(body.char_id, raw)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    return _sheet_payload(body.char_id)
 
 
 @api.post("/api/characters/sheet/panels")
@@ -1433,18 +1451,25 @@ def characters_sheet_panels(body: CharacterSheetPanels) -> dict:
     with _sheet_lock:
         if body.char_id in _sheet_jobs:
             raise HTTPException(409, "This character's sheet is still being built.")
-    try:
-        gapp.repick_character_sheet(body.char_id, body.times)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
+        try:
+            gapp._find_character(gapp.load_config(), body.char_id)
+            gapp.repick_character_sheet(body.char_id, body.times)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except RuntimeError as e:
+            raise HTTPException(500, str(e))
     return _sheet_payload(body.char_id)
 
 
 @api.post("/api/characters/sheet/clear")
 def characters_sheet_clear(body: CharacterRef) -> dict:
-    gapp.clear_character_sheet(body.char_id)
+    with _sheet_lock:
+        if body.char_id in _sheet_jobs:
+            raise HTTPException(409, "This character's sheet is still being built.")
+        try:
+            gapp.clear_character_sheet(body.char_id)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     return _sheet_payload(body.char_id)
 
 
@@ -1568,6 +1593,9 @@ def _script_chars_ok(wd: Path) -> dict:
             if name_key in taken or name_key not in used:
                 continue
             img = gapp._character_image_path(c.get("ref_image"))
+            sheet = gapp._sheet_paths(c["id"])[1] if c.get("id") else None
+            if sheet and sheet.is_file():
+                img = sheet
             has = bool(img and img.exists() and img.stat().st_size > 0)
             catalogue.append({
                 "id": c.get("id", ""), "name": c.get("name", ""),
@@ -4938,6 +4966,8 @@ def _cast_member(wd: Path, cfg: dict, style_name: str, name: str) -> dict:
     for c in gapp._style_characters(cfg, style_name):
         if _matches(c):
             img = gapp._character_image_path(c.get("ref_image"))
+            if (not img or not img.is_file()) and c.get("id"):
+                img = gapp._sheet_paths(c["id"])[1]
             has_image = bool(img and img.exists() and img.stat().st_size > 0)
             return {"id": c.get("id", ""), "name": name,
                     "description": c.get("description", ""),
