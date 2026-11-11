@@ -15554,17 +15554,26 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
 
     title = ""
     style = ""
+    style_name = jc.get("style_name") or ""
     if job_row:
         d = _row_to_dict(job_row)
         cfg_j = json.loads(d.get("config_json") or "{}")
         meta_j = json.loads(d.get("metadata_json") or "{}")
         title = cfg_j.get("video_title") or d.get("title") or wd.name
         style = meta_j.get("style") or jc.get("style") or ""
+        style_name = style_name or cfg_j.get("style_name") or ""
     else:
         title = jc.get("video_title") or jc.get("title") or wd.name
 
     cfg = gapp.load_config()
     resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+
+    # Match the renderer's style/script scope, keeping names already authored
+    # into the film selectable even without a character record or spoken line.
+    cast_options = [c.get("name") for c in gapp._job_characters(cfg, style_name, wd)]
+    for scene in result:
+        cast_options.extend(scene.get("cast") or [])
+        cast_options.extend(ln.get("speaker") for ln in (scene.get("lines") or []))
 
     # A song film's takes carry their own slice of the track, so the tiles play
     # with music. The whole song still goes over: the wall offers each singing
@@ -15575,6 +15584,7 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
 
     return {
         "scenes": result,
+        "cast_options": list(dict.fromkeys(n for n in cast_options if n)),
         "working_files_cleaned": working_files.is_cleaned(wd),
         "song_url": song_url,
         "job_id": job_id,

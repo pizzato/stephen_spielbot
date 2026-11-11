@@ -386,6 +386,11 @@ also show their resolved cast portraits, voices, location/wardrobe/reference slo
 song slice on that same card, so editing, rewriting, re-shooting and choosing takes never
 requires switching to another tab.
 
+The **On screen** and dialogue speaker choices include the film's style characters
+and its own script characters. Style inheritance rules apply, including the opt-out
+from parent and global characters; characters belonging only to other styles are
+excluded. Names already used in the film's cast or dialogue remain selectable.
+
 On music scenes, regeneration uses the scene's chosen composition and strips known
 legacy style prefixes. Every named person needs an actual portrait reference; a missing
 portrait stops the take even when a first frame exists. Song conditioning stays enabled

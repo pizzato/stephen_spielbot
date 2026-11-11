@@ -2698,13 +2698,9 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const [performance, setPerformance] = useState(null)
   const [performanceError, setPerformanceError] = useState('')
   const perfById = useMemo(() => new Map((performance?.scenes || []).map((s) => [s.id, s])), [performance])
-  // Dialogue speaker options: the catalogue characters plus any speakers already
-  // used across this film's scenes (so existing casts stay selectable).
-  const castOpts = useMemo(() => {
-    const names = new Set((meta.config?.characters || []).map((c) => c?.name).filter(Boolean))
-    for (const s of scenes) for (const ln of (s.lines || [])) if (ln?.speaker) names.add(ln.speaker)
-    return [...names]
-  }, [scenes, meta.config?.characters])
+  // The server resolves this film's style and script cast, including existing
+  // on-screen names and speakers, rather than offering the whole catalogue.
+  const [castOpts, setCastOpts] = useState([])
   const [jobId, setJobId] = useState('')
   const [resolution, setResolution] = useState('')
   const [upscale, setUpscale] = useState(null)
@@ -2740,6 +2736,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       ])
       setCleaned(!!r.working_files_cleaned)
       setScenes(r.scenes || [])
+      setCastOpts(r.cast_options || [])
       setPerformance(perfResult.data)
       setPerformanceError(perfResult.error)
       setJobId(r.job_id || '')
