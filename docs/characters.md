@@ -67,6 +67,11 @@ script casting, and rendering. Film-specific characters remain available; assets
 unaffected. The toggle defaults to off and is set independently on each style, rather
 than inherited from a parent.
 
+In **Edit video → Scenes**, **On screen** and dialogue speaker choices follow
+these style rules and include the film's per-script characters. Names already
+used in its cast or dialogue also remain selectable; unrelated catalogue
+characters are excluded.
+
 `_style_characters(cfg, style_name)` resolves a style's effective cast (global pool +
 its lineage unless opted out, library order; the `(none)` experiment style gets the global pool). The Settings →
 **Characters** tab has a scope picker mirroring the Styles tab's tree — a **Global**
