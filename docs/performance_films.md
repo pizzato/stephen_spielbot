@@ -440,6 +440,9 @@ has one, it supersedes the location asset for that scene (the frame IS the place
 photographed), keeping the reference budget tight — measured, three picture references
 hold; more and the weakest starts dropping.
 
+Re-shooting a silent or music-video scene keeps its saved duration. A five-second
+scene stays a five-second generation instead of falling back to a ten-second take.
+
 The source of that still is selected under **Settings → Styles → Image model →
 Scene first frames**: the image engine by default, or an experimental 22-frame
 H3 Turbo clip whose first frame becomes the opening image. This applies to

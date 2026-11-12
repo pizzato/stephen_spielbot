@@ -16519,6 +16519,7 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             narration=row.get("narration") or "",
             mode=md.get("mode") or "dialogue",
             lines=[ln for ln in (md.get("lines") or []) if isinstance(ln, dict)],
+            duration=float(md.get("duration") or 0),
             metadata_extra=md,
         )
         # Live config UNDER the job's overrides — the same merge the full render
