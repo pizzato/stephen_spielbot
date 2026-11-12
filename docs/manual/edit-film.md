@@ -467,6 +467,8 @@ input (see [acted scenes](../performance_films.md#editing-an-acted-scene)), so i
 gets **Remove first frame** and a **No first frame** switch — two ways to set one thing:
 the take renders from portraits and visuals only, and keeps doing so through every later
 shoot. Re-generating the image, picking a kept version or uploading one clears it.
+With **No first frame**, the scene's visual description and character references
+still guide its medium; removing the frame does not drop the cartoon-style guidance.
 Its Video button reads **Shoot again**: the whole take re-renders from the references, and
 its instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*)
 rather than the picture. Silent and music-video re-shoots preserve their saved duration.

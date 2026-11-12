@@ -53,5 +53,31 @@ class ReferenceVisualMediumTests(unittest.TestCase):
     def test_portrait_only_take_does_not_claim_an_opening_image(self):
         prompt = performance.build_h3_prompt(
             {}, picture_names=[{"name": "Ana", "kind": "character"}])
-        self.assertNotIn("[VISUAL MEDIUM]", prompt)
+        self.assertIn("[VISUAL MEDIUM]", prompt)
+        self.assertIn("character references", prompt)
         self.assertNotIn("opening image", prompt)
+
+    def test_no_first_frame_keeps_the_scene_medium_with_portrait_or_location_refs(self):
+        image = "Pop-art comic-book illustration. Rua Vex beside a copper-lit river."
+        for pictures in ([{"name": "Rua Vex", "kind": "character"}],
+                         [{"name": "Riverbank", "kind": "location"}]):
+            with self.subTest(pictures=pictures):
+                row = {"image_prompt": image,
+                       "metadata": {"mode": "silent", "singing": True,
+                                    "no_first_frame": True, "duration": 5,
+                                    "setting": "Irish riverbank, copper light."}}
+                prompt = performance.build_h3_prompt(
+                    performance.acted_meta(row), picture_names=pictures,
+                    style_note="Contemporary photography. Stages and city streets.")
+                self.assertIn(image, prompt)
+                self.assertIn("[VISUAL MEDIUM]", prompt)
+                self.assertIn("linework, shading, colours and textures", prompt)
+                self.assertNotIn("opening image", prompt)
+                self.assertNotIn("Contemporary photography", prompt)
+
+    def test_no_first_frame_preserves_hand_edited_prompt(self):
+        prompt = performance.build_h3_prompt(
+            {"no_first_frame": True, "opening_description": "Pop-art illustration.",
+             "prompt_override": "Animate the river in watercolour."},
+            picture_names=[{"name": "Ana", "kind": "character"}])
+        self.assertEqual(prompt, "Animate the river in watercolour.")

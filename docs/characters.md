@@ -19,6 +19,8 @@ for both the characters and their surroundings, including music-video cutaways.
 The scene's image prompt accompanies that reference so its specific medium (such
 as a pop-art comic illustration) also reaches the video model; the actual image
 takes precedence if an edit has changed its appearance.
+Without an opening image, H3 still receives the scene's visual description and
+instructions to preserve the character references' medium throughout the take.
 
 ## One library, scoped by style
 

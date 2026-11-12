@@ -334,6 +334,8 @@ The song remains model conditioning on all scenes, including non-singing shots.
 The scene's own image prompt accompanies the opening reference into H3 so its
 specific medium also reaches the video model. The opening image takes precedence
 where edits have made its appearance differ from that description.
+With **No first frame**, the same scene description still reaches H3, and its
+character references guide the visual medium for the cast and surroundings.
 
 Every field label has a regenerate button that rewrites just that field with the LLM,
 optionally with a free-text instruction. Edits save when you leave the field.
