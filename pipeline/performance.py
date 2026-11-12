@@ -520,8 +520,12 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
         sections.append("[IDENTITY LOCKS]\n" + "\n".join(locks))
 
     if has_frame:
+        opening = _clean(scene_meta.get("opening_description"))
+        description = (f"Opening image description: {opening} "
+                       "Where this description differs from the supplied opening "
+                       "image, follow the image. " if opening else "")
         sections.append(
-            "[VISUAL MEDIUM]\n"
+            "[VISUAL MEDIUM]\n" + description +
             "Match the opening image's visual medium and rendering style in every "
             "frame, for both characters and environments. Preserve its linework, "
             "shading, colours and textures as they move. If the opening image is "
@@ -842,6 +846,9 @@ def acted_meta(scene, chained: bool = False) -> dict:
                 else getattr(scene, name, default))
 
     meta = dict(scene_meta(scene))
+    opening = _clean(field("image_prompt"))
+    if opening:
+        meta["opening_description"] = opening
     lines = norm_lines(meta.get("lines") or field("lines", None))
     meta["lines"] = lines
     meta["mode"] = "dialogue" if is_performance_mode(meta.get("mode")) else meta.get("mode", "")

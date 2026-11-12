@@ -433,7 +433,9 @@ replace its outfit mid-scene. The opening also governs the visual medium, render
 style, colours and textures for the whole take: illustrated or animated people and
 environments are prompted to retain that treatment as they move. This also applies to
 music-video scenes, including shots with no cast; broad artist guidance stays out of
-their render prompts. Faces and voices stay bound to their own references. When a scene
+their render prompts. The scene's own image prompt supplies the specific opening
+description and medium, with the actual image taking precedence where they differ.
+Faces and voices stay bound to their own references. When a scene
 has one, it supersedes the location asset for that scene (the frame IS the place,
 photographed), keeping the reference budget tight — measured, three picture references
 hold; more and the weakest starts dropping.

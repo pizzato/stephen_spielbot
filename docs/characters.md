@@ -16,6 +16,9 @@ take rather than using the opening image as a substitute for identity.
 The opening image also defines H3's visual medium, rendering style, colours and
 textures throughout the take. Illustrated openings are prompted to stay illustrated
 for both the characters and their surroundings, including music-video cutaways.
+The scene's image prompt accompanies that reference so its specific medium (such
+as a pop-art comic illustration) also reaches the video model; the actual image
+takes precedence if an edit has changed its appearance.
 
 ## One library, scoped by style
 

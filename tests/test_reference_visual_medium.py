@@ -2,9 +2,29 @@
 import unittest
 
 from pipeline import performance
+from pipeline.llm import Scene
 
 
 class ReferenceVisualMediumTests(unittest.TestCase):
+    def test_shot_description_reaches_video_without_the_parent_style(self):
+        image = "Vintage pop-art comic-book illustration. Rua Vex in a car."
+        meta = {"mode": "silent", "singing": True, "cast": ["Rua Vex"],
+                "setting": "A car passing Irish bogland.", "duration": 5}
+        for scene in ({"metadata": meta, "image_prompt": image},
+                      Scene(id=3, title="Car", image_prompt=image,
+                            video_prompt="Pan to the window.", narration="",
+                            mode="silent", metadata_extra=meta)):
+            with self.subTest(scene=type(scene).__name__):
+                prompt = performance.build_h3_prompt(
+                    performance.acted_meta(scene),
+                    style_note="Contemporary photography. Stages and city streets.",
+                    picture_names=[{"name": "Rua Vex", "kind": "character"},
+                                   {"name": "First frame", "kind": "frame"}])
+                self.assertIn(image, prompt)
+                self.assertIn("follow the image", prompt)
+                self.assertNotIn("Contemporary photography", prompt)
+                self.assertNotIn("Stages and city streets", prompt)
+
     def test_opening_medium_survives_music_style_filtering_and_castless_shots(self):
         for cast in ([], [{"name": "Rua Vex", "kind": "character"}]):
             with self.subTest(cast=cast):
