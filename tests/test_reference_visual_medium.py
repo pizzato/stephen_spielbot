@@ -82,3 +82,10 @@ class ReferenceVisualMediumTests(unittest.TestCase):
              "prompt_override": "Animate the river in watercolour."},
             picture_names=[{"name": "Ana", "kind": "character"}])
         self.assertEqual(prompt, "Animate the river in watercolour.")
+
+    def test_portrait_style_remains_authoritative_with_separate_wardrobe(self):
+        prompt = performance.build_h3_prompt(
+            {}, picture_names=[{"name": "Ana", "kind": "character"},
+                               {"name": "Outfit", "kind": "wardrobe", "character": "Ana"}])
+        self.assertIn("Ana's face, hair, build and visual rendering style only", prompt)
+        self.assertIn("Ignore this picture's clothing and background", prompt)

@@ -405,9 +405,11 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset(), *,
     if has_frame or name.strip().lower() in has_wardrobe:
         # The opening frame or wardrobe reference owns the clothes; the
         # portrait must not make the outfit change during the take.
-        return (f"defines {name}'s face, hair and build only{tail}. Ignore "
+        identity = "face, hair and build" if has_frame else "face, hair, build and visual rendering style"
+        return (f"defines {name}'s {identity} only{tail}. Ignore "
                 f"this picture's clothing and background")
-    return f"defines {name}'s appearance{tail}. Ignore this picture's background"
+    return (f"defines {name}'s appearance and visual rendering style{tail}. "
+            "Ignore this picture's background")
 
 
 def _sides(scene_cast: list, speaker: str) -> tuple[str, str]:

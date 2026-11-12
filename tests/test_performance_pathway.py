@@ -646,7 +646,8 @@ class VisualsTests(TempConfigCase):
         meta, refs = self._refs()
         prompt = performance.build_h3_prompt(meta, picture_names=refs["pictures"])
         # The character's slot now carries a short identity hint too.
-        self.assertIn("<Picture 1> defines JOE's face, hair and build only — JOE is host", prompt)
+        self.assertIn("<Picture 1> defines JOE's face, hair, build and visual rendering style only"
+                      " — JOE is host", prompt)
         self.assertIn("<Picture 2> defines the place only", prompt)
         self.assertIn("<Picture 3> defines the clothes JOE wears only", prompt)
 

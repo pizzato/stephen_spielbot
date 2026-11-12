@@ -120,7 +120,7 @@ class WardrobeSheetTests(unittest.TestCase):
             self.assertEqual([p["kind"] for p in refs], ["character", "wardrobe"])
             self.assertEqual(refs[1]["path"], str(sheet))
             prompt = build_h3_prompt({"cast": ["Ada"], "singing": singing}, picture_names=refs)
-            self.assertIn("defines Ada's face, hair and build only", prompt)
+            self.assertIn("defines Ada's face, hair, build and visual rendering style only", prompt)
             self.assertIn("defines the clothes Ada wears only", prompt)
         self.assertEqual(len(self._default_sheet_refs(no_wardrobe=True)["pictures"]), 1)
         self.assertEqual(self._default_sheet_refs(cast=[])["pictures"], [])
