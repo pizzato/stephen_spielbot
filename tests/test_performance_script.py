@@ -210,13 +210,13 @@ class IdentityBindingTests(unittest.TestCase):
     def test_hint_gives_each_name_something_to_bind_to(self):
         p = self._prompt([{"name": "Joe", "kind": "character", "hint": "Bald, broad build"},
                           {"name": "Kinho", "kind": "character", "hint": "Younger, dark hair"}])
-        self.assertIn("Joe's appearance and visual rendering style — Joe is Bald, broad build", p)
-        self.assertIn("Kinho's appearance and visual rendering style — Kinho is Younger, dark hair", p)
+        self.assertIn("Joe's appearance — Joe is Bald, broad build", p)
+        self.assertIn("Kinho's appearance — Kinho is Younger, dark hair", p)
 
     def test_missing_hint_still_names_the_character(self):
         p = self._prompt([{"name": "Joe", "kind": "character"},
                           {"name": "Kinho", "kind": "character"}])
-        self.assertIn("<Picture 1> defines Joe's appearance and visual rendering style.", p)
+        self.assertIn("<Picture 1> defines Joe's appearance.", p)
         self.assertNotIn("()", p)
 
     def test_two_people_get_an_explicit_no_swap_instruction(self):

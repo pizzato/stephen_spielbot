@@ -21,6 +21,8 @@ as a pop-art comic illustration) also reaches the video model; the actual image
 takes precedence if an edit has changed its appearance.
 Without an opening image, H3 still receives the scene's visual description and
 instructions to preserve the character references' medium throughout the take.
+This guidance is not a hard style lock: portrait-only H3 takes can still become
+photographic even when the references are illustrated.
 
 ## One library, scoped by style
 

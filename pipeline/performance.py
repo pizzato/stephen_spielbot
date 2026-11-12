@@ -405,11 +405,9 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset(), *,
     if has_frame or name.strip().lower() in has_wardrobe:
         # The opening frame or wardrobe reference owns the clothes; the
         # portrait must not make the outfit change during the take.
-        identity = "face, hair and build" if has_frame else "face, hair, build and visual rendering style"
-        return (f"defines {name}'s {identity} only{tail}. Ignore "
+        return (f"defines {name}'s face, hair and build only{tail}. Ignore "
                 f"this picture's clothing and background")
-    return (f"defines {name}'s appearance and visual rendering style{tail}. "
-            "Ignore this picture's background")
+    return f"defines {name}'s appearance{tail}. Ignore this picture's background"
 
 
 def _sides(scene_cast: list, speaker: str) -> tuple[str, str]:
@@ -540,14 +538,10 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
         sections.append(
             "[VISUAL MEDIUM]\n" + description +
             f"Preserve the visual medium and rendering style of the {source} "
-            "in every frame. Apply the scene's described medium to the entire "
-            "shot: all characters, backgrounds, scenery and lighting share that "
-            "same rendering style. For illustrated or animated inputs, animate "
-            "the artwork itself, preserving its linework, shading, colours and "
-            "textures as they move. Keep the whole frame in that medium: "
-            "no photographic backgrounds, realistic skin textures "
-            "or live-action lighting. Never turn an illustration into live action "
-            "or photorealism.")
+            "in every frame, for both characters and environments. Preserve its "
+            "linework, shading, colours and textures as they move. If illustrated "
+            "or animated, keep the entire take illustrated or animated; do not "
+            "convert it into live action or photorealism.")
 
     # [SCENE]
     setting = _clean(scene_meta.get("setting"))

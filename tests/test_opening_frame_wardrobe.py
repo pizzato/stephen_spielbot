@@ -51,7 +51,7 @@ class OpeningFrameWardrobeTests(unittest.TestCase):
         prompt = self._prompt(
             {"name": "Ana", "kind": "character"},
             {"name": "Gala coat", "kind": "wardrobe", "character": "Ana"})
-        self.assertIn("defines Ana's face, hair, build and visual rendering style only", prompt)
+        self.assertIn("defines Ana's face, hair and build only", prompt)
         self.assertIn("defines the clothes Ana wears only", prompt)
         self.assertNotIn("opening image", prompt)
 

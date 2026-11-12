@@ -469,6 +469,8 @@ the take renders from portraits and visuals only, and keeps doing so through eve
 shoot. Re-generating the image, picking a kept version or uploading one clears it.
 With **No first frame**, the scene's visual description and character references
 still guide its medium; removing the frame does not drop the cartoon-style guidance.
+H3 can still drift towards photography without a full-scene image reference;
+the guidance does not guarantee an exact style match.
 Its Video button reads **Shoot again**: the whole take re-renders from the references, and
 its instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*)
 rather than the picture. Silent and music-video re-shoots preserve their saved duration.
