@@ -538,10 +538,14 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
         sections.append(
             "[VISUAL MEDIUM]\n" + description +
             f"Preserve the visual medium and rendering style of the {source} "
-            "in every frame, for both characters and environments. Preserve its "
-            "linework, shading, colours and textures as they move. If illustrated "
-            "or animated, keep the entire take illustrated or animated; do not "
-            "convert it into live action or photorealism.")
+            "in every frame. Apply the scene's described medium to the entire "
+            "shot: all characters, backgrounds, scenery and lighting share that "
+            "same rendering style. For illustrated or animated inputs, animate "
+            "the artwork itself, preserving its linework, shading, colours and "
+            "textures as they move. Keep the whole frame in that medium: "
+            "no photographic backgrounds, realistic skin textures "
+            "or live-action lighting. Never turn an illustration into live action "
+            "or photorealism.")
 
     # [SCENE]
     setting = _clean(scene_meta.get("setting"))

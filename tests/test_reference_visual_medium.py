@@ -72,6 +72,7 @@ class ReferenceVisualMediumTests(unittest.TestCase):
                 self.assertIn(image, prompt)
                 self.assertIn("[VISUAL MEDIUM]", prompt)
                 self.assertIn("linework, shading, colours and textures", prompt)
+                self.assertIn("all characters, backgrounds, scenery and lighting", prompt)
                 self.assertNotIn("opening image", prompt)
                 self.assertNotIn("Contemporary photography", prompt)
 
