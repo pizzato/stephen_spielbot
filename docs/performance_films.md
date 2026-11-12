@@ -429,10 +429,19 @@ literal first-frame input — the image rides as the take's **opening-compositio
 reference**: a `<Picture N>` whose authority is the space, light, framing and where
 everyone stands, plus the clothes visible on each person throughout the take. Portraits
 define face, hair and build only when an opening frame is present; their clothing cannot
-replace its outfit mid-scene. Faces and voices stay bound to their own references. When a scene
+replace its outfit mid-scene. The opening also governs the visual medium, rendering
+style, colours and textures for the whole take: illustrated or animated people and
+environments are prompted to retain that treatment as they move. This also applies to
+music-video scenes, including shots with no cast; broad artist guidance stays out of
+their render prompts. The scene's own image prompt supplies the specific opening
+description and medium, with the actual image taking precedence where they differ.
+Faces and voices stay bound to their own references. When a scene
 has one, it supersedes the location asset for that scene (the frame IS the place,
 photographed), keeping the reference budget tight — measured, three picture references
 hold; more and the weakest starts dropping.
+
+Re-shooting a silent or music-video scene keeps its saved duration. A five-second
+scene stays a five-second generation instead of falling back to a ten-second take.
 
 The source of that still is selected under **Settings → Styles → Image model →
 Scene first frames**: the image engine by default, or an experimental 22-frame

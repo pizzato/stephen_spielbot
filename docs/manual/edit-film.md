@@ -469,7 +469,9 @@ the take renders from portraits and visuals only, and keeps doing so through eve
 shoot. Re-generating the image, picking a kept version or uploading one clears it.
 Its Video button reads **Shoot again**: the whole take re-renders from the references, and
 its instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*)
-rather than the picture. It also
+rather than the picture. Silent and music-video re-shoots preserve their saved duration.
+The opening image and its shot description also anchor the visual medium, with
+illustrated openings explicitly directed to remain illustrated throughout the take. It also
 gains **Continue**, which shoots more of the take it already has instead of replacing it.
 The **scene type** switch converts a scene between narration, dialogue and silent — same
 theme, the other shape — and keeps the version you leave, so switching back restores it.
