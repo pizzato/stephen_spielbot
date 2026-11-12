@@ -926,7 +926,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   // published cut fades right now, and the length the form offers.
   const [fadeOn, setFadeOn] = useState(false)
   const [fadeApplied, setFadeApplied] = useState(false)
-  const [fadeSeconds, setFadeSeconds] = useState(2)
+  const [fadeSeconds, setFadeSeconds] = useState(2.5)
   const [fadeBusy, setFadeBusy] = useState(false)
   const [fonts, setFonts] = useState([])
   const [captionTracks, setCaptionTracks] = useState(null)  // [{lang, name, url}] downloadable SRTs
@@ -1843,7 +1843,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </p>
           <div className="mt-16">
             <Field label="Fade the last (seconds)"
-              hint="How long the dip to black lasts. Around 2 s reads as an ending; longer plays as a slow goodbye.">
+              hint="How long the dip to black lasts. Defaults to 2.5 s; longer plays as a slow goodbye.">
               <input className="input" type="number" min={0.5} max={8} step={0.5}
                 value={fadeSeconds} disabled={anyBusy}
                 onChange={(e) => setFadeSeconds(+e.target.value)} style={{ maxWidth: 120 }} />

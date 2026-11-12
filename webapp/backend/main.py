@@ -10208,7 +10208,7 @@ def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
 # renderer applies a standing fade at render time with the same helpers, so a
 # "Render again" keeps the fade too.
 
-_FADE_ENDING_MIN, _FADE_ENDING_MAX, _FADE_ENDING_DEFAULT = 0.5, 8.0, 2.0
+_FADE_ENDING_MIN, _FADE_ENDING_MAX, _FADE_ENDING_DEFAULT = 0.5, 8.0, 2.5
 _FADE_ENDING_APPLIED_NAME = _assembler.ENDING_FADE_APPLIED_NAME
 
 
