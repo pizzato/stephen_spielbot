@@ -13,6 +13,12 @@ mechanisms work together:
 LTX renders from the scene's first-frame still. H3 receives separate character portraits
 as identity conditions alongside the opening image; a missing cast portrait stops the
 take rather than using the opening image as a substitute for identity.
+The opening image also defines H3's visual medium, rendering style, colours and
+textures throughout the take. Illustrated openings are prompted to stay illustrated
+for both the characters and their surroundings, including music-video cutaways.
+The scene's image prompt accompanies that reference so its specific medium (such
+as a pop-art comic illustration) also reaches the video model; the actual image
+takes precedence if an edit has changed its appearance.
 
 ## One library, scoped by style
 

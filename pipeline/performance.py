@@ -372,6 +372,8 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset(), *,
     if kind == "frame":
         return ("defines the scene's OPENING IMAGE — the space, light, framing "
                 "and where everyone stands, including the clothes they wear. "
+                "It also defines the visual medium, rendering style, colours and "
+                "textures for the entire take. "
                 "Begin the take looking like this picture and keep each person's "
                 "outfit visible in the opening image throughout the take. "
                 "Faces come from the portrait references only, voices from "
@@ -516,6 +518,19 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
         locks.append("Keep every face, wardrobe and body exactly as in the references.")
     if locks:
         sections.append("[IDENTITY LOCKS]\n" + "\n".join(locks))
+
+    if has_frame:
+        opening = _clean(scene_meta.get("opening_description"))
+        description = (f"Opening image description: {opening} "
+                       "Where this description differs from the supplied opening "
+                       "image, follow the image. " if opening else "")
+        sections.append(
+            "[VISUAL MEDIUM]\n" + description +
+            "Match the opening image's visual medium and rendering style in every "
+            "frame, for both characters and environments. Preserve its linework, "
+            "shading, colours and textures as they move. If the opening image is "
+            "illustrated or animated, keep the entire take illustrated or animated; "
+            "do not convert it into live action or photorealism.")
 
     # [SCENE]
     setting = _clean(scene_meta.get("setting"))
@@ -831,6 +846,9 @@ def acted_meta(scene, chained: bool = False) -> dict:
                 else getattr(scene, name, default))
 
     meta = dict(scene_meta(scene))
+    opening = _clean(field("image_prompt"))
+    if opening:
+        meta["opening_description"] = opening
     lines = norm_lines(meta.get("lines") or field("lines", None))
     meta["lines"] = lines
     meta["mode"] = "dialogue" if is_performance_mode(meta.get("mode")) else meta.get("mode", "")

@@ -1969,3 +1969,23 @@ class ActedRerenderConfigTests(TempConfigCase):
         refs = backend.gapp.resolve_performance_references(
             meta, seen["cfg"], self.wd, seen["style_name"], scene_id=9)
         self.assertIn("character", [p["kind"] for p in refs["pictures"]])
+
+    def test_sung_rerender_keeps_the_saved_five_second_duration(self):
+        row = {"id": 9, "title": "Listen", "image_prompt": "A cartoon singer.",
+               "metadata": {"mode": "silent", "singing": True,
+                            "duration": 5.0, "cast": ["David Attenbot"]}}
+        seen = {}
+
+        def fake_render(scene, wd, cfg, **kw):
+            seen["seconds"] = performance.acted_meta(scene)["seconds"]
+            (wd / "scene_09_final.mp4").write_bytes(b"mp4")
+
+        pool = mock.MagicMock()
+        pool.acquire.return_value = "http://w:8188"
+        with mock.patch.object(backend, "_shared_edit_render_pool", return_value=pool), \
+             mock.patch("resume_generation.render_performance_scene", fake_render):
+            backend._run_acted_rerender(
+                "t1", self.wd, 9, backend._film_job_config(self.wd), row)
+
+        self.assertEqual(backend._film_tasks["t1"]["status"], "done")
+        self.assertEqual(seen["seconds"], 5.0)

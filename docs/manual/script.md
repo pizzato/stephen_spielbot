@@ -331,6 +331,9 @@ The artist's broad style guidance is used during writing, not appended to every 
 Every visible recurring character must be named in **On screen**, including partial and
 back views. Portraits supply identity; missing portraits must be supplied before rendering.
 The song remains model conditioning on all scenes, including non-singing shots.
+The scene's own image prompt accompanies the opening reference into H3 so its
+specific medium also reaches the video model. The opening image takes precedence
+where edits have made its appearance differ from that description.
 
 Every field label has a regenerate button that rewrites just that field with the LLM,
 optionally with a free-text instruction. Edits save when you leave the field.
