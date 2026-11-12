@@ -147,7 +147,7 @@ class AppliedRecordTests(unittest.TestCase):
     def test_seconds_are_clamped(self):
         self.assertEqual(backend._norm_fade_ending_seconds(0.1), 0.5)
         self.assertEqual(backend._norm_fade_ending_seconds(99), 8.0)
-        self.assertEqual(backend._norm_fade_ending_seconds("junk"), 2.0)
+        self.assertEqual(backend._norm_fade_ending_seconds("junk"), 2.5)
 
 
 class EndpointTests(unittest.TestCase):

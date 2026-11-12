@@ -145,8 +145,10 @@ fixed from the [Song tab](script.md#song). **Fade the ending** softens it on the
 published cut itself: the last few seconds dip to black while the sound fades to
 silence with them. Nothing is trimmed or appended, so the film's length, caption
 timing and title cards all stay put. **Fade the last (seconds)** sets how long the dip
-lasts — around 2 s reads as an ending, longer plays as a slow goodbye (the fade is
-capped at a quarter of the film, so a short film never becomes one long decay).
+lasts — the control starts at **2.5 s** until a fade length is saved on the film.
+Click **Fade the ending** to apply it; the fade stays off until you do. A longer fade
+plays as a slow goodbye (the fade is capped at a quarter of the film, so a short
+film never becomes one long decay).
 
 The clean cut is faded in place and kept as a selectable [version](#upscale-video),
 and the choice is saved on the film, so every later rebuild (re-mix, re-voice,
