@@ -519,8 +519,8 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     if locks:
         sections.append("[IDENTITY LOCKS]\n" + "\n".join(locks))
 
+    opening = _clean(scene_meta.get("opening_description"))
     if has_frame:
-        opening = _clean(scene_meta.get("opening_description"))
         description = (f"Opening image description: {opening} "
                        "Where this description differs from the supplied opening "
                        "image, follow the image. " if opening else "")
@@ -531,6 +531,17 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
             "shading, colours and textures as they move. If the opening image is "
             "illustrated or animated, keep the entire take illustrated or animated; "
             "do not convert it into live action or photorealism.")
+    elif opening or people:
+        # Removing a first frame removes its composition, not the scene's medium.
+        description = f"Scene visual description: {opening} " if opening else ""
+        source = "character references" if people else "scene description"
+        sections.append(
+            "[VISUAL MEDIUM]\n" + description +
+            f"Preserve the visual medium and rendering style of the {source} "
+            "in every frame, for both characters and environments. Preserve its "
+            "linework, shading, colours and textures as they move. If illustrated "
+            "or animated, keep the entire take illustrated or animated; do not "
+            "convert it into live action or photorealism.")
 
     # [SCENE]
     setting = _clean(scene_meta.get("setting"))

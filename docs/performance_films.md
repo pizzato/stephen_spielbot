@@ -468,6 +468,12 @@ editor, or press **Remove first frame**, which sets it. It holds through every r
 — and it holds even when an image is still on file, because the flag, not the file,
 decides whether the take opens on one. Re-generating the image, selecting a kept version
 or uploading one clears it again.
+This removes the opening-composition reference, not the visual style: the scene's
+image prompt still supplies its visual description, and H3 is instructed to keep
+the character references' medium for both the cast and the surroundings.
+This is prompt guidance, not a hard style lock. Portrait-only H3 takes can still
+become photographic despite illustrated references and an explicit cartoon
+description, so inspect the resulting take before accepting it.
 
 For styles where the opening composition is what carries the shot, **Settings → a style →
 Video models → First frames — open every acted scene on a painted image**
