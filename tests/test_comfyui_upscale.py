@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -540,6 +541,49 @@ class FinishUpscaleScenesTests(unittest.TestCase):
                 rg._finish_upscale_scenes(
                     wd, clips, cfg, wd / "progress.json", self._Pool(), 1080, 1920)
             self.assertEqual(up.call_count, 2)  # second run reused both
+
+    def test_selecting_older_take_refreshes_only_its_finishing_upscale(self):
+        import resume_generation as rg
+        from pipeline import video_history
+
+        cfg = {"finish_resolution": "Portrait 4K (2160×3840)",
+               "finish_upscale_mode": "fast"}
+        with tempfile.TemporaryDirectory() as tmp:
+            wd, clips = self._work_dir(tmp)
+            scene = clips[0]
+            older_bytes = scene.read_bytes()
+            os.utime(scene, (1_000_000_000, 1_000_000_000))
+            older = video_history.record(wd, 1, scene)["selected"]
+            scene.write_bytes(b"newer" * 4000)
+            os.utime(scene, (1_000_000_100, 1_000_000_100))
+            video_history.record(wd, 1, scene)
+            os.utime(clips[1], (1_000_000_100, 1_000_000_100))
+
+            def fake_upscale(src, out, *_args):
+                out.write_bytes(src.read_bytes())
+                return out
+
+            with mock.patch.object(rg, "upscale_video", side_effect=fake_upscale) as up:
+                out, _, _ = rg._finish_upscale_scenes(
+                    wd, clips, cfg, wd / "progress.json", self._Pool(), 1080, 1920)
+                self.assertEqual(out[0].read_bytes(), b"newer" * 4000)
+                for cached in out:
+                    os.utime(cached, (1_000_000_200, 1_000_000_200))
+                up.reset_mock()
+
+                video_history.select(wd, 1, older)
+                out, _, _ = rg._finish_upscale_scenes(
+                    wd, clips, cfg, wd / "progress.json", self._Pool(), 1080, 1920)
+                up.assert_called_once()
+                self.assertEqual(up.call_args.args[0], scene)
+                self.assertEqual(out[0].read_bytes(), older_bytes)
+                self.assertEqual(out[1].read_bytes(), clips[1].read_bytes())
+
+                # Once refreshed, both selected scenes can be reused on resume.
+                up.reset_mock()
+                rg._finish_upscale_scenes(
+                    wd, clips, cfg, wd / "progress.json", self._Pool(), 1080, 1920)
+                up.assert_not_called()
 
     def test_ai_failure_falls_back_to_fast_and_releases_worker(self):
         import resume_generation as rg

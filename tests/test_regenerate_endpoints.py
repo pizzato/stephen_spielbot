@@ -356,6 +356,70 @@ class FilmUpscaleTests(unittest.TestCase):
         history = backend.final_video_history.history(wd)
         self.assertEqual(history["versions"][-1]["label"], "FlashVSR 2× 1408x1408")
 
+    def test_selecting_older_take_rebuilds_its_upscale_and_final(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        final = wd.with_suffix(".mp4")
+        scene = wd / "scene_01_final.mp4"
+        unchanged = wd / "scene_02_final.mp4"
+        older_bytes = b"older-take" * 1500
+        newer_bytes = b"newer-take" * 1500
+        unchanged_bytes = b"unchanged-take" * 1500
+        scene.write_bytes(older_bytes)
+        os.utime(scene, (100, 100))
+        older = backend.video_history.record(wd, 1, scene)["selected"]
+        scene.write_bytes(newer_bytes)
+        os.utime(scene, (200, 200))
+        backend.video_history.record(wd, 1, scene)
+        unchanged.write_bytes(unchanged_bytes)
+        os.utime(unchanged, (200, 200))
+        final.write_bytes(newer_bytes + unchanged_bytes)
+        calls = []
+
+        def fake_temporal(src, out, width, height, **kw):
+            self.assertEqual((width, height), (1024, 576))
+            calls.append((src, src.read_bytes()))
+            out.write_bytes(b"upscaled:" + src.read_bytes())
+            return out
+
+        def fake_concat(paths, out, **kw):
+            out.write_bytes(b"".join(p.read_bytes() for p in paths))
+            return out
+
+        def run():
+            backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
+            backend._run_final_video_upscale("tid", wd, "", "flashvsr_2x")
+            self.assertEqual(backend._film_tasks["tid"]["status"], "done")
+
+        with mock.patch.object(backend.gapp, "load_config", return_value={
+                 "temporal_video_upscaler_cmd": "fake-upscaler",
+             }), \
+             mock.patch.object(backend, "_film_hard_boundaries", return_value=set()), \
+             mock.patch("pipeline.assembler._get_video_dimensions", side_effect=lambda p:
+                        (1024, 576) if p.read_bytes().startswith(b"upscaled:") else (512, 288)), \
+             mock.patch("pipeline.assembler._get_duration", return_value=3.0), \
+             mock.patch("pipeline.assembler._get_video_stream_duration", return_value=3.0), \
+             mock.patch("pipeline.assembler._verify_upscale_not_blank"), \
+             mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
+             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat):
+            run()
+            self.assertEqual([src for src, _ in calls], [scene, unchanged])
+            # Both caches are newer than the stored takes, but older than a
+            # selection now. Same durations and dimensions cannot distinguish them.
+            cache_dir = wd / "final_upscale_scenes" / "flashvsr_2x-1024x576"
+            for cached in cache_dir.glob("*.mp4"):
+                os.utime(cached, (300, 300))
+            backend.select_film_video(
+                1, backend.FilmPreviewSelectBody(work_dir=str(wd), version_id=older))
+            calls.clear()
+            run()
+            self.assertEqual([src for src, _ in calls], [scene])
+            self.assertEqual(calls[0][1], older_bytes)
+            self.assertEqual(final.read_bytes(),
+                             b"upscaled:" + older_bytes + b"upscaled:" + unchanged_bytes)
+            calls.clear()
+            run()
+            self.assertEqual(calls, [])  # The selected take's new cache is reusable.
+
     def test_remix_upscale_endpoint_accepts_target_and_mode(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
         wd.with_suffix(".mp4").write_bytes(b"low-res-final")
