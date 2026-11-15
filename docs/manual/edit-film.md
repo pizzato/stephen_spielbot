@@ -236,13 +236,18 @@ pickers offer them too — as targets: such a film renders at FHD and the pipeli
 this same upscale as its finishing step.) Only targets larger than the film's current
 size are listed.
 
-Scenes are upscaled one per worker in parallel and kept on disk as they finish — and after
-the film is assembled — so if a scene fails the completed ones are reused when you run it
-again, and the same target can be rebuilt later without redoing the GPU work. A scene you
-re-shoot or re-voice afterwards is upscaled afresh; its cached copy is not reused. Each
-upscaled scene is put back on its source's exact length with the source's audio before the
-film is joined the same way the original was — the same dip-to-black between scenes
-included — so the upscaled cut keeps the film's timing.
+In AI modes, scenes are upscaled one per worker in parallel and kept on disk as they
+finish — and after the film is assembled — so if a scene fails the completed ones are
+reused when you run it again, and the same target can be rebuilt later without redoing
+the GPU work. The upscale uses each scene's selected video take, including an older
+take picked from its history.
+Re-shooting, re-voicing or selecting a different take replaces that scene's cached upscale;
+unchanged scenes keep theirs. Each upscaled scene is put back on its source's exact length
+with the source's audio before the film is joined the same way the original was — the same
+dip-to-black between scenes included — so the upscaled cut keeps the film's timing.
+
+**Fast** resamples the currently assembled final video. After selecting different scene
+takes, run **Reassemble film** before using **Fast** to include them in the upscaled cut.
 
 The scene clips in the editor stay at the render size: the upscale is a *final version*,
 not a new set of scenes. The editor says so rather than leaving you to guess: a film
@@ -529,8 +534,10 @@ after re-shoots, take picks, or reorders — re-mixing music only where the film
 ### Version history
 
 Two strips under each scene: **image takes** and **video takes**. Click one to select it,
-or delete the ones you don't want. Selecting a take re-muxes the final film atomically, so
-there's never a half-updated video on disk.
+or delete the ones you don't want. Selecting a video take changes the scene clip used for
+the next assembly, including when you pick an older take. Run **Reassemble film** or use
+an AI mode under [Upscale video](#upscale-video) to include it in the final film; you do
+not need to re-render the scene. For **Fast** upscaling, reassemble first.
 
 Whatever is being replaced is kept first — including a frame or clip the render itself
 produced (an acted scene's painted opening frame, the take from the original render), which

@@ -558,10 +558,14 @@ like that for an arbitrary size and only part of the result is the upscaler: rea
 last 25% with Lanczos, which visibly softened what the model had just sharpened.
 The source is always the film's **rendered** size: re-running a factor mode while one
 of its own upscales is the selected final version produces the same size again (reusing
-the cached scene upscales), rather than compounding the factor off the upscaled cut.
+the cached upscales for unchanged scenes), rather than compounding the factor off the
+upscaled cut. Each scene uses its selected video take, including older takes; a cached
+upscale from a different take is replaced.
 
 `Fast`, `LTX IC-LoRA` and `H3 latent` still take a target resolution, because each can
 land on one — H3's node takes a continuous 1.1–4.0 factor, and `Fast` *is* a resample.
+`Fast` uses the assembled final video, so run **Reassemble film** after changing scene
+takes before using it.
 
 For a **render** aimed at QHD/4K, a factor mode uses the requested size only to decide
 *that* a finishing pass runs; the film ends up at the render size × the factor, and the

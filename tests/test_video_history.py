@@ -4,6 +4,7 @@ The module only copies files around, so the "videos" here are tiny byte strings;
 distinct bytes per take let us assert that ``select`` copies the *right* one. The
 key difference from image_history is the last-N pruning of large take files.
 """
+import os
 from pathlib import Path
 
 from pipeline import video_history as vh
@@ -85,15 +86,24 @@ def test_record_prunes_to_the_cap_and_deletes_files(tmp_path):
 
 def test_select_copies_chosen_take_onto_canonical_final(tmp_path):
     _write(_final(tmp_path), b"one")
+    os.utime(_final(tmp_path), (1_000_000_000, 1_000_000_000))
     vh.record(tmp_path, 1, _final(tmp_path))
     _write(_final(tmp_path), b"two")
+    os.utime(_final(tmp_path), (1_000_000_100, 1_000_000_100))
     h = vh.record(tmp_path, 1, _final(tmp_path))
     older = h["versions"][0]["id"]
+    previous_mtime = _final(tmp_path).stat().st_mtime_ns
+    kept = Path(h["versions"][0]["path"])
+    kept_mtime = kept.stat().st_mtime_ns
 
     vh.select(tmp_path, 1, older)
 
     assert _final(tmp_path).read_bytes() == b"one"
     assert vh.history(tmp_path, 1)["selected"] == older
+    # Selection is a fresh edit for upscale caches and final reassembly; the
+    # archive keeps the take's original timestamp.
+    assert _final(tmp_path).stat().st_mtime_ns > previous_mtime
+    assert kept.stat().st_mtime_ns == kept_mtime
 
 
 def test_select_unknown_take_raises(tmp_path):

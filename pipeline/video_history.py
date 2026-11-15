@@ -175,7 +175,9 @@ def select(work_dir: Path, scene_id: int, version_id: int) -> Path:
         if not src.exists():
             raise FileNotFoundError(f"Video take file missing: {src}")
         final = _canonical_final(work_dir, scene_id)
-        shutil.copy2(src, final)
+        # Selection is a fresh scene edit: preserving an older take's mtime
+        # would let upscale caches and final reassembly mistake it for unchanged.
+        shutil.copyfile(src, final)
         entry["selected"] = version_id
         data[str(int(scene_id))] = entry
         _save(work_dir, data)
