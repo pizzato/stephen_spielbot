@@ -877,7 +877,7 @@ function TitleCardPreview({ workDir, card, imageUrl, aspect }) {
 
 // ── Film tab: final cut + whole-video metadata + audio remix ──────────────────
 
-function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
+function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged, onSwitchToScenes }) {
   const [data, setData] = useState(null)
   const [cleanupBusy, setCleanupBusy] = useState(false)
   const [vol, setVol] = useState({ voice: 100, music: 18, ambient: 0 })
@@ -886,6 +886,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [musicHistory, setMusicHistory] = useState(null)
   const [videoHistory, setVideoHistory] = useState(null)
   const [musicBusy, setMusicBusy] = useState(false)
+  const [realignBusy, setRealignBusy] = useState(false)
+  const [realignResult, setRealignResult] = useState(null)
   const [songVoice, setSongVoice] = useState('')    // "Sing it as" (song films)
   const [narratorBusy, setNarratorBusy] = useState(false)
   const [upscaleBusy, setUpscaleBusy] = useState(false)
@@ -1220,6 +1222,19 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         }, 3000)
       })
     } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
+
+  const realignLyrics = async () => {
+    setRealignBusy(true); setError(''); setStatus(''); setRealignResult(null)
+    try {
+      const { task_id } = await api.realignSongLyrics(data.work_dir)
+      const result = await waitFilmTask(task_id)
+      setRealignResult(result)
+      setStatus(result.message || 'Realigned the scene lyrics and caption timings.')
+      onScenesChanged?.()
+      await api.filmCaptionTracks(data.work_dir)
+        .then((r) => setCaptionTracks(r.tracks || [])).catch(() => {})
+    } catch (e) { setError(e.message) } finally { setRealignBusy(false) }
   }
 
   const selectMusic = async (versionId) => {
@@ -1616,7 +1631,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || titleCardsBusy || fadeBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy || cleanupBusy
+  const anyBusy = busy || musicBusy || realignBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || titleCardsBusy || fadeBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy || cleanupBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -2287,6 +2302,31 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
                               background: 'var(--paper-2)', borderRadius: 'var(--r-sm)',
                               border: '1px solid var(--line)' }}>{data.song.lyrics}</pre>
               </Field>
+              <div className="mt-16">
+                <Button variant="ghost" icon="rotate-right" disabled={anyBusy || !data.song.lyrics?.trim()}
+                  onClick={realignLyrics}>{realignBusy ? 'Aligning lyrics…' : 'Realign lyrics to song'}</Button>
+                <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+                  Measures the song again and replaces each scene&apos;s lyric rows and timings, including manual edits.
+                  Existing cuts and clips stay in place. Review the results in Scenes, then re-shoot any performance
+                  that needs correcting. Captions already burned into the video need to be applied again.
+                </p>
+                {realignBusy && <p className="muted" style={{ fontSize: 12.5 }}>
+                  <Icon name="spinner" spin /> Listening to the vocals and matching the lyrics… This can take a few minutes.
+                </p>}
+                {realignResult && <div className="stack gap-10">
+                  <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
+                    Updated {realignResult.updated_scenes?.length || 0} scenes.
+                    {' '}Matched {realignResult.matched_words}/{realignResult.total_words} words
+                    across {realignResult.matched_lines}/{realignResult.total_lines} lyric lines.
+                    {' '}Hand-edited prompts stay pinned; use <strong>Rebuild from the fields</strong> on those scenes before re-shooting.
+                  </p>
+                  {realignResult.interpolated_lines?.length > 0 && <Banner tone="warn">
+                    These lines have estimated timings and need a listening check:
+                    {' '}{realignResult.interpolated_lines.map((line) => `“${line}”`).join('; ')}.
+                  </Banner>}
+                  <div><Button variant="ghost" size="sm" icon="arrow-right" onClick={onSwitchToScenes}>Review scenes</Button></div>
+                </div>}
+              </div>
             </div>
           )}
           <div className="mt-24">
@@ -3014,6 +3054,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   // published final was upscaled the header says so ("Upscaled to 4K …").
   const [upscale, setUpscale] = useState(null)
   const [charReload, setCharReload] = useState(0)     // bumped when the bar adds a character
+  const [sceneReload, setSceneReload] = useState(0)   // bumped after whole-film lyric timing
   // Prefill page title from film scenes (lightweight enough for the head), and
   // note whether anything here is shot on the reference engine: the Scenes list
   // keeps every scene whatever the mix and adds staging to the takes — spoken
@@ -3029,7 +3070,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       setFilmJobId(r.job_id || '')
       setUpscale(r.upscale || null)
     }).catch(() => {})
-  }, [workDir])
+  }, [workDir, sceneReload])
 
   useEffect(() => {
     setTab(editTab(initialTab))
@@ -3074,6 +3115,8 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
           meta={meta}
           filmTitle={filmTitle}
           onTitleChange={setFilmTitle}
+          onScenesChanged={() => setSceneReload((k) => k + 1)}
+          onSwitchToScenes={() => setTab('scenes')}
         />
       )}
       {tab === 'characters' && (
@@ -3115,6 +3158,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       )}
       {tab === 'scenes' && (
         <ScenesTab
+          key={sceneReload}
           workDir={workDir}
           meta={meta}
           onTitle={setFilmTitle}

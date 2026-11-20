@@ -331,6 +331,7 @@ export const api = {
   // "Sing it as [voice]" on a finished song film: the SVC model re-voices the song
   // and the final is re-muxed with it. Returns a film task to poll.
   revoiceSong: (workDir, voice) => req('POST', '/remix/song-voice', { work_dir: workDir, voice }),
+  realignSongLyrics: (workDir) => req('POST', '/films/song/realign', { work_dir: workDir }),
   selectMusic: (workDir, versionId) => req('POST', '/remix/music-select', { work_dir: workDir, version_id: versionId }),
   selectRemixVideo: (workDir, versionId) => req('POST', '/remix/video-select', { work_dir: workDir, version_id: versionId }),
   deleteRemixVideo: (workDir, versionId) => req('POST', '/remix/video-delete', { work_dir: workDir, version_id: versionId }),
