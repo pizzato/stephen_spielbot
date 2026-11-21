@@ -90,11 +90,22 @@ class DuplicateScriptTests(unittest.TestCase):
         wd = self._new_dir(result)
         self.assertEqual(json.loads((wd / "song.json").read_text())["lyrics"],
                          "[Verse]\nla la")
+        self.assertEqual((wd / "lyrics.txt").read_text(), "[Verse]\nla la\n")
+        self.assertFalse((self.src / "lyrics.txt").exists())
         self.assertEqual((wd / "background_music.wav").read_bytes(), b"track")
         self.assertEqual(json.loads((wd / "music_history.json").read_text())["selected"], 2)
         self.assertEqual((wd / "music_history" / "background_music_v1.wav").read_bytes(), b"v1")
         # The copy is still recognised as a music video by the film editor.
         self.assertTrue(backend._is_music_video(wd))
+
+    def test_music_video_duplicate_exports_current_lyrics_over_stale_text(self):
+        lyrics = "[Verse]\nOlá\n\n[Chorus]\nMundo"
+        (self.src / "song.json").write_text(json.dumps({"lyrics": lyrics}))
+        (self.src / "lyrics.txt").write_text("outdated lyrics\n")
+        result = backend.duplicate_script(backend.DuplicateScriptBody(work_dir=str(self.src)))
+        wd = self._new_dir(result)
+        self.assertEqual((wd / "lyrics.txt").read_bytes(), (lyrics + "\n").encode("utf-8"))
+        self.assertEqual((self.src / "lyrics.txt").read_text(), "outdated lyrics\n")
 
     def test_duplicate_keeps_cast_and_visual_references(self):
         # The per-script cast (with look images) and the visuals wall anchor
@@ -126,6 +137,7 @@ class DuplicateScriptTests(unittest.TestCase):
         result = backend.duplicate_script(backend.DuplicateScriptBody(work_dir=str(self.src)))
         wd = self._new_dir(result)
         self.assertFalse((wd / "song.json").exists())
+        self.assertFalse((wd / "lyrics.txt").exists())
         self.assertFalse((wd / "background_music.wav").exists())
 
     def test_original_film_is_left_intact(self):

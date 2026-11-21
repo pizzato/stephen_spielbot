@@ -944,6 +944,7 @@ class StoryEndpointTests(TempConfigCase):
         windows = [s["song_window"] for s in res["scenes"]]
         self.assertEqual(windows[0][0], 0)
         self.assertTrue(all(a[1] == b[0] for a, b in zip(windows, windows[1:])))
+        self.assertEqual((Path(res["work_dir"]) / "lyrics.txt").read_text(), "[Verse]\nHello\n")
         self.assertFalse((Path(res["work_dir"]) / "critic.json").exists())
 
     def test_auto_critic_runs_before_result_when_flagged(self):

@@ -96,7 +96,10 @@ the format does to the render.
   their identity when the audio voice changes; choose a different Lead singer to
   change the person shown on screen.
 - **Lyrics** — sung exactly as written, section tags (`[Verse]`, `[Chorus]`, …) on their
-  own lines.
+  own lines. The app also saves a plain UTF-8 `lyrics.txt` beside `song.json` in the
+  film's work folder, preserving section tags and line breaks. It updates when
+  lyrics are saved or re-written, travels with duplicated scripts, and survives
+  archiving and [working-file cleanup](edit-film.md#clean-up-working-files).
 - The Sound and Lyrics boxes have a **Re-generate** button with a *tell it how* caret:
   re-writing the lyrics keeps the sound you have (and writes to it, in the Vocalist's
   voice), re-writing the sound describes the music for the lyrics you have. Either way

@@ -42,7 +42,9 @@ Cleanup removes:
 It keeps:
 
 - The final video exactly as it is, with its language and processing metadata.
-- Scripts, scene descriptions, prompts, song lyrics, settings and publishing records.
+- Scripts, scene descriptions, prompts, song lyrics (`song.json` and the plain-text
+  `lyrics.txt` beside it), settings and publishing records. `lyrics.txt` keeps the
+  song's section tags and line breaks and is available under **Files to keep / download**.
 - **All music and narration files**, alternate music versions, source vocals,
   ambient audio, soundtrack slices and localized narration. Speech held only in a
   current scene video is extracted to a separate `scene_NN_original_audio.wav`

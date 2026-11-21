@@ -2858,7 +2858,7 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     if source and fmt == "song" and song_data and not (work_dir / "song.json").exists():
         # Headless story-first runs must keep the same cast when division
         # later writes the lyrics. Song-first runs already own this file.
-        (work_dir / "song.json").write_text(json.dumps(song_data, indent=2))
+        _write_song(work_dir, song_data)
     job_id = job_id_from_work_dir(work_dir)
     _story_path(work_dir).write_text(json.dumps(story, indent=2))
     create_brief = {
@@ -2909,6 +2909,15 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
             "scenes": [], "characters": []}
 
 
+def _write_song(wd: Path, data: dict) -> None:
+    """Save the song and its readable lyrics together, including section tags."""
+    (wd / "song.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+    lyrics = data.get("lyrics") or ""
+    if lyrics and not lyrics.endswith("\n"):
+        lyrics += "\n"
+    (wd / "lyrics.txt").write_text(lyrics, encoding="utf-8")
+
+
 def _copy_song_artifacts(src: Path, dst: Path) -> None:
     """Carry a song film's approved song from *src* into the fork *dst*.
 
@@ -2922,6 +2931,8 @@ def _copy_song_artifacts(src: Path, dst: Path) -> None:
     for name in ("song.json", "background_music.wav", "music_history.json"):
         if (src / name).exists():
             shutil.copy2(src / name, dst / name)
+    if (dst / "song.json").exists():
+        _write_song(dst, json.loads((dst / "song.json").read_text(encoding="utf-8")))
     if (src / "music_history").is_dir():
         shutil.copytree(src / "music_history", dst / "music_history",
                         dirs_exist_ok=True)
@@ -3107,8 +3118,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
                                                  singer_note=singer_desc)
             except Exception as e:
                 raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
-            (wd / "song.json").write_text(json.dumps(
-                {**song, "singer": singer, "created_at": time.time()}, indent=2))
+            _write_song(wd, {**song, "singer": singer, "created_at": time.time()})
         # Each singing scene gets its WINDOW of the song and the words sung in
         # it — timed against the real generated track when one exists.
         track_secs = None
@@ -3442,7 +3452,7 @@ def song_draft(body: SongDraftBody) -> dict:
     song.update({"voice": (body.voice or "").strip(), "seconds": secs,
                  "title": title, "style_name": ss["name"], "singer": singer,
                  "created_at": time.time()})
-    (wd / "song.json").write_text(json.dumps(song, indent=2))
+    _write_song(wd, song)
     job_id, create_brief = _register_song_job(
         wd, title=title, video_title=(body.video_title or "").strip(), topic=topic,
         minutes=minutes, n_scenes=body.n_scenes, voice=(body.voice or "").strip(),
@@ -3508,7 +3518,7 @@ def _import_song_file(wd: Path, data: str, filename: str) -> dict:
     # this file with a conversion it never had.
     song.update({"duration": dur, "seconds": round(dur, 1), "sung_as": "",
                  "uploaded_from": name, "updated_at": time.time()})
-    (wd / "song.json").write_text(json.dumps(song, indent=2))
+    _write_song(wd, song)
     return {"ok": True, "duration": dur,
             "song_url": f"/api/file?path={track}&t={int(time.time())}",
             **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
@@ -3564,11 +3574,11 @@ def song_import(body: SongImportBody) -> dict:
     singer, singer_desc = _pick_song_singer(cfg, ss, topic,
                                             (body.video_title or ""),
                                             voice=(body.voice or ""))
-    (wd / "song.json").write_text(json.dumps(
+    _write_song(wd,
         {"caption": (body.caption or "").strip(), "lyrics": (body.lyrics or "").strip(),
          "voice": (body.voice or "").strip(), "title": title,
          "singer": singer, "vocalist": singer_desc,
-         "style_name": ss["name"], "created_at": time.time()}, indent=2))
+         "style_name": ss["name"], "created_at": time.time()})
     result = _import_song_file(wd, body.data, body.filename)
     song = json.loads((wd / "song.json").read_text())
     job_id, create_brief = _register_song_job(
@@ -3663,7 +3673,7 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
                        work_dir=str(wd), category="film"):
             sound = story_mode.expand_song_sound(sound, data.get("lyrics") or "", vocal)
         data["caption"] = sound
-        (wd / "song.json").write_text(json.dumps(data, indent=2))
+        _write_song(wd, data)
     caption = song_caption(sound, vocal, engine)
     pool = WorkerPool(urls)
     staged = wd / "background_music.staging.wav"
@@ -3719,7 +3729,7 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     dur = _get_duration(final)
     data.update({"generated_at": time.time(), "duration": dur, "seconds": secs,
                  "seed": used_seed})
-    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    _write_song(wd, data)
     return {"ok": True, "duration": dur, "extended": extended,
             "song_url": f"/api/file?path={final}&t={int(time.time())}"}
 
@@ -3762,7 +3772,7 @@ def song_generate(body: SongGenerateBody) -> dict:
     if not (data.get("lyrics") or "").strip():
         raise HTTPException(400, "The song has no lyrics.")
     data["updated_at"] = time.time()
-    path.write_text(json.dumps(data, indent=2))
+    _write_song(wd, data)
     task_id = uuid.uuid4().hex[:12]
     _script_tasks[task_id] = {"status": "running"}
     # The length arithmetic happens in _do_song_generate, measured off the take
@@ -3819,7 +3829,7 @@ def _do_song_extend(wd: Path, seconds: float) -> dict:
     except Exception:
         gapp.logger.warning("Could not record the extended song", exc_info=True)
     data.update({"duration": dur, "updated_at": time.time()})
-    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    _write_song(wd, data)
     return {"ok": True, "duration": dur,
             "song_url": f"/api/file?path={track}&t={int(time.time())}",
             **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
@@ -3968,7 +3978,7 @@ def _convert_song_locked(wd: Path, voice: str, *, track_op: bool = True) -> dict
     except Exception:
         gapp.logger.warning("Could not record converted song", exc_info=True)
     data.update({"sung_as": voice, "converted_at": time.time()})
-    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    _write_song(wd, data)
     dur = _get_duration(track)
     return {"ok": True, "duration": dur, "sung_as": voice,
             "svc_engine": engine, "svc_engine_label": svc.ENGINE_LABELS[engine],
@@ -4070,7 +4080,7 @@ def _stamp_song_voice(wd: Path, version_id: int) -> str:
             track = wd / "background_music.wav"
             if track.exists():
                 data["duration"] = _get_duration(track)
-            path.write_text(json.dumps(data, indent=2))
+            _write_song(wd, data)
         except Exception:
             gapp.logger.warning("Could not update sung_as in song.json", exc_info=True)
     return voice
@@ -4149,7 +4159,7 @@ def _save_song_text(wd: Path, caption: str, lyrics: str,
         data["vocalist"] = vocalist.strip()
     if singer is not None:
         data["singer"] = singer.strip()
-    path.write_text(json.dumps(data, indent=2))
+    _write_song(wd, data)
     # A film that already rendered stamped the song into job_config.json for
     # the Remix regen — keep that mirror fresh so a re-sing uses the edit.
     jc_path = wd / "job_config.json"
@@ -17573,7 +17583,7 @@ def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
                                     exc_info=True)
                 break
             data.update(revised)
-            (wd / "song.json").write_text(json.dumps(data, indent=2))
+            _write_song(wd, data)
 
     _do_song_generate(wd)
 
