@@ -391,6 +391,11 @@ divide time the lyric sheet is whisper-aligned against the song's separated voca
 so every scene names and cuts on the words actually sung under it. It needs the
 re-voicing tools included in `make install`; without them — or when the alignment can't
 be trusted — the energy measurement is used instead, so it is safe to leave on.
+Repeated choruses are matched in order across the whole song. Changing this setting
+does not retime an existing film: use [**Realign lyrics to song**](edit-film.md#realign-lyrics-to-song)
+in the film editor to update lyric assignments within its existing shots. That explicit
+action runs independently of this toggle and leaves the assignments unchanged if
+alignment fails.
 
 **Cadence** replaces the old voice-speed multiplier: it is the narrator's speaking pace in
 **words per minute**. Each voice has a measured *natural* cadence (see the Voices tab);

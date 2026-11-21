@@ -19,7 +19,6 @@ trust (below _MIN_MATCH of the lyric words).
 """
 from __future__ import annotations
 
-import difflib
 import json
 import logging
 import re
@@ -183,15 +182,29 @@ def _match(lines: list[str], words: list[tuple[str, float, float]],
     if not transcript or not lyric:
         return 0.0, per_line, transcript
     times: list[tuple[float, float] | None] = [None] * len(lyric)
-    matcher = difflib.SequenceMatcher(
-        a=[_norm_word(w) for _, w in lyric],
-        b=[w for w, _, _ in transcript], autojunk=False)
+    lyric_words = [_norm_word(w) for _, w in lyric]
+    # Maximise the ordered word matches across the WHOLE song. A greedy
+    # longest-block match can assign the first chorus to a clearer final
+    # chorus and lose every verse in between, triggering the pacing fallback.
+    scores = [[0] * (len(transcript) + 1) for _ in range(len(lyric) + 1)]
+    for i in range(len(lyric) - 1, -1, -1):
+        for j in range(len(transcript) - 1, -1, -1):
+            if lyric_words[i] == transcript[j][0]:
+                scores[i][j] = 1 + scores[i + 1][j + 1]
+            else:
+                scores[i][j] = max(scores[i + 1][j], scores[i][j + 1])
+    i = j = 0
     matched = 0
-    for block in matcher.get_matching_blocks():
-        for k in range(block.size):
-            times[block.a + k] = (transcript[block.b + k][1],
-                                  transcript[block.b + k][2])
+    while i < len(lyric) and j < len(transcript):
+        if lyric_words[i] == transcript[j][0]:
+            times[i] = (transcript[j][1], transcript[j][2])
             matched += 1
+            i += 1
+            j += 1
+        elif scores[i + 1][j] >= scores[i][j + 1]:
+            i += 1
+        else:
+            j += 1
     for (line_idx, word), t in zip(lyric, times):
         if t is None:
             per_line[line_idx].append((word, None, None))

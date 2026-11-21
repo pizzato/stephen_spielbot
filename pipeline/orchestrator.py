@@ -769,6 +769,20 @@ class DurableStore:
             self._conn.execute("DELETE FROM scenes WHERE job_id=?", (job_id,))
         self.upsert_scenes(job_id, scenes)
 
+    def upsert_scenes_if_unchanged(self, job_id: str, expected: list[dict],
+                                 scenes: list[dict]) -> None:
+        """Apply a slow operation's scene edits only to the rows it read."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if self.scene_rows(job_id) != expected:
+                    raise ValueError("Scenes changed during lyric alignment. Try again.")
+                self.upsert_scenes(job_id, scenes)
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
     def update_scene_preview(self, job_id: str, scene_id: int, preview_path: Path | str) -> None:
         with self._lock:
             self._conn.execute(

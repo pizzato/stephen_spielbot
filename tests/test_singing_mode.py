@@ -1644,6 +1644,25 @@ class LyricAlignTests(unittest.TestCase):
             spans = lyric_align.align_lines(Path("stem.wav"), self.LINES)
         self.assertEqual(spans, [(4.0, 6.8), (7.0, 9.8), (10.0, 12.8)])
 
+    def test_imperfect_first_chorus_does_not_match_the_final_chorus(self):
+        from pipeline import lyric_align
+        chorus = "See us free break these chains let us build"
+        lines = ["Morning comes", chorus, "River lights guide us", chorus]
+        transcript = ("Morning comes See us free break those chains let us build "
+                      "River lights guide them " + chorus)
+        words = [(w, float(i), i + 0.8)
+                 for i, w in enumerate(transcript.split())]
+        # The final chorus is the longest exact block. Greedily assigning it
+        # to the first chorus loses the intervening verse and drops below the
+        # match threshold, despite only two mistranscribed words in the song.
+        spans = lyric_align.align_lines(Path("stem.wav"), lines, words=words)
+        self.assertEqual(spans, [(0.0, 1.8), (2.0, 10.8),
+                                 (11.0, 13.8), (15.0, 23.8)])
+        timed = lyric_align.line_word_times(lines, words)
+        self.assertEqual(timed[1][0], ("See", 2.0, 2.8))
+        self.assertEqual(timed[2][0], ("River", 11.0, 11.8))
+        self.assertEqual(timed[3][0], ("See", 15.0, 15.8))
+
     def test_a_garbled_line_is_interpolated_between_neighbours(self):
         from pipeline import lyric_align
         words = [w for w in self._words()

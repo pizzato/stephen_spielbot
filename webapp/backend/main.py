@@ -15,6 +15,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -679,6 +680,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
         name = "Upscaling final video"
     elif component == "song_revoice" or task_id.startswith("song_revoice_"):
         name = "Re-voicing the song"
+    elif component == "song_realign":
+        name = "Realigning song lyrics"
     elif component == "music" or task_id.startswith("music_regen_"):
         name = "Regenerating music"
     elif component == "narrator" or task_id.startswith("narrator_regen_"):
@@ -9271,6 +9274,181 @@ def localize_audio(body: LocalizeAudioBody) -> dict:
     except Exception as e:
         raise HTTPException(500, f"Dubbed audio build failed: {str(e).splitlines()[0][:200]}")
     return {"ok": True, "audio_url": f"/api/file?path={out}&t={int(time.time())}"}
+
+
+class SongRealignBody(BaseModel):
+    work_dir: str
+
+
+def _song_realign_inputs(wd: Path) -> tuple[list[dict], str]:
+    from pipeline.assembler import _get_duration
+
+    track = wd / "background_music.wav"
+    if not track.is_file() or not (wd / "song.json").is_file():
+        raise ValueError("This film needs a song file and lyric sheet to realign.")
+    lyrics = str(json.loads((wd / "song.json").read_text()).get("lyrics") or "")
+    if not story_mode.lyric_lines(lyrics):
+        raise ValueError("The song's lyric sheet is empty.")
+    rows = gapp._load_scenes_for_work_dir(wd)
+    singing = [r for r in rows if (r.get("metadata") or {}).get("singing")]
+    if not singing:
+        raise ValueError("This film has no singing scenes to realign.")
+    duration = _get_duration(track)
+    for row in singing:
+        window = row["metadata"].get("song_window")
+        try:
+            start, end = map(float, window)
+            valid = (math.isfinite(start) and math.isfinite(end)
+                     and 0 <= start < end <= duration + 1 / 24)
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise ValueError(f"Scene {row['id']} has no valid window in the current song. "
+                             "Realignment requires the existing song cuts.")
+    return rows, lyrics
+
+
+def _realign_song_task(task_id: str, wd: Path) -> None:
+    """Retime lyric fields within existing cuts; never regenerate the pictures."""
+    from pipeline import lyric_align, song_timing
+
+    started = _film_task_started_at(task_id) or time.time()
+    try:
+        _film_checkpoint(task_id)
+        song_source = (wd / "song.json").read_bytes()
+        script_source = (wd / "script.json").read_bytes()
+        track = wd / "background_music.wav"
+        track_source = (track.stat().st_size, track.stat().st_mtime_ns)
+        rows, lyrics = _song_realign_inputs(wd)
+        job_id = job_id_from_work_dir(wd)
+        store = DurableStore.default()
+        try:
+            expected = store.scene_rows(job_id)
+        finally:
+            store.close()
+        if expected and expected != rows:
+            raise ValueError("Scenes changed during lyric alignment. Try again.")
+        lines = story_mode.lyric_lines(lyrics)
+        language = gapp._norm_tts_language(_film_job_config(wd).get("tts_language"))
+        _film_tasks[task_id] = {"status": "running", "step": "Separating song vocals"}
+        stem = song_timing.vocal_stem(track)
+        if stem is None:
+            raise ValueError("Vocal separation is unavailable. Run make install on the controller.")
+        regions = song_timing.measure_regions(track)
+        if not regions:
+            raise ValueError("No singing was detected in this song. Lyric timings were not changed.")
+        _film_tasks[task_id]["step"] = "Matching lyrics to the singing"
+        words = lyric_align.word_times(stem, language)
+        if not words:
+            raise ValueError("No words could be timed. Check the controller's Whisper installation.")
+        spans = lyric_align.align_lines(stem, lines, language=language,
+                                        regions=regions, words=words)
+        if spans is None:
+            raise ValueError("Too few lyric words matched the singing. Check the lyric sheet; "
+                             "existing timings were not changed.")
+        timed_words = lyric_align.line_word_times(lines, words, regions=regions)
+        sung = lyric_align.voiced_regions(regions, words, stem=stem, language=language)
+        _, matched, _ = lyric_align._match(lines, words, regions)
+        interpolated = [line for line, ws in zip(lines, matched)
+                        if not any(a is not None for _, a, _ in ws)]
+        updated = []
+        style_note = _scene_style_note(job_id)
+        for row in rows:
+            meta = dict(row.get("metadata") or {})
+            if not meta.get("singing"):
+                continue
+            start, end = map(float, meta["song_window"])
+            texts, times = song_timing.window_phrases(
+                lines, spans, start, end, word_times=timed_words)
+            meta.update(sings="\n".join(texts), line_times=times,
+                        vocal_ranges=song_timing.window_vocals(sung, start, end))
+            fresh = {**row, "metadata": meta}
+            if not meta.get("prompt_override"):
+                acted = performance_mode.acted_meta(fresh)
+                # Older shots keep their action in the prose prompt. Preserve
+                # that action before replacing it with an assembled prompt.
+                if not meta.get("beats") and acted.get("beats"):
+                    meta["beats"] = acted["beats"]
+                if not meta.get("setting") and acted.get("setting"):
+                    meta["setting"] = acted["setting"]
+                fresh["video_prompt"] = performance_mode.build_h3_prompt(
+                    acted, style_note=style_note,
+                    picture_names=list(meta.get("cast") or []),
+                    audio_names=performance_mode.speakers_in(meta.get("lines") or [])[
+                        :performance_mode.MAX_SPEAKERS_PER_SCENE])
+            if fresh != row:
+                updated.append(fresh)
+        _film_checkpoint(task_id)
+        if any(tid != task_id and info.get("work_dir") == str(wd)
+               and (_film_tasks.get(tid) or {}).get("status") == "running"
+               for tid, info in list(_film_task_meta.items())):
+            raise ValueError("Another film task started during lyric alignment. Try again when it finishes.")
+        if ((wd / "song.json").read_bytes() != song_source
+                or (wd / "script.json").read_bytes() != script_source
+                or (track.stat().st_size, track.stat().st_mtime_ns) != track_source):
+            raise ValueError("The song or scenes changed during lyric alignment. Try again.")
+        store = DurableStore.default()
+        try:
+            # Keep the pre-alignment lyric edits recoverable. The DB comparison
+            # and update share a transaction so a concurrent edit cannot be lost.
+            (wd / f"lyric_alignment_backup_{task_id}.json").write_text(
+                json.dumps(rows, indent=2))
+            if not store.get_job(job_id):
+                jc = _film_job_config(wd)
+                store.create_or_update_job(job_id, wd, jc.get("video_title") or wd.name,
+                                           config=jc, metadata={}, status="done")
+            changed = {r["id"]: r for r in updated}
+            # A script-only older film must retain its non-singing rows too
+            # when it first becomes available through the durable store.
+            to_save = updated if expected else [changed.get(r["id"], r) for r in rows]
+            store.upsert_scenes_if_unchanged(job_id, expected, to_save)
+            saved = store.scene_rows(job_id)
+        finally:
+            store.close()
+        gapp._persist_script_snapshot(wd, saved)
+        message = f"Realigned lyrics in {len(updated)} scenes. Review the timings before re-shooting."
+        try:
+            _caption_tracks_for_download(wd)
+        except Exception:
+            gapp.logger.warning("Lyrics saved but caption refresh failed for %s", wd, exc_info=True)
+            message += " Caption refresh failed; download the caption track again to retry."
+        _film_tasks[task_id] = {
+            "status": "done", "updated_scenes": [r["id"] for r in updated],
+            "matched_words": sum(a is not None for ws in matched for _, a, _ in ws),
+            "total_words": sum(len(ws) for ws in matched),
+            "matched_lines": len(lines) - len(interpolated), "total_lines": len(lines),
+            "interpolated_lines": interpolated,
+            "message": message,
+        }
+    except Exception as e:
+        _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id, started=started, done_name="Realigned song lyrics",
+            failed_name="Lyric realignment failed", cancelled_name="Lyric realignment cancelled",
+            detail=wd.name)
+
+
+@api.post("/api/films/song/realign")
+def film_realign_song(body: SongRealignBody) -> dict:
+    wd = Path(body.work_dir).resolve()
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
+    if _film_edit_busy(wd) or _work_dir_render_active(wd):
+        raise HTTPException(409, "Wait for this film's current task to finish before realigning.")
+    try:
+        _song_realign_inputs(wd)
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e))
+    tid = f"song_realign_{uuid.uuid4().hex[:12]}"
+    _film_tasks[tid] = {"status": "running", "step": "Reading song timing"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "song_realign",
+        "started_at": time.time(),
+    }
+    threading.Thread(target=_realign_song_task, args=(tid, wd), daemon=True).start()
+    return {"ok": True, "task_id": tid}
 
 
 class MusicRegenBody(BaseModel):

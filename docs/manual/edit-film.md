@@ -331,8 +331,33 @@ your current levels. Every generated track is kept in a version strip.
 
 For a [music video](../performance_films.md#singing-films-the-music-video-format) the
 card becomes **The film's song**: the lyrics as sung (read-only here — the words are the
-[Script screen's](script.md#song) to edit), the sound caption, **Sing it again**, and
-**Sing it as [voice]**.
+[Script screen's](script.md#song) to edit), the sound caption, **Sing it again**,
+**Sing it as [voice]**, and **Realign lyrics to song**.
+
+##### Realign lyrics to song
+
+Use **Realign lyrics to song** when the words under **Sung in this shot** do not match
+the audio, including songs imported from a file. It measures the current song's vocal
+stem again and matches the saved lyric sheet in order across the whole song, so a
+repeated chorus stays with its own occurrence. It updates the lyric rows, line timings,
+vocal windows, assembled scene prompts and downloadable captions within the existing
+shot boundaries. It replaces manual edits to the lyric rows and timings; the song,
+scene lengths, staging and rendered clips stay in place.
+The previous scene fields are saved in a `lyric_alignment_backup_*.json` file in
+the film folder before the corrected assignments are applied.
+
+The result reports matched words and lines, and lists any wholly unmatched lines whose
+timings were estimated from neighbouring lines. Listen to those passages and review
+**Sung in this shot** in **Scenes**. If fewer than half the lyric words match, or the
+alignment tools cannot run, realignment reports the failure and leaves the saved
+assignments unchanged. Unlike the initial scene divide, this action never applies an
+energy-paced fallback as a successful repair. It runs regardless of the style's
+automatic lyric-timing setting.
+
+Corrected instructions affect the next **Shoot again**; they do not change mouth
+movements already rendered into a clip. Hand-edited prompts remain pinned: choose
+**Rebuild from the fields** for those scenes before re-shooting. Captions already
+burned into a video also need to be applied again after reviewing the new timings.
 
 With MiniMax Music 3, **Sing it again** expands a short sound caption into detailed
 Global Metadata and Arrangement sections and supplies the saved vocalist separately.
@@ -566,3 +591,6 @@ captions follow. The card's editor contains the dialogue and
 assembled prompt, while **Re-generate scene**, **Shoot again**, **Continue**, trim and the
 image/video version strips stay with it. Performed silent scenes use the same layout,
 marked *silent* and without dialogue controls.
+
+For timing errors across many shots, use [**Realign lyrics to song**](#realign-lyrics-to-song)
+on the Film tab before correcting individual rows or re-shooting performances.

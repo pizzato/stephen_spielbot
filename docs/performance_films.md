@@ -338,17 +338,28 @@ sung, so line times are otherwise estimated by pacing the lines evenly through t
 singing — close, but a line can smear across a phrase gap into the neighbouring scene.
 With the option on, the divide transcribes the vocal stem with word timestamps
 (faster-whisper, included in `make install` beside demucs) and
-matches the transcript against the lyric sheet it already knows — alignment, not
-transcription, so the fixed line order disambiguates a chorus sung four times, a garbled
-word interpolates from its neighbours, and words "heard" outside the measured singing
+matches the transcript against the lyric sheet it already knows. Matching maximises
+the number of words matched in order across the whole song, rather than choosing the
+longest repeated phrase first: an imperfect first chorus must not jump to a cleaner
+final chorus and lose the intervening verses. A garbled word interpolates from its
+neighbours, and words "heard" outside the measured singing
 are discarded as hallucinations. Scenes then name and cut on the words actually sung
 under them. The transcription is pinned to a deterministic decode, so the same track
 always times the same way — whisper's default sampling fallback fires constantly on a
 sung stem and made the transcript differ run to run, once dropping a song's first 30
 seconds outright. When fewer than half the lyric words match — or whisper is not installed —
-the paced estimate is used instead, so the option never makes timing worse. The model
+the paced estimate is used instead. The model
 (whisper *small*, multilingual) downloads on the first alignment; the divide's "Timing
 the song's lyrics" step covers it in Activity.
+
+**Finished films can be realigned without changing their cuts.** On the film editor's
+Film tab, [**Realign lyrics to song**](manual/edit-film.md#realign-lyrics-to-song) measures
+the current track and replaces each shot's lyric assignments, timings and caption cues
+inside its saved song window. It also replaces manual lyric timing edits. The result
+lists unmatched lines that need a listening check; an overall match below half the
+lyric words fails without applying estimates. Existing clips and pinned prompts stay
+as they are, so review the new assignments, rebuild any pinned prompt from its fields,
+and re-shoot the performances that need correcting. Burned captions need reapplying.
 
 **The scenes cut between sentences.** The same lyric timeline decides *where* one take
 ends and the next begins. Rather than dividing the track into mathematically equal
