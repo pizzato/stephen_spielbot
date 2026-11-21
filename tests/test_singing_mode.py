@@ -578,6 +578,17 @@ class SongRewriteTests(TempConfigCase):
     def _regen(self, **kw):
         return backend.regenerate_job_song(self.job_id, backend.SongRegenBody(**kw))
 
+    def test_song_draft_exports_plain_text_lyrics(self):
+        lyrics = "[Verse]\nOlá, mundo\n\n[Chorus]\nVolta pra mim"
+        with unittest.mock.patch.object(
+                backend.story_mode, "write_song",
+                return_value={"caption": "folk", "lyrics": lyrics}), \
+             unittest.mock.patch.object(backend, "_pick_song_singer", return_value=("", "")):
+            result = backend.song_draft(backend.SongDraftBody(
+                video_title="Olá", style_name="Hero"))
+        wd = Path(result["work_dir"])
+        self.assertEqual((wd / "lyrics.txt").read_bytes(), (lyrics + "\n").encode("utf-8"))
+
     def test_new_lyrics_are_written_to_the_sound_the_editor_kept(self):
         with unittest.mock.patch.object(
                 backend.story_mode, "write_song",
@@ -595,6 +606,7 @@ class SongRewriteTests(TempConfigCase):
         saved = json.loads((self.wd / "song.json").read_text())
         self.assertEqual(saved["lyrics"], "[Chorus]\nnew words")
         self.assertEqual(saved["caption"], "fast punk, 180 BPM")
+        self.assertEqual((self.wd / "lyrics.txt").read_text(), "[Chorus]\nnew words\n")
 
     def test_new_sound_describes_the_lyrics_the_editor_kept(self):
         with unittest.mock.patch.object(
@@ -645,13 +657,24 @@ class SongRewriteTests(TempConfigCase):
         self.assertEqual(brief["topic"], "Rooftop")
 
     def test_direction_saved_with_song_edits_comes_back_from_the_studio(self):
+        lyrics = "[Verse]\nCoração\n\n[Chorus]\nVolta pra mim"
+        (self.wd / "lyrics.txt").write_text("outdated lyrics\n")
         backend.update_job_song(self.job_id, backend.SongUpdateBody(
-            caption="c", lyrics="[Verse]\nwords", direction="a rooftop wedding"))
+            caption="c", lyrics=lyrics, direction="a rooftop wedding"))
         self.assertEqual(
             json.loads((self.wd / "create_brief.json").read_text())["topic"],
             "a rooftop wedding")
         self.assertEqual(backend.get_job_song(self.job_id)["direction"],
                          "a rooftop wedding")
+        self.assertEqual((self.wd / "lyrics.txt").read_bytes(), (lyrics + "\n").encode("utf-8"))
+
+    def test_sing_it_again_exports_unsaved_lyric_edits_before_rendering(self):
+        (self.wd / "lyrics.txt").write_text("outdated lyrics\n")
+        with unittest.mock.patch.object(backend.threading, "Thread"):
+            result = backend.song_generate(backend.SongGenerateBody(
+                work_dir=str(self.wd), lyrics="[Verse]\nEdited words"))
+        self.addCleanup(backend._script_tasks.pop, result["task_id"], None)
+        self.assertEqual((self.wd / "lyrics.txt").read_text(), "[Verse]\nEdited words\n")
 
     def test_vocalist_is_shown_saved_and_survives_an_omitting_client(self):
         """The vocalist line (who sings) must be visible and editable in the
@@ -1000,16 +1023,20 @@ class SongUploadTests(_SongFilmCase):
         self.assertAlmostEqual(res["create_brief"]["minutes"], 0.75)
         # Nothing was written for it: the lyrics are the user's to fill in.
         self.assertEqual(res["lyrics"], "")
+        self.assertEqual((wd / "lyrics.txt").read_bytes(), b"")
         self.assertEqual(len(backend.music_history.history(wd)["versions"]), 1)
 
     def test_an_imported_song_is_a_job_the_song_tab_can_load(self):
         res = backend.song_import(backend.SongImportBody(
             video_title="Rooftop Rain", style_name="Hero",
-            filename="rooftop.wav", data=_audio_payload(b"finished-song")))
+            filename="rooftop.wav", data=_audio_payload(b"finished-song"),
+            lyrics="[Verse]\nRooftop rain"))
 
         song = backend.get_job_song(res["job_id"])
         self.assertTrue(song["song_url"])
         self.assertEqual(song["duration"], 45.0)
+        self.assertEqual((Path(res["work_dir"]) / "lyrics.txt").read_text(),
+                         "[Verse]\nRooftop rain\n")
 
 
 class SongEndingTests(_SongFilmCase):

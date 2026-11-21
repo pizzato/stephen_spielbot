@@ -125,6 +125,7 @@ class SongFirstSequenceTests(TempConfigCase):
         # The rewrite lands on disk BEFORE the track is rendered from it.
         saved = json.loads((self.wd / "song.json").read_text())
         self.assertEqual(saved["lyrics"], rewritten["lyrics"])
+        self.assertEqual((self.wd / "lyrics.txt").read_text(), rewritten["lyrics"] + "\n")
         self.assertEqual(self.calls, ["draft", "generate"])
 
     def test_critic_off_sings_the_first_draft(self):

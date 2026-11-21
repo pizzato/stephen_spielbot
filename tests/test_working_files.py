@@ -49,6 +49,9 @@ def add_cache(wd):
 
 def test_preview_and_cleanup_preserve_current_assets_and_metadata(film):
     wd, final = film
+    lyrics = "[Verse]\nOlá\n\n[Chorus]\nMundo\n"
+    put(wd / "song.json", json.dumps({"lyrics": lyrics}).encode("utf-8"))
+    put(wd / "lyrics.txt", lyrics.encode("utf-8"))
     original = {p: p.read_bytes() for p in wd.rglob("*") if p.is_file()}
     for _ in range(2):
         image_history.record(wd, 1, wd / "scene_01_preview.png")
@@ -64,6 +67,9 @@ def test_preview_and_cleanup_preserve_current_assets_and_metadata(film):
     preview = working_files.preview(wd, final)
     assert preview["files"] == 13  # 4 working videos, 3 old images, 4 video versions, 2 caches
     assert cache.exists()  # preview is read-only
+    kept_scripts = next(group for group in preview["kept"]["groups"]
+                        if group["label"] == "Scripts and metadata")
+    assert {"song.json", "lyrics.txt"} <= {item["name"] for item in kept_scripts["items"]}
     result = working_files.clean(wd, final)
     assert result["files"] == 13
     assert result["bytes"] == preview["bytes"]

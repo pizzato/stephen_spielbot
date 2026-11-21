@@ -125,6 +125,9 @@ The pipeline handles the song and its visuals together:
   music **caption** (genre, tempo, mood, arrangement) that becomes the film's music
   description. Both music engines sing lyrics natively; the caption reads best structured,
   and for song films it must *not* say "instrumental".
+  The lyrics are also saved as UTF-8 `lyrics.txt` beside `song.json`, with section
+  tags and line breaks preserved. Saving or re-writing the lyrics updates this
+  text copy; archiving and working-file cleanup retain it.
 - **One lead singer fronts it.** News music videos prepare the film's news characters
   first and cast the main available subject ahead of the style's recurring performers.
   The selected news identity and portrait persist through the song, story, redrafts
