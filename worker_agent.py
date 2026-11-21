@@ -143,6 +143,19 @@ def _execute_music(store: DurableStore, task: TaskRecord, endpoint: str) -> None
     store.complete_task(task.id, result={"path": str(output), "duration": actual_duration}, message="music ready")
 
 
+def _existing_scene_video(payload: dict) -> Path | None:
+    work_dir = Path(payload["work_dir"]).expanduser()
+    sid = int(payload["scene_id"])
+    output = work_dir / f"scene_{sid:02d}_video.mp4"
+    single_clip = work_dir / f"scene_{sid:02d}_clip_01.mp4"
+    if output.exists() and output.stat().st_size > 10_000:
+        return output
+    if (single_clip.exists() and single_clip.stat().st_size > 10_000
+            and not (work_dir / f"scene_{sid:02d}_clip_02.mp4").exists()):
+        return single_clip
+    return None
+
+
 def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -> None:
     p = task.payload
     work_dir = Path(p["work_dir"]).expanduser()
@@ -154,15 +167,10 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
             raise RetryLater(f"narration missing for scene {sid}")
         narration_duration = _get_duration(narration_path)
 
-    output = work_dir / f"scene_{sid:02d}_video.mp4"
-    single_clip = work_dir / f"scene_{sid:02d}_clip_01.mp4"
-    if output.exists() and output.stat().st_size > 10_000:
+    output = _existing_scene_video(p)
+    if output:
         store.record_artifact(task.job_id, task.id, "scene_video", output, duration_seconds=_get_duration(output))
         store.complete_task(task.id, result={"path": str(output), "skipped": True})
-        return
-    if single_clip.exists() and single_clip.stat().st_size > 10_000 and not (work_dir / f"scene_{sid:02d}_clip_02.mp4").exists():
-        store.record_artifact(task.job_id, task.id, "scene_video", single_clip, duration_seconds=_get_duration(single_clip))
-        store.complete_task(task.id, result={"path": str(single_clip), "skipped": True})
         return
 
     scene = Scene(
@@ -177,6 +185,12 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
     first_frame = Path(p["first_frame"]).expanduser() if p.get("first_frame") else work_dir / f"scene_{sid:02d}_first_frame.png"
     image_engine = engines.resolve_first_frame(p)
     video_engine = engines.resolve_video(p, p.get("video_engine"))
+    if video_engine.get("worker_preflight"):
+        from pipeline.comfyui import compatible_video_workers
+        try:
+            compatible_video_workers([endpoint], video_engine)
+        except RuntimeError as exc:
+            raise RetryLater(str(exc)) from exc
     lease_seconds = max(int(video_engine.get("lease_seconds") or 0),
                         int(image_engine.get("lease_seconds") or 0))
     if lease_seconds:
@@ -395,6 +409,32 @@ def execute_task(store: DurableStore, task: TaskRecord, endpoint: str, lease_sec
             raise RuntimeError(f"unsupported task kind: {task.kind}")
 
 
+def _task_eligible_for_worker(task: TaskRecord, endpoint: str,
+                              readiness: dict[str, tuple[float, bool]]) -> bool:
+    """Probe optional video engines lazily, at most once per 30 seconds.
+
+    A negative result leaves the task unclaimed rather than burning retries.
+    Expiry lets this agent use a newly installed bundle without a restart.
+    """
+    if task.kind != "scene.video.generate":
+        return True
+    engine = engines.resolve_video(task.payload, task.payload.get("video_engine"))
+    if not engine.get("worker_preflight") or _existing_scene_video(task.payload):
+        return True
+    cached = readiness.get(engine["key"])
+    if cached and time.monotonic() - cached[0] < 30:
+        return cached[1]
+    from pipeline.comfyui import compatible_video_workers
+    try:
+        compatible_video_workers([endpoint], engine)
+        ready = True
+    except RuntimeError as exc:
+        LOG.info("Skipping %s on %s: %s", engine["label"], endpoint, exc)
+        ready = False
+    readiness[engine["key"]] = (time.monotonic(), ready)
+    return ready
+
+
 def run_agent(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=logging.INFO if not args.debug else logging.DEBUG,
@@ -404,11 +444,15 @@ def run_agent(args: argparse.Namespace) -> int:
     wid = args.worker_id or worker_id(args.kind, args.endpoint)
     store.register_worker(wid, args.kind, args.endpoint, metadata={"pid": os.getpid()})
     LOG.info("worker %s online kind=%s endpoint=%s", wid, args.kind, args.endpoint)
+    readiness: dict[str, tuple[float, bool]] = {}
+    task_eligible = (lambda task: _task_eligible_for_worker(task, args.endpoint, readiness)
+                     ) if args.kind == "comfy" else None
 
     try:
         while True:
             store.heartbeat_worker(wid)
-            task = store.acquire_next_task(wid, args.kind, lease_seconds=args.lease_seconds)
+            task = store.acquire_next_task(wid, args.kind, lease_seconds=args.lease_seconds,
+                                           task_eligible=task_eligible)
             if task is None:
                 if args.once:
                     return 0
@@ -419,9 +463,11 @@ def run_agent(args: argparse.Namespace) -> int:
                 store.heartbeat_worker(wid, active_task_id=task.id)
                 execute_task(store, task, args.endpoint, args.lease_seconds)
             except RetryLater as exc:
+                readiness.pop(task.payload.get("video_engine"), None)
                 LOG.info("retry later %s: %s", task.id, exc)
                 store.fail_task(task.id, exc, retryable=True)
             except Exception as exc:
+                readiness.pop(task.payload.get("video_engine"), None)
                 LOG.exception("task failed: %s", task.id)
                 store.fail_task(task.id, exc, retryable=True)
             finally:

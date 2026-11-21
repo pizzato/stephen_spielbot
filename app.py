@@ -1661,7 +1661,7 @@ def style_script_plan(ss: dict, minutes: float | None = None,
     # as fewer scenes each carrying proportionally more narration. Only the
     # MiniMax engines chain; LTX has its own continuation and ignores the flag.
     chained = bool(ss.get("h3_chain_scenes")) and \
-        str(ss.get("video_engine") or "").startswith("minimax-h3")
+        engines.video_supports_chaining(ss.get("video_engine"))
     count = int(n_scenes or 0) or style_video_scenes(ss)
     ceiling = cadence.engine_scene_ceiling(ss.get("video_engine"), chained)
     if n_scenes and int(n_scenes) > 0 and not (minutes and float(minutes) > 0):

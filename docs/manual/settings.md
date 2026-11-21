@@ -150,9 +150,10 @@ anonymity and does not change the separate description/footer/hashtag settings.
 
 ### Video models
 
-The same list for the scene engines — LTX 2.5, the MiniMax H3 variants and their Turbo
-distillations — with each one's licence note. Nodes ship with ComfyUI itself, so
-*not installed* on a worker whose weights are present usually means its container needs a
+The same list for the scene engines — LTX 2.5, pi-H3 2-step DWD, and the other
+MiniMax H3 variants — with each one's licence note. Base nodes ship with ComfyUI;
+pi-H3 also needs the piFlow extension supplied in the worker image.
+*Not installed* on a worker whose weights are present can mean its container needs a
 rebuild. See [Models → Video engines](../models.md#video-engines-per-style).
 
 ### Music models
@@ -348,12 +349,19 @@ A film can hold two kinds of scene, and each has its own model, picked side by s
 
 | Picker | Renders |
 |---|---|
-| **Narrated & silent scenes** | Each scene from its first-frame still (LTX 2.5 or MiniMax H3 I2V) — for narration-only films. In a *mixed* film the narrated scenes are shot as silent takes on the acted-scene engine below, so the whole film comes off one model |
+| **Narrated & silent scenes** | Each scene from its first-frame still (LTX 2.5, pi-H3 2-step DWD or another MiniMax H3 I2V engine) — for narration-only films. In a *mixed* film the narrated scenes are shot as silent takes on the acted-scene engine below, so the whole film comes off one model |
 | **Acted (dialogue) scenes** | Each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices (a MiniMax H3 Ref2VA variant) |
 
-**Sampling steps** beneath them is one knob for both: it overrides the step count of every
-full MiniMax scene video in the style — narrated I2V and acted Ref2VA alike. 0 keeps each engine's
-default (Turbo 4, the others 15); LTX ignores it. Short H3 first-frame clips always use four steps.
+**Sampling steps** beneath them overrides configurable MiniMax scene engines,
+including acted Ref2VA. 0 keeps each engine's default (Turbo 4, base H3 15).
+**pi-H3 2-step DWD always uses two steps**, LTX ignores this setting, and short H3
+first-frame clips always use four steps. Selecting pi-H3 leaves the shared control
+available for the acted-scene model.
+
+**Chained scenes** continues to apply to acted scenes when pi-H3 is selected.
+pi-H3 first-frame clips do not chain; their scene budgets remain single-clip.
+Install pi-H3 through Infrastructure, or `make install INSTALL_PIH3=1`, before
+selecting it. See [pi-H3 requirements and limits](../models.md#pi-h3-two-step-dwd).
 
 ### Narrator & audio
 

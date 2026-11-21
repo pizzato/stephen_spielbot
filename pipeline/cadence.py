@@ -123,8 +123,9 @@ def engine_scene_ceiling(video_engine: str | None = None,
     same threshold an acted take is split at (performance.acted_limits), which
     chaining widens — past it a clip truncates rather than running longer."""
     if str(video_engine or "").startswith("minimax-h3"):
+        from pipeline.engines import video_supports_chaining
         from pipeline.performance import acted_limits  # lazy: avoid cycle
-        return acted_limits(chained)[0]
+        return acted_limits(chained and video_supports_chaining(video_engine))[0]
     return LTX_SCENE_CEIL_SECS
 
 # Sanity range for measured cadences — samples outside are discarded (a

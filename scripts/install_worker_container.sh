@@ -14,6 +14,7 @@
 #   MODEL_SOURCE   host to rsync models from if <host> has none (set by install.sh)
 #   INSTALL_FLUX3  1 also checks/syncs the optional FLUX 3 bundle on existing workers
 #   INSTALL_QWEN_TURBO  1 also checks/syncs the optional Qwen Turbo research bundle
+#   INSTALL_PIH3  1 also checks/syncs the optional pi-H3 two-step DWD bundle
 #   GPU_MODE       "cdi" = modern CDI device injection (fixes cuInit 999 on new
 #                  drivers where the legacy --gpus path is broken); default is
 #                  the legacy path. Sticky: a host once deployed with cdi keeps
@@ -163,8 +164,8 @@ rsync -az          "$REPO_ROOT/.dockerignore" "$BUILD_DEST/.dockerignore"
 _sh "cat > ~/$REMOTE_BUILD_DIR/docker/.env" <<ENV
 MODELS_DIR=${REMOTE_MODELS}
 COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
-# ComfyUI 0.42.5 release: native FLUX 3 (PR #17064) and PDD-head models such as FastH3 Omni (PR #17157).
-COMFYUI_REF=483dae4326356b81de05d27aca3f433dd323cc25
+# ComfyUI 0.45.0 release: pi-H3 DWD support, native FLUX 3 and PDD-head models.
+COMFYUI_REF=989d93d0d968e704c589ce0146bb18c77f6b50cc
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}
@@ -196,9 +197,17 @@ _qwen_turbo_models_present() {
             -f '$REMOTE_MODELS/text_encoders/qwen3vl_8b_int8_convrot.safetensors' &&
             -f '$REMOTE_MODELS/vae/qwen_image_2.1_vae_bf16.safetensors' ]]"
 }
+_pih3_models_present() {
+    _sh "[[ -f '$REMOTE_MODELS/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors' &&
+            -f '$REMOTE_MODELS/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors' &&
+            -f '$REMOTE_MODELS/vae/minimax_h3_video_vae_int8_convrot.safetensors' &&
+            -f '$REMOTE_MODELS/vae/minimax_h3_audio_vae_fp32.safetensors' &&
+            -f '$REMOTE_MODELS/loras/pi_h3_2step_dwd_adapter_int8_convrot.safetensors' ]]"
+}
 if _sh "[[ -f '$REMOTE_MODELS/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors' && -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' && -f '$REMOTE_MODELS/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors' ]]" 2>/dev/null &&
    { [[ "${INSTALL_FLUX3:-0}" != "1" ]] || _flux3_models_present; } &&
-   { [[ "${INSTALL_QWEN_TURBO:-0}" != "1" ]] || _qwen_turbo_models_present; }; then
+   { [[ "${INSTALL_QWEN_TURBO:-0}" != "1" ]] || _qwen_turbo_models_present; } &&
+   { [[ "${INSTALL_PIH3:-0}" != "1" ]] || _pih3_models_present; }; then
     echo "[deploy] models present on $TARGET"
 elif [[ -n "${MODEL_SOURCE:-}" && "$MODEL_SOURCE" != "$TARGET" ]]; then
     echo "[deploy] models missing on $TARGET — rsyncing from $MODEL_SOURCE (this can take a while) ..."
@@ -221,6 +230,10 @@ if [[ "${INSTALL_FLUX3:-0}" == "1" ]] && ! _flux3_models_present; then
 fi
 if [[ "${INSTALL_QWEN_TURBO:-0}" == "1" ]] && ! _qwen_turbo_models_present; then
     echo "ERROR: Qwen Turbo model bundle incomplete on $TARGET. Retry make install INSTALL_QWEN_TURBO=1."
+    exit 1
+fi
+if [[ "${INSTALL_PIH3:-0}" == "1" ]] && ! _pih3_models_present; then
+    echo "ERROR: pi-H3 model bundle incomplete on $TARGET. Retry make install INSTALL_PIH3=1."
     exit 1
 fi
 

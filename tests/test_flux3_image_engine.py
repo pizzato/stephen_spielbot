@@ -204,12 +204,14 @@ FLUX3_FILES = [f'{m["dir"]}/{m["file"]}' for m in ENGINE["models"]]
 OPTIONAL_BUNDLES = [
     ("flux3-klein-nvfp4", "INSTALL_FLUX3"),
     ("qwen-image-2.1-turbo", "INSTALL_QWEN_TURBO"),
+    ("minimax-h3-pi-dwd2", "INSTALL_PIH3"),
 ]
 
 
 @pytest.mark.parametrize("key,flag", OPTIONAL_BUNDLES)
 def test_make_install_detects_missing_optional_bundle_on_an_existing_install(tmp_path, key, flag):
-    files = [f'{m["dir"]}/{m["file"]}' for m in engines.get(key)["models"]]
+    engine = engines.get(key) or engines.get_video(key)
+    files = [f'{m["dir"]}/{m["file"]}' for m in engine["models"]]
     source = (ROOT / "scripts/install.sh").read_text()
     function = source[source.index("_models_present_on() {"):source.index("_ask_hf_token() {")]
     code = 'is_local_host() { [[ "$1" == localhost || "$1" == 127.0.0.1 ]]; };\n' + function
@@ -228,7 +230,7 @@ def test_make_install_detects_missing_optional_bundle_on_an_existing_install(tmp
 
 @pytest.mark.parametrize("key,flag", OPTIONAL_BUNDLES)
 def test_downloader_installs_registry_bundle_and_skips_present_files(tmp_path, key, flag):
-    engine = engines.get(key)
+    engine = engines.get(key) or engines.get_video(key)
     files = [f'{m["dir"]}/{m["file"]}' for m in engine["models"]]
     # Exercise the real shell downloader with a local fake HF CLI; no network or weights.
     script = tmp_path / "scripts/download_models.sh"
@@ -268,7 +270,8 @@ with open(os.environ["HF_TEST_LOG"], "a") as log:
 
 @pytest.mark.parametrize("key,flag", OPTIONAL_BUNDLES)
 def test_worker_syncs_optional_bundle_even_when_default_models_exist(tmp_path, key, flag):
-    files = [f'{m["dir"]}/{m["file"]}' for m in engines.get(key)["models"]]
+    engine = engines.get(key) or engines.get_video(key)
+    files = [f'{m["dir"]}/{m["file"]}' for m in engine["models"]]
     source = (ROOT / "scripts/install_worker_container.sh").read_text()
     block = source[source.index("_flux3_models_present() {"):source.index("# ── 4. Stop")]
     dest = tmp_path / "worker"
@@ -302,8 +305,8 @@ if source.is_dir():
     assert "bundle incomplete" in proc.stdout
 
 
-def test_all_worker_install_paths_pin_the_native_flux3_revision():
-    revision = "483dae4326356b81de05d27aca3f433dd323cc25"
+def test_all_worker_install_paths_pin_the_current_comfyui_revision():
+    revision = "989d93d0d968e704c589ce0146bb18c77f6b50cc"
     for file in ("docker/comfyui/Dockerfile", "docker/docker-compose.yml",
                  "scripts/install_worker_container.sh"):
         assert revision in (ROOT / file).read_text()

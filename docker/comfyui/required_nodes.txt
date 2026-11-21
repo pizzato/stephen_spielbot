@@ -29,6 +29,12 @@ VHS_LoadVideoFFmpeg              # ComfyUI-VideoHelperSuite
 VHS_VideoCombine                 # ComfyUI-VideoHelperSuite
 LTXICLoRALoaderModelOnly         # ComfyUI-LTXVideo (IC-LoRA spatial upscaler)
 MiniMaxH3TurboLoRA               # ComfyUI-MiniMax-H3-Turbo
+Load LakonLab Adapter            # ComfyUI-piFlow (pi-H3 two-step DWD)
+pi-Flow Scheduler               # ComfyUI-piFlow (fixed pi-H3 sampling schedule)
+DWD Decode                      # ComfyUI-piFlow (direct video-frame decoding)
+SpielbotDWDNoise                 # docker/comfyui/pih3 (fresh DWD sampling)
+MiniMaxH3SigmaShift              # ComfyUI core (pi-H3 video/audio timestep shift)
+BlockSparseAttention             # ComfyUI core (pi-H3 Sol sparse attention)
 MiniMaxH3MotionContext           # ComfyUI-H3-Motion-Context (chained scenes)
 MiniMaxH3AudioTrack              # docker/comfyui/h3_audio_track (singing films)
 MinimaxH3LatentUpscalerNode3D    # Comfyui_Minimax_h3_latent_Upscaler

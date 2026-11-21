@@ -15,6 +15,7 @@
 # INSTALL_FLUX3=1 adds distilled FLUX 3 Klein NVFP4 + upsampler (~17.2 GB, Blackwell only).
 # Accept https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy first.
 # INSTALL_QWEN_TURBO=1 adds official Qwen-Image 2.1 Turbo INT8 (~17 GB, research only).
+# INSTALL_PIH3=1 adds pi-H3 two-step DWD (~42.3 GB; ~5 GB extra over pruned H3).
 set -euo pipefail
 
 COMFY_DIR="${1:-$HOME/github/ComfyUI}"
@@ -381,6 +382,24 @@ if [[ "${INSTALL_QWEN_TURBO:-0}" == "1" ]]; then
         "text_encoders/qwen3vl_8b_int8_convrot.safetensors" "models/text_encoders"
     download "Comfy-Org/Qwen-Image-2.1" \
         "vae/qwen_image_2.1_vae_bf16.safetensors" "models/vae"
+fi
+
+# ── pi-H3 two-step DWD (optional first-frame video + native audio) ────────────
+if [[ "${INSTALL_PIH3:-0}" == "1" ]]; then
+    echo ""
+    echo "--- pi-H3 two-step DWD (~42.3 GB total; reuses pruned H3 + encoder + audio VAE) ---"
+    echo "    MiniMax H3 Community License applies; requires ComfyUI >= 0.45.0 + piFlow nodes."
+    download "Comfy-Org/MiniMax-H3" \
+        "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" "models/diffusion_models"
+    download "Comfy-Org/MiniMax-H3" \
+        "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" "models/text_encoders"
+    download "Comfy-Org/MiniMax-H3" \
+        "vae/minimax_h3_video_vae_int8_convrot.safetensors" "models/vae"
+    download "Comfy-Org/MiniMax-H3" \
+        "vae/minimax_h3_audio_vae_fp32.safetensors" "models/vae"
+    download "Lakonik/pi-H3" \
+        "pi_h3_2step_dwd_adapter_int8_convrot.safetensors" "models/loras" \
+        "4a864589b0fac3d14768f932c930c4dcf1a17b56"
 fi
 
 # ── FLUX.1 schnell (legacy image engine) — OPT-IN ─────────────────────────────

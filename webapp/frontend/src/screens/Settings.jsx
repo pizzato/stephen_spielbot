@@ -1586,6 +1586,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   // inherits the rest. All VALUE reads below go through `eff` (the resolved
   // settings); writes still go to the style itself, becoming overrides.
   const eff = useMemo(() => resolveStyle(styles, st.name) || {}, [styles, st.name])
+  const selectedVideoEngine = (engineInfo?.video_engines || []).find(
+    (e) => e.key === (eff.video_engine || engineInfo?.default_video_engine))
   const newsMonitor = { ...NEWS_DEFAULTS, ...(eff.news_monitor || {}) }
   const newsAutomation = resolveAutomation(styles, st.name, cfg)
   const newsUnattended = newsMonitor.enabled && newsMonitor.auto_accept && newsMonitor.auto_queue
@@ -3089,9 +3091,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </select>
                   <ParentVal k="video_engine" />
                   {(() => {
-                    const sel = (engineInfo.video_engines || []).find((x) => x.key === (eff.video_engine || engineInfo.default_video_engine))
+                    const sel = selectedVideoEngine
                     return sel?.license_note ? <div className="field__hint" style={{ marginTop: 6 }}>{sel.license_note}</div> : null
                   })()}
+                  {!!selectedVideoEngine?.fixed_steps && (
+                    <div className="field__hint" style={{ marginTop: 6 }}>
+                      Uses {selectedVideoEngine.fixed_steps} fixed steps. Sampling steps below apply to the acted-scene model.
+                    </div>
+                  )}
+                  {!!selectedVideoEngine?.fixed_steps && selectedVideoEngine?.supports_chaining === false && (
+                    <div className="field__hint" style={{ marginTop: 6 }}>
+                      Narrated scenes render as single clips. Chained scenes below still applies to acted scenes.
+                    </div>
+                  )}
                 </Field>
               )}
               {engineInfo && (
@@ -3111,7 +3123,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {engineInfo && (String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax')
                 || String(eff.reference_engine || engineInfo.default_reference_engine || '').startsWith('minimax')) && (
                 <Field label="Sampling steps — scene videos"
-                  hint="ONE knob for both pickers above: it overrides the step count of every full MiniMax H3 scene video in this style — narrated-scene I2V and acted-scene Ref2VA alike. 0 = each engine's own default (Turbo: 4, the others: 15). More steps = sharper but slower (~2.5 min per step per scene on a GB10). LTX ignores it; H3 first-frame clips always use 4 steps.">
+                  hint="Overrides sampling steps for configurable MiniMax H3 scene engines, including acted-scene Ref2VA. 0 = each engine's own default (Turbo: 4, base H3: 15). More steps take longer. pi-H3 keeps its fixed two-step schedule; LTX ignores this setting, and H3 first-frame clips always use 4 steps.">
                   <input className="input" type="number" min={0} max={50} style={{ width: 120 }}
                     value={eff.video_steps ?? 0}
                     onChange={(e) => setStyleField('video_steps', Math.max(0, Math.min(50, Math.round(+e.target.value || 0))))} />
@@ -3120,7 +3132,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               )}
               {engineInfo && (
                 <Field label="Chained scenes — longer than H3 can render in one pass"
-                  hint="H3 tops out near 15 s a clip. With this on, a scene that needs more is rendered as TWO clips joined by H3 Motion Context — the second continues the first's motion and audio instead of cutting — so scenes can run to ~29 s. It always covers ACTED scenes (dialogue renders through MiniMax Ref2VA in every style), silent scenes wherever the toggle below performs them, and narrated scenes too when the video engine above is MiniMax; LTX narrated scenes ignore it (LTX continues clips natively). Scripts are planned to match: fewer, longer scenes — narration carries about twice the words, and dialogue that used to split into two scenes stays one take. Costs ~22% more render time per delivered second on the scenes that chain, and the workers must have the Motion Context nodes baked in.">
+                  hint="H3 tops out near 15 s a clip. With this on, a scene that needs more is rendered as TWO clips joined by H3 Motion Context — the second continues the first's motion and audio instead of cutting — so scenes can run to ~29 s. It always covers ACTED scenes (dialogue renders through MiniMax Ref2VA in every style), silent scenes wherever the toggle below performs them, and narrated scenes too when the video engine above supports H3 chaining. pi-H3 narrated scenes stay single-clip; LTX narrated scenes continue natively. Scripts are planned to match: fewer, longer scenes — narration carries about twice the words, and dialogue that used to split into two scenes stays one take. Costs ~22% more render time per delivered second on the scenes that chain, and the workers must have the Motion Context nodes baked in.">
                   <label className="check">
                     <input type="checkbox" checked={!!eff.h3_chain_scenes}
                       onChange={(e) => setStyleField('h3_chain_scenes', e.target.checked)} />

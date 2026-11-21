@@ -52,7 +52,7 @@ make install INSTALL_FLUX3=1
 
 This also repairs the four-file FLUX 3 bundle on existing workers, including the
 local prompt upsampler and renamed checkpoint (~17.2 GB total). It installs
-ComfyUI 0.42.5; existing style selections are unchanged. Select it afterwards
+ComfyUI 0.45.0; existing style selections are unchanged. Select it afterwards
 under **Settings → Styles → Image model → Generation**. Plain `make install`
 installs the supporting ComfyUI snapshot without downloading the optional weights.
 See [model requirements and licence](models.md#image-engines-per-style).
@@ -71,6 +71,19 @@ every file in each requested bundle even when the default models already exist,
 syncs missing files to the other workers, and fails if a requested bundle remains
 incomplete. It does not select either engine for your styles. Turbo requires a
 separate commercial licence from Qwen for commercial use.
+
+For optional **pi-H3 2-step DWD** video generation, use:
+
+```bash
+make install INSTALL_PIH3=1
+```
+
+This installs or repairs the five-file bundle (~42.3 GB total, about 5 GB extra
+when the shared H3 assets are already present) and deploys the supporting ComfyUI
+0.45.0 worker with pinned piFlow nodes. Select **pi-H3 2-step DWD** afterwards under
+**Settings → Styles → Video models → Narrated & silent scenes**. Existing style
+selections are unchanged. The adapter and base model use the MiniMax H3 Community
+License; see [requirements and limits](models.md#pi-h3-two-step-dwd).
 
 Omit `WORKERS=...` for a single-machine (localhost) setup, or run `make install` with no
 arguments and it prompts once. An existing `config.yaml` is never overwritten.

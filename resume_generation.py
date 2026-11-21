@@ -42,7 +42,10 @@ from pipeline import engines as _engines
 from pipeline import performance as _performance
 from pipeline import shot_gate
 from pipeline import prompts as _prompts
-from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
+from pipeline.comfyui import (
+    compatible_video_workers, generate_music, generate_with_engine,
+    ltx_dimensions, StuckJobError,
+)
 from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
     _verify_upscale_not_blank,
@@ -1651,7 +1654,7 @@ def main(work_dir: Path) -> None:
     # Narrated scenes: MiniMax only — LTX continues natively. Must agree with
     # app.scene_plan_for_settings, which planned FEWER, LONGER scenes off the
     # same flag.
-    chain_scenes = bool(chain_flag) and video_engine.get("family") == "minimax"
+    chain_scenes = bool(chain_flag) and _engines.video_supports_chaining(video_engine)
     # Silent scenes acted on H3 Ref2VA (h3_silent_scenes) instead of animated
     # from a first frame. Same three-step fallback as the flags above; resolved
     # ONCE here and stamped flat into plan_cfg, so the task planner and the
@@ -2116,7 +2119,11 @@ def main(work_dir: Path) -> None:
         for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):
             if not worker_pool.has_healthy():
                 raise RuntimeError(f"All workers failed — last error: {last_err}")
-            url = worker_pool.acquire()
+            if not acted_narration and video_engine.get("worker_preflight"):
+                allowed = compatible_video_workers(worker_pool.urls, video_engine)
+                url = worker_pool.acquire(allowed=allowed)
+            else:
+                url = worker_pool.acquire()
             comfy_worker = worker_id("comfy", url)
             store.register_worker(comfy_worker, "comfy", url)
             try:

@@ -1,0 +1,224 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "{{UNET_NAME}}",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "Load LakonLab Adapter",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "adapter_name": "{{ADAPTER_NAME}}",
+      "adapter_strength": 1.0
+    }
+  },
+  "3": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "{{CLIP_NAME}}",
+      "type": "minimax",
+      "device": "default"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "{{VIDEO_VAE}}"
+    }
+  },
+  "5": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "{{AUDIO_VAE}}"
+    }
+  },
+  "6": {
+    "class_type": "MiniMaxH3ImageToVideo",
+    "inputs": {
+      "clip": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "prompt": "{{POSITIVE_PROMPT}}",
+      "width": "{{WIDTH}}",
+      "height": "{{HEIGHT}}",
+      "length": "{{LENGTH}}",
+      "first_frame": [
+        "23",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "8": {
+    "class_type": "pi-Flow Scheduler",
+    "inputs": {
+      "model": [
+        "20",
+        0
+      ],
+      "steps": 2,
+      "min_raw_t": 0.0,
+      "max_raw_t": 0.93,
+      "final_step_size_scale": 0.6
+    }
+  },
+  "9": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "20",
+        0
+      ],
+      "conditioning": [
+        "6",
+        0
+      ]
+    }
+  },
+  "10": {
+    "class_type": "SpielbotDWDNoise",
+    "inputs": {
+      "noise_seed": "{{SEED}}"
+    }
+  },
+  "11": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "10",
+        0
+      ],
+      "guider": [
+        "9",
+        0
+      ],
+      "sampler": [
+        "7",
+        0
+      ],
+      "sigmas": [
+        "8",
+        0
+      ],
+      "latent_image": [
+        "6",
+        1
+      ]
+    }
+  },
+  "12": {
+    "class_type": "DWD Decode",
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    }
+  },
+  "14": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "12",
+        0
+      ],
+      "audio": [
+        "13",
+        0
+      ],
+      "fps": 24.0,
+      "bit_depth": "auto",
+      "color_space": "sRGB",
+      "chroma_subsampling": "auto",
+      "codec": "none"
+    }
+  },
+  "15": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "14",
+        0
+      ],
+      "filename_prefix": "h3-pi-dwd2-i2v",
+      "format": "mp4",
+      "format.codec": "h264"
+    }
+  },
+  "19": {
+    "class_type": "MiniMaxH3SigmaShift",
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "shift_video": 12.0,
+      "shift_audio": 3.0
+    }
+  },
+  "20": {
+    "class_type": "BlockSparseAttention",
+    "inputs": {
+      "model": [
+        "19",
+        0
+      ],
+      "selection": "sol-attn",
+      "selection.tau": 1.0,
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "dense_blocks": "0, 1",
+      "min_tokens": 12288,
+      "extra_tokens": 256,
+      "sink_conditioning": "exact_kv_and_rows",
+      "verbose": false
+    }
+  },
+  "21": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{{IMAGE_NAME}}"
+    }
+  },
+  "23": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": [
+        "21",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "width": "{{WIDTH}}",
+      "height": "{{HEIGHT}}",
+      "crop": "center"
+    }
+  }
+}

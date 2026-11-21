@@ -912,9 +912,11 @@ def generate_video_h3(
     variants can swap without touching the graph. The clip may come back
     smaller than requested (H3 pixel cap) — callers re-scale.
     """
+    if engine.get("worker_preflight"):
+        compatible_video_workers([comfy_url], engine)
     gen_w, gen_h = h3_dimensions(width, height)
     length = h3_frame_count(duration_seconds)
-    steps = int(steps or engine.get("steps") or 20)
+    steps = int(engine.get("fixed_steps") or steps or engine.get("steps") or 20)
     # H3 models audio jointly with video; only positive steering exists.
     prompt, _ = _steer_audio_natural(positive_prompt, "")
 
@@ -938,6 +940,7 @@ def generate_video_h3(
         "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
         "LORA_NAME":       engine.get("lora") or "",
         "LORA_STRENGTH":   _lora_strength(engine),
+        "ADAPTER_NAME":    engine.get("adapter") or "",
     })
 
     _video_timeout = _h3_timeout_seconds(gen_w, gen_h, length)
@@ -1471,6 +1474,8 @@ def generate_video_h3_chained(
     worker (docker/comfyui/Dockerfile, H3_MOTION_CONTEXT_REF) — without them
     ComfyUI rejects the graph rather than silently rendering an unchained clip.
     """
+    if not _engines.video_supports_chaining(engine):
+        raise ValueError(f"{engine['label']} does not support H3 Motion Context chaining")
     from pipeline.assembler import _concat_video_chunks
 
     parts = h3_chain_split(duration_seconds)
@@ -1558,7 +1563,9 @@ def generate_video_with_engine(
     ignored by LTX, which continues clips natively.
     """
     if video_engine and video_engine.get("family") == "minimax":
-        render = generate_video_h3_chained if chained else generate_video_h3
+        render = (generate_video_h3_chained
+                  if chained and _engines.video_supports_chaining(video_engine)
+                  else generate_video_h3)
         return render(
             video_engine, positive_prompt, first_frame_path, output_path,
             width=width, height=height, seed=seed,
@@ -2469,7 +2476,8 @@ def engine_model_present(comfy_url: str, probe) -> bool | None:
         return None
     node_class, input_name, filename = probe
     try:
-        with urllib.request.urlopen(f"{comfy_url}/object_info/{node_class}", timeout=8) as r:
+        node_path = urllib.parse.quote(node_class, safe="")
+        with urllib.request.urlopen(f"{comfy_url}/object_info/{node_path}", timeout=8) as r:
             data = json.loads(r.read())
         info = data.get(node_class) or {}
         inputs = info.get("input") or {}
@@ -2485,7 +2493,8 @@ def comfy_node_exists(comfy_url: str, node_class: str) -> bool | None:
     check couldn't be evaluated (worker unreachable). Used to distinguish "model
     file missing" from "ComfyUI too old for this engine's nodes"."""
     try:
-        with urllib.request.urlopen(f"{comfy_url}/object_info/{node_class}", timeout=8) as r:
+        node_path = urllib.parse.quote(node_class, safe="")
+        with urllib.request.urlopen(f"{comfy_url}/object_info/{node_path}", timeout=8) as r:
             data = json.loads(r.read())
         return bool(data.get(node_class))
     except urllib.error.HTTPError as e:
@@ -2494,6 +2503,34 @@ def comfy_node_exists(comfy_url: str, node_class: str) -> bool | None:
         return None
     except Exception:
         return None
+
+
+def compatible_video_workers(urls: list[str], engine: dict) -> list[str]:
+    """Limit optional pi-H3 jobs to workers with its complete runnable bundle.
+
+    Older engines retain their existing dispatch behavior. Probe at dispatch
+    rather than caching readiness across a worker rebuild or model install.
+    """
+    if not engine.get("worker_preflight"):
+        return list(urls)
+    compatible = []
+    for url in urls:
+        version = comfyui_version(url)
+        if not version or version < tuple(engine["min_comfyui"]):
+            continue
+        nodes = [engine["requires_node"], *engine.get("extra_nodes", [])]
+        if not all(comfy_node_exists(url, node) is True for node in nodes):
+            continue
+        probes = [engine["probe"], *engine.get("extra_probes", [])]
+        if all(engine_model_present(url, probe) is True for probe in probes):
+            compatible.append(url)
+    if not compatible:
+        raise RuntimeError(
+            f"No worker is ready for {engine['label']}. Rebuild a worker with "
+            "make install INSTALL_PIH3=1, or install its models from Settings "
+            "after updating the worker. Required: ComfyUI >= 0.45.0, piFlow "
+            "and the complete pi-H3 model bundle.")
+    return compatible
 
 
 def music_engine_can_extend(comfy_url: str, music_engine: str | None = None) -> bool:

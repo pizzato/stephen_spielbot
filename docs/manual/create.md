@@ -71,7 +71,8 @@ this film only.
 
 A scene can only run as long as the style's video engine holds in a single take — about
 40 s on LTX, and 12 s on MiniMax H3 (23 s where the style
-[chains its scenes](../performance_films.md)). Ask for a count so low that the scenes
+[chains its scenes](../performance_films.md)). pi-H3 two-step DWD stays at the
+single-clip limit even when acted-scene chaining is enabled. Ask for a count so low that the scenes
 can't fill the length, and **the count wins**: the hint tells you what the film will
 actually run.
 
