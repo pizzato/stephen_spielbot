@@ -249,25 +249,25 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // the song stays the same and only the new tail is generated; otherwise
   // it falls back to a fresh longer take. Either way the current one stays
   // in the version list.
-  const generateSongTrack = async (addSeconds = 0) => {
-    setBusy(addSeconds ? 'song-gen-longer' : 'song-gen'); setError(''); setSongMsg('')
+  const generateSongTrack = async (addSeconds = 0, musicEngine = 'minimax-music3') => {
+    setBusy(musicEngine === 'suno' ? 'song-gen-suno' : addSeconds ? 'song-gen-longer' : 'song-gen'); setError(''); setSongMsg('')
     try {
       const cur = songDraft ?? song
       const s = await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
                                          lyrics: cur.lyrics, voice: songVoiceSel,
                                          vocalist: cur.vocalist ?? null,
                                          singer: cur.singer ?? null,
-                                         add_seconds: addSeconds })
+                                         add_seconds: addSeconds, music_engine: musicEngine })
       setSongDraft(null); await refreshSong()
       setSongMsg(!addSeconds
-        ? sunoSong ? 'Suno takes ready — preview them below, then use the take you want to download.'
-          : 'Song generated — listen below, re-voice it, or draft the story.'
+        ? musicEngine === 'suno' ? 'Suno takes ready — preview them below, then use the take you want to download.'
+          : 'Song generated with MiniMax Music 3 — listen below, re-voice it, or draft the story.'
         : s?.result?.extended
           ? `Same song, about ${addSeconds}s longer — the take you had is the context and is kept as-is; only the new ending is generated.`
             : `Sung again about ${addSeconds}s longer — this take can't be continued in place, so it's a fresh take. Pick whichever ends better below.`)
     } catch (e) {
       setError(e.message)
-      if (sunoSong) await api.getSong(job.job_id).then(setSong).catch(() => {})
+      if (musicEngine === 'suno') await api.getSong(job.job_id).then(setSong).catch(() => {})
     } finally { setBusy('') }
   }
   const importSunoTake = async (clipId) => {
@@ -1666,7 +1666,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Button variant={song.song_url ? 'ghost' : 'primary'} icon="music"
                   disabled={!!busy || !(songDraft ?? song).lyrics?.trim()}
                   onClick={() => generateSongTrack()}>
-                  {busy === 'song-gen' ? 'Singing it…' : sunoSong ? 'Generate two Suno takes' : song.song_url ? 'Generate again' : '1. Generate the song'}
+                  {busy === 'song-gen' ? 'Singing with MiniMax…' : song.song_url ? 'Generate again' : '1. Generate the song'}
+                </Button>
+                <Button variant="ghost" icon="music"
+                  disabled={!!busy || !(songDraft ?? song).lyrics?.trim()}
+                  onClick={() => generateSongTrack(0, 'suno')}>
+                  {busy === 'song-gen-suno' ? 'Generating on Suno…' : 'Generate on Suno'}
                 </Button>
                 {song.song_url && !!songVoiceSel && (
                   <Button variant="ghost" icon="microphone-lines" disabled={!!busy || !song.svc_available}
@@ -1676,9 +1681,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 )}
                 {song.sung_as && <span className="muted" style={{ fontSize: 12.5 }}>♪ currently sung as <strong>{song.sung_as}</strong></span>}
               </div>
-              {sunoSong && <p className="muted" style={{ fontSize: 12.5 }}>
-                Suno generates two takes using generation credits. Play on Suno before choosing which to download; Use this take imports only that song and may spend one download credit. Automation generates new music with MiniMax Music 3. Choose your Suno model and singing voice in Settings → Styles → Narrator &amp; audio.
-              </p>}
+              <p className="muted" style={{ fontSize: 12.5 }}>
+                Generate uses <strong>MiniMax Music 3</strong>, as does automatic generation. Generate on Suno creates two takes using Suno generation credits. Play on Suno before choosing which to download; Use this take imports only that song and may spend one download credit. Connect your account in Settings → Infrastructure; optional Suno model and singing-voice preferences are in Styles → Narrator &amp; audio.
+              </p>
               <SunoTakes takes={song.suno_takes} busy={!!busy}
                 importing={busy.startsWith('song-suno-import:') ? busy.slice('song-suno-import:'.length) : ''}
                 onUse={importSunoTake} />

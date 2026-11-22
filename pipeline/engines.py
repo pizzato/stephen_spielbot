@@ -873,7 +873,7 @@ def public_list_reference() -> list[dict]:
     return [_public_video(e) for e in VIDEO_ENGINES.values() if e.get("reference")]
 
 
-# ── Music engines (per-style ``music_engine``) ───────────────────────────────
+# ── Music engine definitions ───────────────────────────────────────────────
 # Manual song and background-music regeneration choices. Automatic songs and
 # render-time scoring use MiniMax Music 3. Suno runs through its account
 # connection on the controller, with no ComfyUI model download.

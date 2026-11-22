@@ -255,8 +255,8 @@ DEFAULT_CFG = {
     # Ref2VA model for acted scenes: portraits
     # and dialogue instead of a first frame. Narrated films never use it.
     "default_reference_engine": "minimax-h3-ref-w4a8",
-    # Music engine for explicit Song/Remix generation. Automatic songs and
-    # render-time scoring use MiniMax Music 3.
+    # Legacy config value retained when loading old styles. Generate and
+    # automation use MiniMax; Suno is selected explicitly for each request.
     "default_music_engine": "ace-step",
     # Empty uses the connected Suno account's default model.
     "default_suno_model": "",
@@ -610,7 +610,7 @@ STYLE_FIELD_TO_FLAT = {
     "second_pass_steps":    "second_pass_steps",
     # Narrator & audio mix
     "music_enabled":        "music_enabled",
-    # Manual music generation — see pipeline/engines.py MUSIC_ENGINES
+    # Retained for old config files; generation actions no longer read it.
     "music_engine":         "default_music_engine",
     "suno_model":           "default_suno_model",
     "suno_voice_id":        "default_suno_voice_id",

@@ -133,12 +133,13 @@ generation credits and download entitlements come from the account.
 Spielbot has its own connection, separate from Codex's Suno MCP authorization.
 The callback returns to the controller's localhost, so complete sign-in in a
 browser on that machine or forward its callback port when using a remote browser.
-Then select **Suno** under **Styles → Narrator & audio → Manual music generation**, with the
-optional model and singing voice selections. See
+Then choose **Generate on Suno** in the Song tab or film editor. You do not need to
+select a default provider first; normal generation uses MiniMax Music 3. Optional
+Suno model and singing-voice preferences are under **Styles → Narrator & audio**. See
 [Music models](manual/settings.md#music-models) for credits and take handling.
 Suno requires explicit generation and **Use this take** to import a song. Automatic
 music generation, including scoring during rendering, always uses MiniMax Music 3,
-which must be available on a GPU worker even when a style selects Suno for manual work.
+which must be available on a GPU worker even when you use Suno for manual songs.
 An already imported soundtrack is reused.
 
 ### Song voice conversion

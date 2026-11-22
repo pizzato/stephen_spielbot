@@ -26,13 +26,14 @@ An AI video generator that turns a topic into a fully produced short film — co
 3. **Video** — [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) animates each scene from its still via ComfyUI (local or distributed workers). Optional **[pi-H3 2-step DWD](docs/models.md#pi-h3-two-step-dwd)** adds fast image-to-video with native stereo audio; install with `make install INSTALL_PIH3=1`, then select it per style. LTX remains the default
 4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [docs/tts_licensing.md](docs/tts_licensing.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
 5. **Dialogue** — scenes can instead be [acted or silent](docs/performance_films.md): the characters speak on screen, with MiniMax H3 Ref2VA generating picture and voice together from their portraits
-6. **Music** — [MiniMax Music 3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) generates automatic background music from the LLM's mood description during rendering, under its community license, and the score is mixed in at the very end (switch it off per style or per film). **Manual music generation** can also use [ACE-Step](https://github.com/ace-step/ACE-Step) or a connected Suno account. The [**Music video** format](docs/performance_films.md#singing-films-the-music-video-format) goes further: the LLM writes the story as tagged lyrics, the music model **sings** them (a lead singer is cast from the style's character catalogue and the vocalist is described by sex, age and background; MiniMax expands short Sound briefs into detailed genre and arrangement instructions), and the cast performs the song on camera — or you upload a song you already have and the film is built around that instead. Re-voice either kind of song with a library voice using **SoulX-Singer SVC** (default) or **Seed-VC**, selected per style; both are installed by `make install`
+6. **Music** — [MiniMax Music 3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) generates automatic background music from the LLM's mood description during rendering, under its community license, and the score is mixed in at the very end (switch it off per style or per film). The Song tab’s normal **Generate** action also uses MiniMax; **Generate on Suno** offers a connected Suno account for that request. The [**Music video** format](docs/performance_films.md#singing-films-the-music-video-format) goes further: the LLM writes the story as tagged lyrics, the music model **sings** them (a lead singer is cast from the style's character catalogue and the vocalist is described by sex, age and background; MiniMax expands short Sound briefs into detailed genre and arrangement instructions), and the cast performs the song on camera — or you upload a song you already have and the film is built around that instead. Re-voice either kind of song with a library voice using **SoulX-Singer SVC** (default) or **Seed-VC**, selected per style; both are installed by `make install`
 7. **Assembly** — FFmpeg mixes everything into a single video with synced audio. Films aimed at QHD/4K (or upscaled later from the film editor) go through [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) video super-resolution by default — see [upscaler modes](docs/models.md#upscaler-modes)
 
 **Suno** is also available through its official MCP connection: sign in under
 [Settings → Infrastructure → Music models](docs/manual/settings.md#music-models),
-then select Suno under **Manual music generation**, with an account model and an
-available singing voice per style. Manual
+then choose **Generate on Suno** in the Song tab or film editor. No default provider
+needs to be selected: normal generation uses MiniMax Music 3. Optional Suno model
+and singing-voice preferences live under **Styles → Narrator & audio**. Suno
 generation previews both takes before you choose one to import. Automatic music
 generation, including scoring during rendering, always uses MiniMax Music 3; imported
 soundtracks are reused. Suno uses account generation
@@ -159,11 +160,12 @@ Stephen Spielbot's code is licensed under [Apache-2.0](LICENSE).
 The AI **models** it downloads each carry their own licenses — see
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and
 [`docs/tts_licensing.md`](docs/tts_licensing.md).
-The defaults (FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model)
+The bundled FLUX.2 Klein, LTX-Video, ACE-Step, and OpenF5 narration models
 are commercial-friendly; the original F5-TTS narration weights are offered only
 as an opt-in **non-commercial** preview, Qwen-Image 2.1 is an opt-in
-research-only image engine, and the opt-in MiniMax engines carry
-their own community licenses. Optional FLUX 3 Klein has conditional commercial-output
+research-only image engine. MiniMax Music 3, used for standard and automatic music
+generation, and the optional MiniMax visual engines carry their own community licenses.
+Optional FLUX 3 Klein has conditional commercial-output
 permission under the FLUX Kommunity License. Review the notices before monetizing.
 
 > "Stephen Spielbot" is a playful name and is not affiliated with, endorsed by,

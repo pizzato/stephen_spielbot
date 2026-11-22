@@ -27,7 +27,7 @@ class SunoBackendTests(unittest.TestCase):
                 'clip_ids': ['a', 'b'], 'takes': [], 'suno_takes': remote}) as generate, \
              mock.patch.object(suno_music, 'import_suno_takes') as imports, \
              mock.patch.object(backend.gapp, '_preview_worker_urls', side_effect=AssertionError('No GPU')):
-            result = backend._do_song_generate(self.wd, operation_id='manual')
+            result = backend._do_song_generate(self.wd, operation_id='manual', engine_override='suno')
         self.assertEqual(result['imported_count'], 0)
         self.assertEqual(result['suno_takes'], remote)
         self.assertEqual(current.read_bytes(), b'old')
@@ -49,6 +49,52 @@ class SunoBackendTests(unittest.TestCase):
              mock.patch.object(backend.story_mode, 'expand_song_sound', return_value='folk'):
             backend._do_song_generate(self.wd, automatic=True, engine_override='suno')
         self.assertEqual((self.wd / 'background_music.wav').read_bytes(), b'minimax')
+
+    def test_normal_generation_ignores_a_saved_suno_default(self):
+        pool = mock.MagicMock()
+        pool.acquire.return_value = 'http://worker'
+        with mock.patch.object(suno_music, 'generate_suno_takes', side_effect=AssertionError('No Suno')), \
+             mock.patch.object(backend.gapp, '_preview_worker_urls', return_value=['http://worker']), \
+             mock.patch('pipeline.worker_pool.WorkerPool', return_value=pool), \
+             mock.patch('pipeline.comfyui.generate_music',
+                        side_effect=lambda title, secs, out, *a, **kw: Path(out).write_bytes(b'minimax')) as generate, \
+             mock.patch('pipeline.assembler._get_duration', return_value=40), \
+             mock.patch.object(backend.story_mode, 'expand_song_sound', return_value='folk'):
+            backend._do_song_generate(self.wd)
+        self.assertEqual(generate.call_args.kwargs['music_engine'], 'minimax-music3')
+        self.assertEqual(backend._selected_music_engine(self.wd), 'minimax-music3')
+        self.assertEqual(json.loads((self.wd / 'song.json').read_text())['music_engine'], 'minimax-music3')
+
+    def test_song_action_forwards_requested_provider_and_defaults_to_minimax(self):
+        for requested in ({}, {'music_engine': 'suno'}):
+            with self.subTest(requested=requested), \
+                 mock.patch.object(backend.gapp, 'OUTPUT_DIR', self.wd), \
+                 mock.patch.object(backend.threading, 'Thread') as thread:
+                result = backend.song_generate(backend.SongGenerateBody(work_dir=str(self.wd), **requested))
+            args = thread.call_args.kwargs['args']
+            self.assertEqual(args[0], result['task_id'])
+            self.assertEqual(args[-1], requested.get('music_engine', 'minimax-music3'))
+
+    def test_generation_worker_uses_action_choice(self):
+        with mock.patch.object(backend, '_do_song_generate', return_value={'ok': True}) as generate:
+            backend._run_song_generate_task('explicit-suno', self.wd, music_engine='suno')
+        generate.assert_called_once_with(self.wd, 0.0, operation_id='explicit-suno', engine_override='suno')
+
+    def test_invalid_provider_is_rejected_by_both_actions(self):
+        from pydantic import ValidationError
+        for body_type in (backend.SongGenerateBody, backend.MusicRegenBody):
+            with self.subTest(body_type=body_type), self.assertRaises(ValidationError):
+                body_type(work_dir=str(self.wd), music_engine='unknown')
+
+    def test_selected_track_provider_follows_history_not_next_generation(self):
+        source = self.wd / 'take.wav'
+        source.write_bytes(b'wave')
+        local = music_history.record(self.wd, source, provider='comfy', model='minimax-music3')['selected']
+        remote = music_history.record(self.wd, source, provider='suno', remote_id='remote')['selected']
+        music_history.record(self.wd, source, voice='A', source_id=remote)
+        self.assertEqual(backend._selected_music_engine(self.wd), 'suno')
+        music_history.select(self.wd, local)
+        self.assertEqual(backend._selected_music_engine(self.wd), 'minimax-music3')
 
     def test_import_of_existing_take_is_a_local_reselection(self):
         audio = self.wd / 'take.wav'
@@ -92,6 +138,13 @@ class SunoBackendTests(unittest.TestCase):
 
     def test_suno_continuation_does_not_silently_regenerate(self):
         with self.assertRaisesRegex(ValueError, 'continuation'):
+            backend._do_song_generate(self.wd, add_seconds=10, engine_override='suno')
+
+    def test_normal_generate_longer_does_not_resing_an_imported_suno_track(self):
+        track = self.wd / 'background_music.wav'
+        track.write_bytes(b'suno')
+        music_history.record(self.wd, track, provider='suno', remote_id='remote')
+        with self.assertRaisesRegex(ValueError, 'continuation'):
             backend._do_song_generate(self.wd, add_seconds=10)
 
     def test_status_exposes_balances_without_credentials(self):
@@ -126,10 +179,34 @@ class SunoBackendTests(unittest.TestCase):
              mock.patch.object(suno_music, 'list_suno_takes', return_value=[{'id': 'a'}]), \
              mock.patch.object(backend.gapp, '_preview_worker_urls', side_effect=AssertionError('No GPU')), \
              mock.patch.object(backend.gapp, 'on_remix', side_effect=AssertionError('No remux')):
-            backend._run_music_regen('suno-preview-test', self.wd, 'folk')
+            backend._run_music_regen('suno-preview-test', self.wd, 'folk', music_engine='suno')
         self.assertEqual(backend._film_tasks['suno-preview-test']['status'], 'done')
         self.assertNotIn('take_count', generate.call_args.kwargs)
         self.assertFalse((self.wd / 'background_music.wav').exists())
+
+    def test_normal_remix_ignores_old_suno_job_config(self):
+        (self.wd / 'combined.mp4').write_bytes(b'video')
+        pool = mock.MagicMock()
+        with mock.patch.object(backend, '_film_job_config', return_value=self.cfg), \
+             mock.patch.object(backend, '_film_checkpoint'), \
+             mock.patch.object(backend, '_record_film_task_activity'), \
+             mock.patch.object(backend, '_acquire_render_worker', return_value='http://worker'), \
+             mock.patch.object(backend, '_mix_volumes', return_value=(1, 1, 1)), \
+             mock.patch.object(backend, '_maybe_burn_subtitles'), \
+             mock.patch.object(backend, '_maybe_burn_first_frame_cover'), \
+             mock.patch.object(backend, '_maybe_fade_ending'), \
+             mock.patch.object(backend, '_maybe_apply_title_cards'), \
+             mock.patch.object(backend.gapp, '_preview_worker_urls', return_value=['http://worker']), \
+             mock.patch('pipeline.worker_pool.WorkerPool', return_value=pool), \
+             mock.patch('pipeline.assembler._get_duration', return_value=40), \
+             mock.patch.object(backend.story_mode, 'expand_song_sound', return_value='folk'), \
+             mock.patch('pipeline.comfyui.generate_music',
+                        side_effect=lambda title, secs, out, *a, **kw: Path(out).write_bytes(b'minimax')) as generate, \
+             mock.patch.object(suno_music, 'generate_suno_takes', side_effect=AssertionError('No Suno')), \
+             mock.patch.object(backend.gapp, 'on_remix', return_value=(str(self.wd / 'final.mp4'), '')):
+            backend._run_music_regen('normal-remix-test', self.wd, 'folk')
+        self.assertEqual(backend._film_tasks['normal-remix-test']['status'], 'done')
+        self.assertEqual(generate.call_args.kwargs['music_engine'], 'minimax-music3')
 
 
 if __name__ == '__main__':

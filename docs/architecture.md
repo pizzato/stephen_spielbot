@@ -78,7 +78,8 @@ ready tasks from the durable graph instead of the controller pushing work.
 
 Automatic music generation, including scoring during rendering, uses MiniMax Music
 3. A soundtrack already generated or imported at script time is reused. Suno is
-available through explicit manual generation and **Use this take** imports.
+selected per request through **Generate on Suno** and **Use this take** imports.
+Normal Song/Remix generation uses MiniMax Music 3, without a style-level provider default.
 
 Every stage writes a task row into the [durable graph](orchestration.md) with attempts,
 leases, and produced artifacts, which is what the **Render** screen shows.

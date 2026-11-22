@@ -62,7 +62,7 @@ the format does to the render.
   retaining your original musical direction verbatim. The expanded Sound is saved
   here for editing and reused for subsequent takes. You can also write these sections
   yourself. The Vocalist below supplies **Vocal Details** separately, so keep singer
-  descriptions in that field. ACE-Step uses the original compact description.
+  descriptions in that field.
 - **Lead singer** — the news or catalogue character the story shows singing, cast by name
   from the film's current style. **Refresh singers** picks up newly saved catalogue
   characters without losing unsaved song edits. The choices also refresh when you open
@@ -110,9 +110,11 @@ the format does to the render.
   voice in your Suno account. The library voice is also the target of the
   re-voicing below, which is an actual clone. The story is drafted for the voice the track
   in use was sung as: the re-voicing when there is one, else this voice, else the Vocalist.
-- **Save edits** keeps your typing (**Discard edits** throws it away); **Generate the
-  song** renders the track on a worker or through the connected Suno account, and **Sing this as [voice]** re-voices it with
-  the style's **Singing voice conversion** engine — **SoulX-Singer SVC** by default,
+- **Save edits** keeps your typing (**Discard edits** throws it away). The normal
+  **Generate the song** / **Generate again** action always uses **MiniMax Music 3**
+  on a worker. Choose **Generate on Suno** beside it for a Suno request; there is no
+  default provider to configure beforehand. **Sing this as [voice]** re-voices the
+  selected track with the style's **Singing voice conversion** engine — **SoulX-Singer SVC** by default,
   or **Seed-VC** selected in [Settings → Styles → Narrator & audio](settings.md#narrator-audio).
   Wait for the current re-voicing to finish before starting another for the same film,
   including one started in the finished-film editor.
@@ -123,7 +125,7 @@ the format does to the render.
   and they travel with the film
   so either side of a re-voicing can be
   [put back after the render](edit-film.md#a-song-films-song) too.
-- **Suno previews** — manual generation shows both songs Suno creates without
+- **Suno previews** — **Generate on Suno** shows both songs Suno creates without
   downloading them. Choose **Play on Suno** to audition each take in Suno; the MCP
   service does not provide an embedded audio stream. **Use this take** imports only that song and
   selects it for the film; it then appears in the saved version strip. Importing
@@ -152,7 +154,7 @@ the format does to the render.
     - **Extend the ending** keeps the take you have — its last couple of seconds are faded
       out and that many seconds of silence padded after them. It runs on the controller,
       so it is instant, and the arrangement is untouched.
-    - **Re-generate that much longer** is available for local engines. It keeps the song and gives it a real ending: the
+    - **Re-generate that much longer** is available for MiniMax takes. It keeps the song and gives it a real ending: the
       take in use is kept as it is — it is not sung again — and MiniMax Music 3
       continues from the same seed for only the added seconds, finishing the words it
       cut off. If that take has no seed (generated before this), it falls back to a

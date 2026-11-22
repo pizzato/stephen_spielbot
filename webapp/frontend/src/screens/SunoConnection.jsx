@@ -82,7 +82,7 @@ export default function SunoConnection({ account, onChange }) {
       )}
       {(error || account?.error) && <div role="alert" style={{ color: 'var(--danger)', fontSize: 12 }}>{error || account.error}</div>}
       <div className="field__hint">
-        Suno runs in your account, with no worker download. Each manual generation creates two songs to preview before using a take; only the chosen song is downloaded. Each import may spend one download credit, in addition to generation credits. Automatic music generation always uses MiniMax Music 3.
+        Suno runs in your account, with no worker download. Choose Generate on Suno in the Song tab or film editor to create two songs to preview before using a take; only the chosen song is downloaded. Each import may spend one download credit, in addition to generation credits. Normal Generate and automatic music generation always use MiniMax Music 3.
       </div>
     </div>
   )

@@ -124,6 +124,7 @@ class SongGenerateActivityTests(ActivityTestCase):
         pool = mock.Mock()
         pool.acquire.return_value = "http://w1:8188"
         with mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(backend.story_mode, "expand_song_sound", side_effect=lambda caption, *args: caption), \
              mock.patch.object(backend.gapp, "_preview_worker_urls",
                                return_value=["http://w1:8188"]), \
              mock.patch("pipeline.worker_pool.WorkerPool", return_value=pool), \
