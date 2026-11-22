@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 APP_STATE_DIR = Path.home() / ".local" / "share" / "video-generator"
@@ -995,7 +995,13 @@ class DurableStore:
         worker_kind: str,
         *,
         lease_seconds: int = 900,
+        task_eligible: Callable[[TaskRecord], bool] | None = None,
     ) -> TaskRecord | None:
+        """Claim the first ready task this worker can execute.
+
+        Eligibility is checked before incrementing attempts. Workers missing an
+        optional engine can leave those tasks queued and claim other work.
+        """
         self.expire_leases()
         ts = now_ts()
         with self._lock:
@@ -1014,14 +1020,14 @@ class DurableStore:
                       AND dep.status != ?
                   )
                 ORDER BY t.priority ASC, t.created_at ASC
-                LIMIT 1
-                """,
+                """ + (" LIMIT 1" if task_eligible is None else ""),
                 (worker_kind, *READY_FOR_LEASE, TASK_SUCCEEDED),
             ).fetchall()
-            if not rows:
+            row = next((r for r in rows if task_eligible is None
+                        or task_eligible(self._row_to_task(r))), None)
+            if row is None:
                 return None
-            row = rows[0]
-            self._conn.execute(
+            claimed = self._conn.execute(
                 """
                 UPDATE tasks
                 SET status=?, lease_owner=?, lease_expires_at=?,
@@ -1037,6 +1043,10 @@ class DurableStore:
                     *READY_FOR_LEASE,
                 ),
             )
+            if claimed.rowcount != 1:
+                # Another agent may have claimed it while eligibility was
+                # checked. Never return that agent's lease as our own.
+                return None
             leased = self._conn.execute(
                 "SELECT * FROM tasks WHERE id=?",
                 (row["id"],),

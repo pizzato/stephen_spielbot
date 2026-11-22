@@ -77,9 +77,11 @@ const CHAIN_JOIN_SECS = 22 / 24          // cadence.CHAIN_JOIN_SECS
 // given format. Chaining joins two takes into one longer scene.
 export function sceneBounds(eff, format = 'narration') {
   const chain = (v) => v * CHAIN_CLIPS - CHAIN_JOIN_SECS * (CHAIN_CLIPS - 1)
-  const h3 = String(eff?.video_engine || '').startsWith('minimax-h3')
+  const videoEngine = String(eff?.video_engine || '')
+  const h3 = videoEngine.startsWith('minimax-h3')
+  const chainableVideo = h3 && videoEngine !== 'minimax-h3-pi-dwd2'
   const acted = format === 'dialogue' || format === 'silent' || format === 'song'
-  const chained = !!eff?.h3_chain_scenes && (h3 || acted)
+  const chained = !!eff?.h3_chain_scenes && (chainableVideo || acted)
   if (acted) {
     return { secs: chained ? chain(ACTED_SCENE_SECS) : ACTED_SCENE_SECS,
              ceil: chained ? chain(ACTED_CEIL_SECS) : ACTED_CEIL_SECS }

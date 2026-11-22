@@ -505,6 +505,54 @@ VIDEO_ENGINES: dict[str, dict] = {
                    "minimax_h3_turbo_4step_ckpt500.safetensors", "models/loras"),
         ],
     },
+    "minimax-h3-pi-dwd2": {
+        "key": "minimax-h3-pi-dwd2",
+        "label": "pi-H3 2-step DWD",
+        "sub": "Fast · fixed 2 steps · native stereo audio · first-frame video",
+        "family": "minimax",
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        "workflow": "h3_pi_dwd2_i2v.json",
+        "steps": 2,
+        "fixed_steps": 2,
+        "supports_chaining": False,
+        "worker_preflight": True,
+        "lease_seconds": 14400,
+        "unet": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_int8_convrot.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        "adapter": "pi_h3_2step_dwd_adapter_int8_convrot.safetensors",
+        "requires_node": "Load LakonLab Adapter",
+        "extra_nodes": ["pi-Flow Scheduler", "DWD Decode", "MiniMaxH3SigmaShift",
+                        "BlockSparseAttention", "MiniMaxH3ImageToVideo", "SpielbotDWDNoise"],
+        "min_comfyui": (0, 45, 0),
+        "too_old_note": "pi-H3 requires the piFlow nodes and ComfyUI 0.45.0 or newer",
+        "probe": ("UNETLoader", "unet_name", "minimax_h3_fl2va_pruned_int8_convrot.safetensors"),
+        "extra_probes": [
+            ("CLIPLoader", "clip_name", "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"),
+            ("VAELoader", "vae_name", "minimax_h3_video_vae_int8_convrot.safetensors"),
+            ("VAELoader", "vae_name", "minimax_h3_audio_vae_fp32.safetensors"),
+            ("Load LakonLab Adapter", "adapter_name", "pi_h3_2step_dwd_adapter_int8_convrot.safetensors"),
+        ],
+        "models": [
+            _model("Comfy-Org/MiniMax-H3",
+                   "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_int8_convrot.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+            _model("Lakonik/pi-H3", "pi_h3_2step_dwd_adapter_int8_convrot.safetensors",
+                   "models/loras", revision="4a864589b0fac3d14768f932c930c4dcf1a17b56"),
+        ],
+    },
     # ── Reference-to-video (Ref2VA): performance films ───────────────────────
     # Not scene I2V engines — these take character portraits (and voice clips)
     # instead of a first frame, and are only reachable from a performance-mode
@@ -728,9 +776,16 @@ def resolve_video(cfg: dict, key: str) -> dict:
         steps = int(cfg.get("video_steps") or 0) if isinstance(cfg, dict) else 0
     except (TypeError, ValueError):
         steps = 0
-    if steps > 0 and eng.get("steps"):
+    if steps > 0 and eng.get("steps") and not eng.get("fixed_steps"):
         eng["steps"] = steps
     return eng
+
+
+def video_supports_chaining(engine: dict | str | None) -> bool:
+    """Whether this engine can continue a take through H3 Motion Context."""
+    eng = engine if isinstance(engine, dict) else get_video(engine)
+    return bool(eng and eng.get("family") == "minimax"
+                and eng.get("supports_chaining", True))
 
 
 def resolve_reference(cfg: dict, key: str) -> dict:
@@ -756,6 +811,8 @@ def _public_video(e: dict) -> dict:
         "commercial_ok": e["commercial_ok"], "license": e["license"],
         "license_note": e.get("license_note"),
         "downloadable": bool(e.get("models")),
+        "fixed_steps": e.get("fixed_steps"),
+        "supports_chaining": video_supports_chaining(e),
     }
 
 

@@ -4305,7 +4305,8 @@ def _chain_plan_mismatch(wd: Path, story: dict) -> dict | None:
     if not isinstance(plan, dict) or not plan.get("chained"):
         return None
     ss = gapp.style_settings(gapp.load_config(), brief.get("style_name", ""))
-    if gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")) or \
+    if (gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes"))
+            and gapp.engines.video_supports_chaining(ss.get("video_engine"))) or \
             not str(ss.get("video_engine") or "").startswith("minimax-h3"):
         return None
     fresh = _story_style_plan(ss, brief, minutes=plan.get("minutes"))
@@ -6601,6 +6602,25 @@ def list_engines() -> dict:
         """Model file present AND (when the engine needs newer ComfyUI nodes)
         the node class registered — False pinpoints "worker needs an update"."""
         nonlocal worker_version
+        if e.get("worker_preflight"):
+            # This optional bundle may be installed on only one worker. A
+            # representative first worker must not hide a runnable choice.
+            from pipeline.comfyui import compatible_video_workers
+            urls = cfg.get("comfy_workers") or []
+            if not probe_url:
+                return None
+            try:
+                compatible_video_workers(urls, e)
+                return True
+            except RuntimeError:
+                # Check the runtime before its custom loader's model enum:
+                # an absent loader cannot be repaired by downloading weights.
+                version = comfyui_version(probe_url)
+                nodes = [e["requires_node"], *e.get("extra_nodes", [])]
+                if ((version and version < tuple(e["min_comfyui"]))
+                        or any(comfy_node_exists(probe_url, n) is False for n in nodes)):
+                    worker_updates[e["key"]] = probe_url
+                    return False
         if not probe_url:
             return None
         ok = engine_model_present(probe_url, e.get("probe"))
@@ -15440,7 +15460,7 @@ def _shared_edit_render_pool():
         return _edit_render_pool
 
 
-def _acquire_render_worker(pool, task_id: str) -> str:
+def _acquire_render_worker(pool, task_id: str, *, allowed: list[str] | None = None) -> str:
     """pool.acquire() that surfaces the wait: the shared re-render pool is a
     FIFO, so re-renders past the worker count block here for minutes. While
     blocked the task carries queued=True, which the Activity screen shows as a
@@ -15449,7 +15469,7 @@ def _acquire_render_worker(pool, task_id: str) -> str:
     if isinstance(task, dict):
         task["queued"] = True
     try:
-        return pool.acquire()
+        return pool.acquire(allowed=allowed) if allowed is not None else pool.acquire()
     finally:
         task = _film_tasks.get(task_id)
         if isinstance(task, dict):
@@ -16489,8 +16509,7 @@ def _chain_scenes_for_job(cfg: dict, jc: dict) -> bool:
     flag = jc.get("h3_chain_scenes")
     if flag is None:
         flag = ss.get("h3_chain_scenes")
-    return (bool(flag)
-            and _resolve_video_for_job(cfg, jc).get("family") == "minimax")
+    return bool(flag) and gapp.engines.video_supports_chaining(_resolve_video_for_job(cfg, jc))
 
 
 def _acted_silent_cfg(jc: dict) -> dict:
@@ -16620,7 +16639,13 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             store.close()
         mixed = performance_mode.mixed_film(
             [{"metadata": r.get("metadata") or {}} for r in all_rows], _acted_silent_cfg(jc))
-        url = _acquire_render_worker(pool, task_id)
+        video_engine = _resolve_video_for_job(cfg, jc)
+        if not mixed and video_engine.get("worker_preflight"):
+            from pipeline.comfyui import compatible_video_workers
+            allowed = compatible_video_workers(pool.urls, video_engine)
+            url = _acquire_render_worker(pool, task_id, allowed=allowed)
+        else:
+            url = _acquire_render_worker(pool, task_id)
         try:
             # acquire() can block a long time behind a busy GPU — re-check
             # before submitting work the film may no longer exist to receive.
@@ -16645,7 +16670,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                     url,
                     scene_first_frame if scene_first_frame.exists() else None,
                     engine,
-                    video_engine=_resolve_video_for_job(cfg, jc),
+                    video_engine=video_engine,
                     chained=_chain_scenes_for_job(cfg, jc),
                 )
         finally:

@@ -638,7 +638,7 @@ butt-join can jump until the other side is re-shot too.
 A style carries **two video model pickers**, side by side under *Video models*, because a
 film can hold two kinds of scene:
 
-- **Narrated & silent scenes** — the I2V engine (LTX 2.5 or MiniMax H3) that animates each
+- **Narrated & silent scenes** — the I2V engine (LTX 2.5, pi-H3 two-step DWD or another MiniMax H3 variant) that animates each
   scene from its first-frame still. (Silent scenes leave for the Ref2VA picker below when
   the style acts them — see [Silent scenes, performed](#silent-scenes-performed) — and so
   do the narrated scenes of a mixed film, see *One production, one model* above.)
@@ -668,9 +668,12 @@ distilled for ordinary scenes and pointed at Ref2VA; this one was trained on
 Ref2VA and does not show it. It errs soft instead, and drifted further from the
 reference wardrobe than w4a8 did — hence opt-in, with w4a8 still the default.
 
-**Sampling steps** is ONE knob beneath both pickers: it overrides the step count of every
-MiniMax H3 render in the style — narrated-scene I2V and acted-scene Ref2VA alike. 0 keeps
-each engine's own default (Turbo 4, the others 15); LTX ignores it.
+**Sampling steps** beneath both pickers overrides configurable MiniMax H3 engines,
+including acted-scene Ref2VA. 0 keeps each engine's own default (Turbo 4, base H3
+15); LTX ignores it. The optional **pi-H3 2-step DWD** I2V engine keeps its fixed
+two-step schedule and single-clip scene budgets. Selecting it does not change the
+acted-scene model or disable chaining for acted scenes; see
+[pi-H3 requirements and limits](models.md#pi-h3-two-step-dwd).
 
 ### The distilled engines swing the camera
 

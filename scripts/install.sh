@@ -123,6 +123,21 @@ MODEL_SOURCE="${MODEL_SOURCE:-${FIRST_HOST:-}}"
 # sentinel.
 _models_present_on() {
     local host="$1"
+    if [[ "${INSTALL_PIH3:-0}" == "1" ]]; then
+        if is_local_host "$host"; then
+            [[ -f "$COMFY_DIR/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" &&
+               -f "$COMFY_DIR/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" &&
+               -f "$COMFY_DIR/models/vae/minimax_h3_video_vae_int8_convrot.safetensors" &&
+               -f "$COMFY_DIR/models/vae/minimax_h3_audio_vae_fp32.safetensors" &&
+               -f "$COMFY_DIR/models/loras/pi_h3_2step_dwd_adapter_int8_convrot.safetensors" ]] || return 1
+        else
+            ssh "$host" '[[ -f $HOME/github/ComfyUI/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors &&
+                            -f $HOME/github/ComfyUI/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors &&
+                            -f $HOME/github/ComfyUI/models/vae/minimax_h3_video_vae_int8_convrot.safetensors &&
+                            -f $HOME/github/ComfyUI/models/vae/minimax_h3_audio_vae_fp32.safetensors &&
+                            -f $HOME/github/ComfyUI/models/loras/pi_h3_2step_dwd_adapter_int8_convrot.safetensors ]]' || return 1
+        fi
+    fi
     if [[ "${INSTALL_QWEN_TURBO:-0}" == "1" ]]; then
         if is_local_host "$host"; then
             [[ -f "$COMFY_DIR/models/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors" &&
@@ -190,12 +205,12 @@ elif is_local_host "$MODEL_SOURCE"; then
         # never touched.
         touch "$COMFY_DIR/.spielbot_created"
     fi
-    HF_TOKEN="$HF_TOKEN" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" INSTALL_QWEN_TURBO="${INSTALL_QWEN_TURBO:-0}" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
+    HF_TOKEN="$HF_TOKEN" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" INSTALL_QWEN_TURBO="${INSTALL_QWEN_TURBO:-0}" INSTALL_PIH3="${INSTALL_PIH3:-0}" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
 else
     _ask_hf_token
     echo "[models] Downloading models to $MODEL_SOURCE (first worker; others rsync from it during deploy)..."
     rsync -q "$REPO_ROOT/scripts/download_models.sh" "${MODEL_SOURCE}:/tmp/spielbot_download_models.sh"
-    printf -v _download_env 'HF_TOKEN=%q INSTALL_FLUX3=%q INSTALL_QWEN_TURBO=%q' "$HF_TOKEN" "${INSTALL_FLUX3:-0}" "${INSTALL_QWEN_TURBO:-0}"
+    printf -v _download_env 'HF_TOKEN=%q INSTALL_FLUX3=%q INSTALL_QWEN_TURBO=%q INSTALL_PIH3=%q' "$HF_TOKEN" "${INSTALL_FLUX3:-0}" "${INSTALL_QWEN_TURBO:-0}" "${INSTALL_PIH3:-0}"
     ssh "$MODEL_SOURCE" \
         "$_download_env bash /tmp/spielbot_download_models.sh \$HOME/github/ComfyUI"
 fi
@@ -265,7 +280,7 @@ fi
 
 for host in $HOSTS; do
     banner "Deploying container worker: $host"
-    HF_TOKEN="$HF_TOKEN" MODEL_SOURCE="$MODEL_SOURCE" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" INSTALL_QWEN_TURBO="${INSTALL_QWEN_TURBO:-0}" bash "$REPO_ROOT/scripts/install_worker_container.sh" "$host"
+    HF_TOKEN="$HF_TOKEN" MODEL_SOURCE="$MODEL_SOURCE" INSTALL_FLUX3="${INSTALL_FLUX3:-0}" INSTALL_QWEN_TURBO="${INSTALL_QWEN_TURBO:-0}" INSTALL_PIH3="${INSTALL_PIH3:-0}" bash "$REPO_ROOT/scripts/install_worker_container.sh" "$host"
 done
 
 # Point the config at the containers we just deployed:

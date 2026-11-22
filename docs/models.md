@@ -163,7 +163,7 @@ FLUX 3 Image Klein NVFP4 notes:
   BFL renamed the original `flux3_image_klein_sd_nvfp4.safetensors` checkpoint;
   existing installations must download the current filename and the upsampler.
   Older files are left untouched.
-- The worker image pins **ComfyUI 0.42.5 (`483dae43`)**. Docker, Compose and
+- The worker image pins **ComfyUI 0.45.0 (`989d93d0`)**. Docker, Compose and
   `make install` share the pin; `make start` rebuilds stale images. Settings checks
   all four model files, the required nodes and the minimum worker version.
   **Model files downloaded** confirms only the download. If Settings shows
@@ -227,7 +227,7 @@ Qwen-Image 2.1 notes:
   before submission. Settings checks the diffusion model, encoder, VAE and nodes.
   Eight steps reduces sampling work, but does not guarantee a particular speedup
   over the existing NVFP4 engine or a complete film.
-- The worker image pins **ComfyUI 0.42.5 (`483dae43`)**,
+- The worker image pins **ComfyUI 0.45.0 (`989d93d0`)**,
   which includes `TextEncodeQwenImage21` (introduced in v0.37.0). `make install` writes that pin, and
   `make start` rebuilds a worker whose image is older. A render on an older
   image is refused up front.
@@ -262,6 +262,7 @@ field. These engines ship:
 | Engine | Character | License |
 |---|---|---|
 | **LTX 2.5 22B** (default) | Fast two-pass render, native audio, honors the per-style video negative prompt; Gemma 4 encoder for strong prompt adherence, 24 fps. Measured ~26% faster than the LTX 2.3 engine it replaced | LTX-2.x Community License |
+| **pi-H3 2-step DWD** (opt-in) | Fixed two-step first-frame animation with native stereo audio and direct video decoding; no negative-prompt or motion-context chaining path | MiniMax H3 Community License |
 | **MiniMax H3 33B** (opt-in) | Much slower single-pass render, higher fidelity, native **stereo** audio; no negative-prompt path | MiniMax H3 Community License |
 | **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (4 steps instead of 15) on the full non-pruned transformer — measured ~1.9× faster per scene | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 | **MiniMax H3 33B Ref2VA** (opt-in) | Not a scene I2V engine: takes character portraits and voice clips instead of a first frame and generates picture + spoken dialogue together. Only [performance films](performance_films.md) use it | MiniMax H3 Community License |
@@ -281,7 +282,7 @@ LTX 2.5 notes:
   automatically. The 2.3 checkpoint stays installed for the keyframed
   establishing shots and the film editor's upscalers.
 - Native support ships with **ComfyUI itself (≥ v0.32.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=483dae4326356b81de05d27aca3f433dd323cc25`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=989d93d0d968e704c589ce0146bb18c77f6b50cc`) if the engine shows
   "not installed" with the weights already downloaded. Older workers refuse the
   render rather than failing mid-graph.
 - Clips render at **24 fps** (2.3 ran at 25) through the same two-pass
@@ -302,7 +303,7 @@ MiniMax H3 notes:
   encoder, video + audio VAEs) from **Settings → Infrastructure → Video models** —
   it is *not* part of the bulk install.
 - Its nodes ship with **ComfyUI itself (≥ v0.30.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=483dae4326356b81de05d27aca3f433dd323cc25`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=989d93d0d968e704c589ce0146bb18c77f6b50cc`) if the engine shows
   "not installed" with the weights already downloaded.
 - Generation is capped at ~1 MP (768×1344-class); larger style resolutions render
   at the cap and are reframed back to the plan size. Clips run 4–15 s at 24 fps.
@@ -331,6 +332,49 @@ Turbo variant notes:
   checkpoints are expected upstream; swap the `lora` filename in
   `pipeline/engines.py` to pick one up.
 
+### pi-H3 two-step DWD
+
+**pi-H3 2-step DWD** (`minimax-h3-pi-dwd2`) is a per-style first-frame video
+engine. Choose it under **Settings → Styles → Video models → Narrated & silent
+scenes** after installing its bundle through **Settings → Infrastructure → Video
+models**, or run:
+
+```bash
+make install INSTALL_PIH3=1
+```
+
+The installer reuses existing files and repairs incomplete bundles across the
+configured workers. It does not change style selections or the default LTX engine.
+
+- Requires **ComfyUI 0.45.0 or newer** and the pinned
+  [ComfyUI-piFlow](https://github.com/Lakonik/ComfyUI-piFlow) nodes supplied by the
+  worker image. Rebuild older workers before selecting it; downloading weights
+  alone cannot add the required nodes.
+- Downloads the pruned INT8 H3 transformer, Qwen3-VL 32B NVFP4 encoder, INT8 video
+  VAE, audio VAE and the pinned
+  [two-step DWD adapter](https://huggingface.co/Lakonik/pi-H3). The complete stack
+  is about **42.3 GB**; the adapter and INT8 VAE add about **5 GB** when the shared
+  H3 transformer, encoder and audio VAE are already present.
+- Uses **two fixed steps**, with the adapter's published schedule and direct
+  video decoding. The style's Sampling steps and LTX pass controls do not change
+  this recipe. It generates native stereo ambience and has no negative-prompt
+  input. H3's usual resolution and duration bounds apply.
+- It animates a first frame. It does not replace the independent Ref2VA model for
+  acted scenes, voice references or pinned-song conditioning. It also does not
+  use H3 Motion Context: **Chained scenes** still controls acted scenes, but
+  pi-H3 I2V scenes are planned and rendered as single clips.
+- In the 22 November 2026 GB10 screen, original five-second cases took **57–71 s**
+  versus **103–118 s** for LTX 2.5 (1.51–1.81× faster; the 57 s result was a warm
+  repeat). A later model-switch control took 98 s versus 105 s. These are render
+  times including encoding, with slightly different native frame counts, not
+  whole-film throughput or a general quality ranking.
+- Sampled frames retained recognizable characters and object geometry, but a
+  locked-camera prompt produced an unwanted zoom. Review shots where exact
+  framing matters. The screen did not validate full-motion/audio quality or
+  long-scene consistency.
+- Both the adapter and base weights carry the **MiniMax H3 Community License**;
+  the Apache-2.0 licence on the node code does not change those model terms.
+
 ### Chained scenes
 
 H3 renders at most ~15 s in one pass, and that is what caps a scene. Turning on
@@ -346,8 +390,9 @@ scenes of ~58 words; total narration is unchanged.
 
 It covers both kinds of scene, on different gates:
 
-- **Narrated scenes** chain when the style's *video engine* is MiniMax. LTX
-  narrated scenes ignore the toggle — LTX continues clips natively.
+- **Narrated scenes** chain on the base MiniMax H3 and H3 Turbo engines.
+  pi-H3 two-step DWD stays single-clip, and its scene budgets ignore this toggle.
+  LTX narrated scenes continue clips natively.
 - The plan is fixed when the story is **divided**. Switching the toggle off later does
   not shorten an existing script's scenes; the Script screen warns and offers to
   re-divide it (see [Script](manual/script.md)).
@@ -478,7 +523,7 @@ per worker from **Settings → Infrastructure → Music models**.
 MiniMax Music 3 notes:
 
 - Its nodes ship with **ComfyUI itself (≥ v0.33.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=483dae4326356b81de05d27aca3f433dd323cc25`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=989d93d0d968e704c589ce0146bb18c77f6b50cc`) if the engine shows
   "not installed" with the weights already downloaded. Renders are refused
   up-front on an older worker rather than failing mid-graph.
 - The film's **music description** becomes the model's *caption*. It reads best

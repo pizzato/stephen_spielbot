@@ -68,11 +68,11 @@ FROM ${BASE_IMAGE}
 # v0.30.0 is the first release with native MiniMax H3 nodes (nodes_minimax_h3);
 # v0.32.0 adds native LTX 2.5; v0.33.0 adds MiniMax Music 3; v0.37.0 adds
 # Qwen-Image 2.1 (TextEncodeQwenImage21); 0.41.3 adds native FLUX 3 (PR #17064;
-# not in v0.40.0). The pinned 0.42.5 release adds per-step PDD heads (PR #17157,
-# first in v0.42.0), which FastH3 Omni's checkpoint needs. Bumping this wants a chained H3
+# not in v0.40.0). v0.42 adds per-step PDD heads (FastH3 Omni); the pinned
+# v0.45.0 release supports pi-H3 DWD and its INT8 video VAE. Bumping this wants a chained H3
 # render re-check — H3 Motion Context monkey-patches ComfyUI internals and
 # self-tests on load.
-ARG COMFYUI_REF=483dae4326356b81de05d27aca3f433dd323cc25
+ARG COMFYUI_REF=989d93d0d968e704c589ce0146bb18c77f6b50cc
 ARG TORCH_INDEX_URL
 ARG TORCH_SPEC
 
@@ -199,6 +199,17 @@ ARG H3_TURBO_NODES_REF=55fee864dd7b2976b1c4ce3c3d5f7968f181409f
 RUN git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
         custom_nodes/ComfyUI-MiniMax-H3-Turbo \
     && git -C custom_nodes/ComfyUI-MiniMax-H3-Turbo checkout "${H3_TURBO_NODES_REF}"
+
+# pi-H3 two-step DWD: fixed-schedule adapter and direct video-frame decoding.
+# v1.4.0 requires ComfyUI >= 0.45.0 and uses its existing Python dependencies.
+# Pin the tested node API; model weights remain an opt-in download.
+ARG PIFLOW_NODES_REF=bcb6ffb8ff6191115e5803c4ddddef6a73b0b8a8
+RUN git clone https://github.com/Lakonik/ComfyUI-piFlow.git \
+        custom_nodes/ComfyUI-piFlow \
+    && git -C custom_nodes/ComfyUI-piFlow checkout "${PIFLOW_NODES_REF}"
+# Resample each pi-H3 request: DWD's decoded pixels live in a bounded cache,
+# so a cached sampler latent cannot safely be reused after its pixels expire.
+COPY docker/comfyui/pih3/ custom_nodes/spielbot_pih3/
 
 # H3 Motion Context — chains H3 clips so clip B continues clip A's motion and
 # audio, the only way past the model's 15 s ceiling (pipeline/comfyui.py:

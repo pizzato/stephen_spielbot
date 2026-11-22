@@ -87,10 +87,10 @@ def test_settings_does_not_report_turbo_installed_without_companions(probe):
 
 
 @pytest.mark.parametrize("target,script", [("install", "install.sh"), ("download-models", "download_models.sh")])
-def test_make_passes_both_optional_install_flags(tmp_path, target, script):
-    (tmp_path / script).write_text('printf "%s %s\\n" "$INSTALL_FLUX3" "$INSTALL_QWEN_TURBO"\n')
+def test_make_passes_optional_install_flags(tmp_path, target, script):
+    (tmp_path / script).write_text('printf "%s %s %s\\n" "$INSTALL_FLUX3" "$INSTALL_QWEN_TURBO" "$INSTALL_PIH3"\n')
     root = Path(__file__).resolve().parents[1]
     proc = subprocess.run(["make", "--no-print-directory", "-s", target, f"SCRIPTS={tmp_path}",
-                           "INSTALL_FLUX3=1", "INSTALL_QWEN_TURBO=1"], cwd=root,
+                           "INSTALL_FLUX3=1", "INSTALL_QWEN_TURBO=1", "INSTALL_PIH3=1"], cwd=root,
                           text=True, capture_output=True, check=True)
-    assert proc.stdout.strip() == "1 1"
+    assert proc.stdout.strip() == "1 1 1"
