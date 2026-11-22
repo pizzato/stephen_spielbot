@@ -166,6 +166,25 @@ class SunoMusicTests(unittest.TestCase):
             self.generate(model="v6")
         self.assertEqual(sum(name == "audio-create" for name, _ in self.calls), 1)
 
+    def test_failed_sibling_does_not_block_importing_completed_take(self):
+        self.generate()
+        path = next(self.wd.glob('suno_requests/*/request.json'))
+        state = json.loads(path.read_text())
+        state.pop('clips')
+        path.write_text(json.dumps(state))
+        original = self._call
+        def selected_only(name, args):
+            if name == 'audio-wait':
+                self.assertEqual(args['ids'], ['one'])
+                return {'clips': [self.clips[0]]}
+            return original(name, args)
+        self.call.side_effect = selected_only
+        suno_music.download_suno_take(self.wd, 'one')
+        previews = suno_music.list_suno_takes(self.wd)
+        self.assertEqual([c['id'] for c in previews], ['one', 'two'])
+        self.assertEqual(previews[1]['status'], 'pending')
+        self.assertEqual(self.downloaded, {'one'})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -152,7 +152,8 @@ def generate_suno_takes(title: str, duration: float, *, work_dir: Path,
 
 
 def _public_takes(state: dict) -> list[dict]:
-    clips = state.get('clips') or [{'id': cid, 'status': 'pending'} for cid in state.get('clip_ids', [])]
+    known = {c['id']: c for c in state.get('clips', [])}
+    clips = [known.get(cid, {'id': cid, 'status': 'pending'}) for cid in state.get('clip_ids', [])]
     return [{'id': c['id'], 'title': c.get('title') or state['request'].get('title', ''),
              'status': c.get('status'), 'song_url': c.get('song_url') or f'https://suno.com/song/{c["id"]}',
              'model': (c.get('metadata') or {}).get('model') or state['request'].get('model', ''),
@@ -191,8 +192,11 @@ def download_suno_take(work_dir: Path, clip_id: str) -> dict:
             state = json.loads(path.read_text())
             if clip_id not in state.get('clip_ids', []):
                 continue
-            if not state.get('clips'):
-                state['clips'] = _wait(state['clip_ids'], time.monotonic() + 20 * 60)
+            known = {c['id']: c for c in state.get('clips', [])}
+            if known.get(clip_id, {}).get('status') != 'complete':
+                # A failed sibling must not block the usable take the user chose.
+                known[clip_id] = _wait([clip_id], time.monotonic() + 20 * 60)[0]
+                state['clips'] = list(known.values())
                 _save(path, state)
             target = path.parent / f'take_{state["clip_ids"].index(clip_id) + 1}.wav'
             if not target.exists():
