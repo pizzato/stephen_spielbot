@@ -16,7 +16,7 @@ rebuilds.
 | [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) | ~40 GB | Scene video generation (default engine; gated repo — needs an HF token) |
 | [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) | ~28 GB | Keyframed establishing shots + Remix spatial upscalers |
 | [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) | ~16 GB | Scene first-frame images and the "Edit image" inpaint |
-| [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music (default manual engine) |
+| [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Bundled background-music workflow |
 | [FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) | ~7 GB | Default finishing / Edit-film upscaler (video super-resolution) |
 | Chatterbox Multilingual | ~3.5 GB | Optional multilingual narration (pre-warmed into each TTS worker's HF cache) |
 | LibriVox character voices | small | 10 public-domain voices auto-cast onto script characters (`make download-voices`) |
@@ -85,7 +85,7 @@ If you'd rather fetch them yourself:
     huggingface-cli download Comfy-Org/ace_step_1.5_ComfyUI_files split_files/text_encoders/qwen_4b_ace15.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
     ```
 
-=== "MiniMax Music 3 (~14 GB, opt-in)"
+=== "MiniMax Music 3 (~14 GB)"
 
     ```bash
     huggingface-cli download Comfy-Org/MiniMax-Music-3 diffusion_models/minimax_music3_dit_fp16.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
@@ -544,32 +544,35 @@ huggingface-cli download lightx2v/Minimax-h3-Turbo minimax_h3_ref2v_turbo_4step_
     `scripts/download_models.sh`, which rewrites the header and drops the
     original.
 
-## Music engines (per style)
+## Music generation {#music-engines-per-style}
 
-Each style picks the model that writes its songs and background bed under **Settings →
-Styles → Narrator & audio → Manual music generation** (shown only when music is on); child
-styles inherit the choice like every other style field. Download local engines
-per worker, or connect Suno, from **Settings → Infrastructure → Music models**.
-This choice controls explicit **Generate the song** and **Regenerate music** actions.
+Choose the provider when generating, without setting a default in advance. The
+Song tab’s normal **Generate** action and the film editor’s **Regenerate music** /
+**Sing it again** use **MiniMax Music 3**. Their separate **Generate on Suno** action
+creates Suno previews for that request. Connect Suno or download local weights from
+**Settings → Infrastructure → Music models**.
+
 The read-only **Automatic music: MiniMax Music 3** row shows the fixed automatic
-engine, including scoring during rendering, regardless of the style's manual
-selection. An already imported soundtrack is reused without generating another.
-Suno requires manual generation followed by **Use this take** to import a song.
+engine, including scoring during rendering. An already imported soundtrack is
+reused without generating another. Suno requires **Generate on Suno** followed by
+**Use this take** to import a song.
 
 | Engine | Character | License |
 |---|---|---|
-| **ACE-Step 1.5 Turbo** (manual default) | ~5 GB, 8 sampling steps, seconds per film. Instrumental beds from a tag list, any length | Apache-2.0 |
-| **MiniMax Music 3** (automatic) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps. Song-shaped and higher fidelity, capped at 6 minutes. Measured on a GB10 worker: **83 s for a 30 s bed** | MiniMax-Music3 Community License |
+| **ACE-Step 1.5 Turbo** (bundled workflow) | ~5 GB, 8 sampling steps, seconds per film. Instrumental beds from a tag list, any length | Apache-2.0 |
+| **MiniMax Music 3** (standard and automatic generation) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps. Song-shaped and higher fidelity, capped at 6 minutes. Measured on a GB10 worker: **83 s for a 30 s bed** | MiniMax-Music3 Community License |
 | **Suno** (account connection) | Cloud generation through the official MCP service. Models and singing voices come from your account; no music weights or GPU worker required | Suno terms and account entitlements |
 
 Suno notes:
 
 - Sign in inside Spielbot's Infrastructure settings. This is a separate connection
   from a Suno MCP connection in Codex; Spielbot keeps its own authorization.
-- Select **Suno model** and **Suno singing voice** per style. Blank selections use
+- Optional **Suno model** and **Suno singing voice** preferences are available per
+  style under **Narrator & audio**, without selecting a default music provider.
+  They apply only to **Generate on Suno**. Blank selections use
   the account's default model and the model's own vocalist. The voice picker lists
   voices already available in Suno; create or clone voices in Suno itself.
-- Each generation creates two songs. Manual generation shows both as previews;
+- **Generate on Suno** creates two songs and shows both as previews;
   open **Play on Suno** to listen before downloading. Choose
   **Use this take** to download and select that song. Only imported takes join the
   normal version strip. Unchosen takes remain in Suno.
@@ -709,15 +712,16 @@ original at any time.
 
 ## Licensing
 
-The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, SoulX-Singer SVC, and the OpenF5
-narration model — are commercial-friendly on purpose. The original F5-TTS narration weights are offered only as
+The bundled FLUX.2 Klein, LTX-Video, ACE-Step, SoulX-Singer SVC, and OpenF5
+narration models are commercial-friendly. The original F5-TTS narration weights are offered only as
 an opt-in **non-commercial** preview. Both Qwen-Image 2.1 builds (INT8 and the faster NVFP4) are opt-in under the
 [Qwen Research License](#image-engines-per-style) — research and evaluation only,
 not for a monetized film without a separate grant from Qwen. The NVFP4 diffusion
 file is a community quant of the official weights and inherits that license. MiniMax H3 is opt-in with its own
 [community license](#video-engines-per-style) — territory-restricted and
 attribution-bearing; review it before switching a publishing style over. MiniMax
-Music 3 is opt-in under a [separate community license](#music-engines-per-style)
+Music 3 is used for standard and automatic music generation under a
+[separate community license](#music-engines-per-style)
 — no territory restriction, but it wants a visible "MiniMax-Music3" credit. FLUX 3 Klein
 NVFP4 is opt-in under the [FLUX Kommunity terms](#image-engines-per-style), with
 conditional commercial output generation below US$5M gross annualised revenue

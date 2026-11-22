@@ -29,7 +29,7 @@ app; one or more **GPU workers** do the rendering.
 | 3 | **Video** | [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) — or opt-in [pi-H3 2-step DWD](models.md#pi-h3-two-step-dwd) and MiniMax H3 — animates each scene from its still, through ComfyUI |
 | 4 | **Narration** | [F5-TTS](https://github.com/SWivid/F5-TTS) speaks the script in a cloned voice — or [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) for 23 languages |
 | 5 | **Dialogue** | Scenes can instead be acted: the characters speak on screen, picture and voice generated together by [MiniMax H3](https://github.com/MiniMax-AI) — see [acted scenes](performance_films.md) |
-| 6 | **Music** | [MiniMax Music 3](models.md#music-engines-per-style) scores the film automatically during rendering, mixed in at the very end — or switched off per style or per film. Manual generation also offers ACE-Step and Suno; imported soundtracks are reused |
+| 6 | **Music** | [MiniMax Music 3](models.md#music-engines-per-style) scores the film automatically during rendering, mixed in at the very end — or switched off per style or per film. Normal **Generate** also uses MiniMax; **Generate on Suno** is an explicit alternative. Imported soundtracks are reused |
 | 7 | **Song** | Or the film *is* the music: the [Music-video format](performance_films.md#singing-films-the-music-video-format) has the LLM write the story as lyrics, the music model sing them, and the cast perform the song on camera |
 | 8 | **Assembly** | FFmpeg mixes it all into one film with synced audio |
 

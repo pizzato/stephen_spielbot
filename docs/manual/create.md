@@ -162,8 +162,9 @@ and a **Singing voice** picker takes its place.
 Music videos only. Where the film's song comes from:
 
 - **Write it for me** — the default. The AI writes the song from the brief above and the
-  music model sings it; you audition it in the [Song tab](script.md#song) before anything
-  else is built.
+  [Song tab](script.md#song) offers **Generate** with MiniMax Music 3 or **Generate on
+  Suno** for that request. You audition the song before anything else is built; no
+  default music provider needs to be selected first.
 - **I have the song** — a **Song file** picker appears, and the song you upload becomes
   the film's soundtrack exactly as it is. Nothing is written and nothing is generated: no
   LLM, no music model. Use it for your own recording, or for a track this app generated

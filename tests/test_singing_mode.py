@@ -1100,7 +1100,7 @@ class SongEndingTests(_SongFilmCase):
                     work_dir=str(self.wd), seconds=bad))
             self.assertEqual(ctx.exception.status_code, 400)
 
-    def _generate(self, add=0.0, can_extend=True):
+    def _generate(self, add=0.0, can_extend=True, engine="ace-step"):
         """Run _do_song_generate with the worker and engine stubbed out;
         returns (result, what generate_music was called with)."""
         calls = {}
@@ -1123,7 +1123,7 @@ class SongEndingTests(_SongFilmCase):
                                         return_value=["http://w1:8188"]), \
              unittest.mock.patch.object(backend.subprocess, "run"), \
              unittest.mock.patch("pipeline.assembler.keep_audio_head", fake_keep):
-            res = backend._do_song_generate(self.wd, add_seconds=add)
+            res = backend._do_song_generate(self.wd, add_seconds=add, engine_override=engine)
         return res, calls
 
     def test_regenerating_longer_extends_the_take_in_use(self):
@@ -1176,7 +1176,7 @@ class SongEndingTests(_SongFilmCase):
         AR seed at a longer duration continues this take, and the approved
         head is spliced back."""
         self._minimax(seed=42)
-        res, calls = self._generate(add=5, can_extend=False)
+        res, calls = self._generate(add=5, can_extend=False, engine="minimax-music3")
 
         self.assertTrue(res["extended"])
         self.assertEqual(calls["seed"], 42)
@@ -1187,7 +1187,7 @@ class SongEndingTests(_SongFilmCase):
 
     def test_minimax_without_a_seed_falls_back_to_a_fresh_take(self):
         self._minimax(seed=None)
-        res, calls = self._generate(add=5, can_extend=False)
+        res, calls = self._generate(add=5, can_extend=False, engine="minimax-music3")
 
         self.assertFalse(res["extended"])
         self.assertIsNone(calls["extend_from"])

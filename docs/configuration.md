@@ -211,15 +211,16 @@ a failed SoulX conversion never silently becomes a Seed-VC conversion.
 ## The highlights
 
 The Settings screen covers everything; this is the short list of what people change first.
+Music generation has no default-provider picker: **Generate** uses MiniMax Music 3,
+and **Generate on Suno** selects Suno for that request.
 
 | Setting | Description |
 |---|---|
 | ComfyUI workers | One URL per line — scenes are distributed across them in parallel |
 | TTS workers | F5-TTS/Chatterbox endpoints for parallel narration (port 8189, derived by `make install`) |
 | Music | Score films in this style (per-film override in Create); music is mixed in at the very end |
-| Manual music generation | Per-style manual music engine — `ace-step` (default), opt-in `minimax-music3`, or account-connected `suno` (see [Models → Music engines](models.md#music-engines-per-style)) |
 | Automatic music: MiniMax Music 3 | Fixed automatic engine for every style, including scoring during rendering; reuses an already imported soundtrack |
-| Suno model / singing voice | Per-style `suno_model` and `suno_voice_id`; empty values use the account's default model and model's own vocalist. Sign in under Infrastructure → Music models; choices follow the connected account |
+| Suno model / singing voice | Optional per-style `suno_model` and `suno_voice_id`, used only when you click **Generate on Suno**. Empty values use the account's default model and model's own vocalist. Sign in under Infrastructure → Music models; choices follow the connected account |
 | Singing voice conversion | Per-style `svc_engine`: `soulx-svc` (default) or `seed-vc`; selects the model that re-voices an existing song, independently of the music generator and automatic re-voicing toggle |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
 | LLM backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` |

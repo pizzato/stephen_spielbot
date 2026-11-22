@@ -191,7 +191,7 @@ The pipeline handles the song and its visuals together:
   it is the *whole* mix: voice and ambient levels are pinned to **0 %**, at render and at
   every later re-mix, so a stray spoken beat or a soundscape can never bleed in under the
   track. The film editor offers a music video one level — Music — for that reason. Its
-  *Sing it again* re-sings the same lyrics; edit the caption there to
+  *Sing it again* uses MiniMax Music 3 to re-sing the same lyrics; edit the caption there to
   change the sound. The script's [Song tab](manual/script.md#song) edits — or re-writes
   with the LLM — both the words and the sound.
 
@@ -265,25 +265,25 @@ detailed **Global Metadata** and a section-by-section **Arrangement**, preservin
 original musical constraints. That expanded Sound stays editable in the Song tab and
 is reused for later takes; continuing an existing take retains its conditioning. The
 finished-film editor's **Sing it again** also expands short MiniMax song descriptions.
-ACE-Step appends the vocalist to its compact caption. Vocal gender, identity and accent
-are requests to the model, so the result needs a listening check; prompt formatting
+Vocal gender, identity and accent are requests to the model, so the result needs a
+listening check; prompt formatting
 does not guarantee an accent. The singer on screen and the voice on the track are
 matched by description, not by cloning.
 Lip movement is a performance, not a phoneme-accurate sync — exactly like a real music
 video shot without playback.
 
-**Engine choice matters.** Among the local engines, MiniMax Music 3's caption-driven vocals are the stronger
-singer; ACE-Step also sings but our workflow pins its BPM, key and **English-only**
-language, so use Music 3 for non-English songs generated locally. Music 3 caps a track at ~6 minutes — a
-longer film loops the song, restart audible, so keep song films short.
+**Generate** in the Song tab uses MiniMax Music 3, as does **Sing it again** in the
+film editor. Music 3 caps a track at ~6 minutes — a longer film loops the song,
+restart audible, so keep song films short.
 
 **Suno** is the account-based alternative, connected under **Settings → Infrastructure
-→ Music models** without music weights or a GPU worker. Select its model and optional
-Suno singing voice per style. Manual generation shows both songs for preview without
-downloading them; **Play on Suno** opens each song to listen, then **Use this take**
+→ Music models** without music weights or a GPU worker. Choose **Generate on Suno**
+in the Song tab or film editor for that request, without changing a default provider.
+Optional Suno model and singing-voice preferences are saved per style. The action
+shows both songs for preview without downloading them; **Play on Suno** opens each song to listen, then **Use this take**
 to import only your choice. Unchosen songs remain in Suno. Automatic music generation,
-including scoring during rendering, always uses MiniMax Music 3, regardless of the
-style's manual model selection; it reuses an already imported song. Suno creates two songs per request. Generation credits and download
+including scoring during rendering, always uses MiniMax Music 3; it reuses an
+already imported song. Suno creates two songs per request. Generation credits and download
 entitlements are separate: importing a chosen take may spend one download credit.
 Usage rights depend on Suno's terms and the track's generation plan;
 see [Music engines](models.md#music-engines-per-style).

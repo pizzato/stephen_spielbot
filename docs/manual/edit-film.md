@@ -325,11 +325,11 @@ To change the style of a script that has *not* rendered yet, use **Restyle** on 
 
 ### Background music
 
-Edit the music prompt and **Regenerate music**. For local
-[music engines](../models.md#music-engines-per-style), this runs on a GPU worker and
-re-muxes with your current levels. Every generated track is kept in a version strip.
-With Suno, a manual request generates two previews without downloading or changing
-the film. Open **Play on Suno** to listen there before choosing.
+Edit the music prompt and **Regenerate music** to use **MiniMax Music 3** on a GPU
+worker and re-mux with your current levels. Every generated track is kept in a
+version strip. Choose the separate **Generate on Suno** action for two Suno previews
+without downloading or changing the film. You do not need to select a default
+provider in Settings. Open **Play on Suno** to listen there before choosing.
 **Use this take** downloads only the chosen song, adds it to the version strip and
 re-muxes the film. The import may spend one download credit, separately from the
 generation charge. Already imported takes reuse their local file.
@@ -369,15 +369,15 @@ movements already rendered into a clip. Hand-edited prompts remain pinned: choos
 **Rebuild from the fields** for those scenes before re-shooting. Captions already
 burned into a video also need to be applied again after reviewing the new timings.
 
-With MiniMax Music 3, **Sing it again** expands a short sound caption into detailed
-Global Metadata and Arrangement sections and supplies the saved vocalist separately.
+**Sing it again** always uses MiniMax Music 3 and expands a short sound caption into
+detailed Global Metadata and Arrangement sections and supplies the saved vocalist separately.
 The expanded caption is kept for later takes. Voice and accent instructions still
 need a listening check; see the [Song tab](script.md#song).
 
-With Suno, **Sing it again** shows both generated takes for preview; **Use this take**
+**Generate on Suno** shows both generated takes for preview; **Use this take**
 imports only your choice and updates the film. The
-style's **Suno model** and **Suno singing voice** settings control generation. The
-voice picker selects voices already available in your Suno account; **Sing it as**
+style's optional **Suno model** and **Suno singing voice** preferences control that
+request. The voice picker selects voices already available in your Suno account; **Sing it as**
 below remains the separate library voice conversion operation.
 
 *Sing it as* uses the style's **Singing voice conversion** engine: **SoulX-Singer SVC**

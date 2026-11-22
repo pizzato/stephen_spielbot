@@ -887,6 +887,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
   const [musicHistory, setMusicHistory] = useState(null)
   const [videoHistory, setVideoHistory] = useState(null)
   const [musicBusy, setMusicBusy] = useState(false)
+  const [musicGenerationEngine, setMusicGenerationEngine] = useState('')
   const [sunoImportId, setSunoImportId] = useState('')
   const [realignBusy, setRealignBusy] = useState(false)
   const [realignResult, setRealignResult] = useState(null)
@@ -1174,10 +1175,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
   }
 
-  const regenMusic = async () => {
-    setMusicBusy(true); setError(''); setStatus('')
+  const regenMusic = async (musicEngine = 'minimax-music3') => {
+    setMusicBusy(true); setMusicGenerationEngine(musicEngine); setError(''); setStatus('')
     try {
-      const { task_id } = await api.regenMusic({ work_dir: data.work_dir, music_desc: musicDesc })
+      const { task_id } = await api.regenMusic({ work_dir: data.work_dir, music_desc: musicDesc, music_engine: musicEngine })
       await new Promise((resolve, reject) => {
         const poll = setInterval(async () => {
           try {
@@ -1187,9 +1188,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
               if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
               if (t.music_history) setMusicHistory(t.music_history)
               if (t.suno_takes) setData((d) => ({ ...d, suno_takes: t.suno_takes }))
-              setStatus(t.suno_takes?.length
+              setStatus(musicEngine === 'suno'
                 ? 'Suno takes ready — preview them, then use one to download it and update the film.'
-                : 'Regenerated the music and re-muxed the film.')
+                : 'Regenerated the music with MiniMax Music 3 and re-muxed the film.')
               resolve()
             } else if (t.status === 'error' || t.status === 'cancelled') {
               clearInterval(poll); reject(new Error(t.error || `Music regen ${t.status}.`))
@@ -1199,10 +1200,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
       })
     } catch (e) {
       setError(e.message)
-      if (data.music_engine === 'suno' || data.song?.music_engine === 'suno') {
+      if (musicEngine === 'suno') {
         await api.loadRemix(workDir).then((fresh) => setData((d) => ({ ...d, suno_takes: fresh.suno_takes }))).catch(() => {})
       }
-    } finally { setMusicBusy(false) }
+    } finally { setMusicBusy(false); setMusicGenerationEngine('') }
   }
 
   const importSunoTake = async (clipId) => {
@@ -2313,7 +2314,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
             {data?.song
               ? 'This film is a music video — the song below is its whole soundtrack, and each scene was generated against its own stretch of it. Pick any kept version (the original vocalist, a re-voicing) and the film re-mixes instantly.'
-              : 'Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.'}
+              : 'Edit the music prompt and regenerate the soundtrack. Regenerate music runs MiniMax Music 3 on a GPU worker, then re-muxes the film with your current levels.'}
           </p>
           {data?.song && (
             <div className="mt-16">
@@ -2360,7 +2361,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
             </Field>
           </div>
           <div className="mt-24 row center gap-10 row--wrap">
-            <Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{sunoImportId ? 'Importing song…' : musicBusy ? 'Regenerating music…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button>
+            <Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={() => regenMusic()}>{musicGenerationEngine === 'minimax-music3' ? 'Generating with MiniMax…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button>
+            <Button variant="ghost" icon="music" disabled={anyBusy} onClick={() => regenMusic('suno')}>
+              {musicGenerationEngine === 'suno' ? 'Generating on Suno…' : 'Generate on Suno'}
+            </Button>
             {data?.song && (
               <>
                 <select className="select" style={{ maxWidth: 240 }} value={songVoice}
@@ -2375,9 +2379,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
               </>
             )}
           </div>
-          {(data.music_engine === 'suno' || data.song?.music_engine === 'suno') && <p className="muted" style={{ fontSize: 12.5 }}>
-            Suno generates two previews. Use this take downloads only your chosen song and may spend one download credit, then updates the film with it.
-          </p>}
+          <p className="muted" style={{ fontSize: 12.5 }}>
+            {data?.song ? 'Sing it again' : 'Regenerate music'} uses <strong>MiniMax Music 3</strong>, as does automatic generation. Generate on Suno creates two takes to preview; Use this take downloads only your chosen song and may spend one download credit, then updates the film with it.
+          </p>
           <SunoTakes takes={data.suno_takes} busy={anyBusy} importing={sunoImportId} onUse={importSunoTake} />
           {data?.song && (
             <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>

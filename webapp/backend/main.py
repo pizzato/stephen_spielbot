@@ -3601,6 +3601,7 @@ def song_import(body: SongImportBody) -> dict:
 
 class SongGenerateBody(BaseModel):
     work_dir: str
+    music_engine: Literal["minimax-music3", "suno"] = "minimax-music3"
     caption: str = ""
     lyrics: str = ""
     voice: str = ""
@@ -3619,6 +3620,23 @@ class SongGenerateBody(BaseModel):
 # Most an ending may be stretched by in one go — either as a padded tail or as
 # a longer re-generation.
 _MAX_SONG_EXTEND = 30.0
+
+
+def _selected_music_engine(wd: Path, hist: dict | None = None) -> str:
+    """The track in use, including a re-voice or padded take's source."""
+    hist = hist if hist is not None else music_history.history(wd)
+    versions = {v["id"]: v for v in hist.get("versions", [])}
+    selected = hist.get("selected")
+    seen = set()
+    while selected in versions and selected not in seen:
+        seen.add(selected)
+        version = versions[selected]
+        if version.get("provider") == "suno":
+            return "suno"
+        if version.get("provider") == "comfy" and version.get("model"):
+            return version["model"]
+        selected = version.get("source_id")
+    return "minimax-music3"
 
 
 def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
@@ -3656,8 +3674,11 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
              or (data.get("vocalist") or "").strip())
     sound = (data.get("caption") or "").strip()
     ss = gapp.style_settings(cfg, data.get("style_name") or "")
-    engine = ("minimax-music3" if automatic else
-              gapp._norm_music_engine(engine_override or ss.get("music_engine")))
+    # The action chooses the provider. Saved style defaults never send an
+    # ordinary Generate click (or automation) to a credit-spending service.
+    engine = "minimax-music3" if automatic else (engine_override or "minimax-music3")
+    if add_seconds and _selected_music_engine(wd) == "suno":
+        raise ValueError("Suno continuation is not available here; generate a new pair of takes instead.")
     if engine == "suno":
         if add_seconds:
             raise ValueError("Suno continuation is not available here; generate a new pair of takes instead.")
@@ -3741,21 +3762,25 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
         spliced.replace(staged)
     staged.replace(final)
     try:
-        music_history.record(wd, final, caption)
+        music_history.record(wd, final, caption, provider="comfy", model=engine)
     except Exception:
         gapp.logger.warning("Could not record song into music history", exc_info=True)
     dur = _get_duration(final)
     data.update({"generated_at": time.time(), "duration": dur, "seconds": secs,
-                 "seed": used_seed})
+                 "seed": used_seed, "music_engine": engine, "sung_as": ""})
+    data.pop("suno_model", None)
+    data.pop("suno_voice_id", None)
     _write_song(wd, data)
     return {"ok": True, "duration": dur, "extended": extended,
             "song_url": f"/api/file?path={final}&t={int(time.time())}"}
 
 
-def _run_song_generate_task(task_id: str, wd: Path, add_seconds: float = 0.0) -> None:
+def _run_song_generate_task(task_id: str, wd: Path, add_seconds: float = 0.0,
+                            music_engine: str = "minimax-music3") -> None:
     try:
         _script_tasks[task_id] = {"status": "done",
-                                  "result": _do_song_generate(wd, add_seconds, operation_id=task_id)}
+                                  "result": _do_song_generate(wd, add_seconds, operation_id=task_id,
+                                                               engine_override=music_engine)}
     except Exception as e:
         _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
 
@@ -3795,7 +3820,7 @@ def song_generate(body: SongGenerateBody) -> dict:
     _script_tasks[task_id] = {"status": "running"}
     # The length arithmetic happens in _do_song_generate, measured off the take
     # in use — not off song.json, which describes the last generation.
-    threading.Thread(target=_run_song_generate_task, args=(task_id, wd, add),
+    threading.Thread(target=_run_song_generate_task, args=(task_id, wd, add, body.music_engine),
                      daemon=True).start()
     return {"task_id": task_id}
 
@@ -4057,8 +4082,7 @@ def get_job_song(job_id: str) -> dict:
                 for c in gapp.song_singer_candidates(cfg, style_name)
                 if not any(gapp._characters_refer_to_same(c, n) for n in news_cast)]
     return {"caption": str(data.get("caption") or ""),
-            "music_engine": gapp._norm_music_engine(
-                gapp.style_settings(cfg, style_name).get("music_engine")),
+            "music_engine": _selected_music_engine(wd, hist),
             "lyrics": str(data.get("lyrics") or ""),
             # The film's direction — editable in the studio because a song is
             # often steered long after Create, and a re-write needs it.
@@ -4100,6 +4124,7 @@ def _stamp_song_voice(wd: Path, version_id: int) -> str:
         try:
             data = json.loads(path.read_text())
             data["sung_as"] = voice
+            data["music_engine"] = _selected_music_engine(wd)
             track = wd / "background_music.wav"
             if track.exists():
                 data["duration"] = _get_duration(track)
@@ -7779,11 +7804,9 @@ def start_generation(body: GenerateBody) -> dict:
         # Score this film? The Create-time choice (stamped on the job) wins over
         # the style's default; music is a final-mix ingredient either way.
         "music_enabled": _job_music_enabled(job_id, ss),
-        # Keep the style's choice for explicit Song/Remix generation. The
-        # render pipeline uses MiniMax when no imported soundtrack exists.
-        "music_engine": gapp._norm_music_engine(ss.get("music_engine")),
-        "suno_model": ss.get("suno_model") or "",
-        "suno_voice_id": ss.get("suno_voice_id") or "",
+        # Rendering uses MiniMax when no imported soundtrack exists. Manual
+        # Song/Remix actions choose their provider in the individual request.
+        "music_engine": "minimax-music3",
         "music_vol": ss.get("music_vol"),
         "voice_vol": ss.get("voice_vol"),
         "ambient_vol": ss.get("ambient_vol"),
@@ -8559,8 +8582,7 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
         "suno_takes": list_suno_takes(wd),
-        "music_engine": gapp._norm_music_engine(jc.get("music_engine") or
-                           gapp.style_settings(cfg, jc.get("style_name") or "").get("music_engine")),
+        "music_engine": _selected_music_engine(wd),
         "video_history": final_video_history.history(wd),
         # A song film's song, so the finished film still shows WHAT is being
         # sung (lyrics, current voice) and can re-sing / re-voice from here.
@@ -9658,9 +9680,11 @@ def film_realign_song(body: SongRealignBody) -> dict:
 class MusicRegenBody(BaseModel):
     work_dir: str
     music_desc: str = ""
+    music_engine: Literal["minimax-music3", "suno"] = "minimax-music3"
 
 
-def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
+def _run_music_regen(task_id: str, wd: Path, music_desc: str,
+                     music_engine: str = "minimax-music3") -> None:
     """Background thread: regenerate the background music, then re-mux the film.
 
     Music is a film-level asset (one background_music.wav), so this mirrors the
@@ -9683,11 +9707,8 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         # Duration of the narration video the music plays under; fall back to the
         # existing music length if combined.mp4 is missing.
         music_dur = _get_duration(combined) if combined.exists() else _get_duration(music_path)
-        # Re-generate on the engine the film was scored with; job dirs from
-        # before the setting existed fall back to the style's current choice.
+        # Like the Song tab, the clicked action chooses this generation's provider.
         cfg = gapp.load_config()
-        music_engine = jc.get("music_engine") or gapp.style_settings(
-            cfg, jc.get("style_name") or "").get("music_engine")
         # A song film re-sings its lyrics (stamped into job_config at render
         # time; song.json is the source for dirs rendered before that stamp).
         lyrics = (jc.get("music_lyrics") or "").strip()
@@ -9702,8 +9723,8 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
             _film_tasks[task_id] = {"status": "running", "step": "music"}
             generate_suno_takes(
                 title, music_dur, work_dir=wd, caption=music_desc or None,
-                lyrics=lyrics or None, model=jc.get("suno_model", ss.get("suno_model")) or "",
-                voice_id=jc.get("suno_voice_id", ss.get("suno_voice_id")) or "",
+                lyrics=lyrics or None, model=ss.get("suno_model") or "",
+                voice_id=ss.get("suno_voice_id") or "",
                 operation_id=task_id)
             _film_tasks[task_id] = {"status": "done", "imported_count": 0,
                                     "suno_takes": list_suno_takes(wd),
@@ -9736,7 +9757,8 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         finally:
             pool.release(url)
         staged.replace(music_path)
-        music_history.record(wd, music_path, music_desc)
+        hist = music_history.record(wd, music_path, music_desc, provider="comfy", model=music_engine)
+        _stamp_song_voice(wd, hist["selected"])
 
         # Re-mux the final with the film's current voice/music/ambient volumes so
         # the regenerated track is what gets published.
@@ -9810,7 +9832,7 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
         "started_at": time.time(),
     }
     threading.Thread(
-        target=_run_music_regen, args=(tid, wd, body.music_desc or ""), daemon=True,
+        target=_run_music_regen, args=(tid, wd, body.music_desc or "", body.music_engine), daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
 

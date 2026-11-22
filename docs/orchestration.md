@@ -37,7 +37,7 @@ clips carry their own audio out of the forward pass, so there is no score to wri
 a `video.finalize`. The music payload carries the film's music description, a song film's
 lyrics, and MiniMax Music 3 as the fixed automatic music engine — though a song already rendered or imported at script time
 completes the task as skipped, with the track recorded as its artifact.
-Suno generation and downloading require the explicit manual controls; the render
+Suno generation and downloading require **Generate on Suno** and **Use this take**; the render
 does not generate or export Suno songs.
 Every task is stamped with a `resource_class` (e.g. `comfy:image`, `comfy:video`, `tts`)
 from config. Scenes are upserted as durable records; script-time previews let the plan
