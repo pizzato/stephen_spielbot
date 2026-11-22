@@ -167,8 +167,10 @@ function SceneCard({
         continues_previous: !!st.continues_previous,
         no_first_frame: !!st.no_first_frame,
       })
+      return true
     } catch (e) {
       setError(e.message)
+      return false
     }
   }
   // Patch scene-type state; persist the computed value immediately for discrete
@@ -387,20 +389,26 @@ function SceneCard({
     }
   }
 
-  // Acted scenes are rewritten as one coherent take (dialogue, action,
-  // setting and camera), then re-shot with the normal Video/Shoot again
-  // control. Keep that paired workflow on this scene's one card.
-  const rewriteActed = async (instruction = '') => {
-    setBusy('rewrite')
+  // Recreate also queues a new first frame and take, using the rewritten
+  // fields on the server without saving stale editor state over them.
+  const rewriteActed = async (instruction = '', recreate = false) => {
+    setBusy(recreate ? 'scene' : 'rewrite')
     setError('')
+    let queued = false
     try {
-      const r = await api.regenActedScene(jobId, scene.id, instruction)
+      if (!await persist()) return
+      const r = await api.regenActedScene(jobId, scene.id, instruction, recreate)
       adopt(r?.scene)
+      if (r.task_id) {
+        queued = true
+        onRerenderStart('scene')
+        startPolling(r.task_id)
+      }
       await onSaved()
     } catch (e) {
       setError(e.message)
     } finally {
-      setBusy('')
+      if (!queued) setBusy('')
     }
   }
 
@@ -482,7 +490,7 @@ function SceneCard({
       )}
 
       <Card span={12} className="reveal" style={{ padding: 0, overflow: 'hidden' }}>
-        <div>
+        <fieldset disabled={busy === 'scene'} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <div className="film-media" style={{ display: 'flex', gap: 1, background: 'var(--line)' }}>
             <div
               onClick={() => previewUrl && setLightbox(true)}
@@ -733,7 +741,7 @@ function SceneCard({
               )}
               {actedShape && (
                 <GuidedRegenButton variant="ghost" icon="rotate-right" size="sm"
-                  label="Re-generate scene" busyLabel="Rewriting…"
+                  label="Rewrite scene" busyLabel="Rewriting…"
                   busy={busy === 'rewrite'} disabled={isRendering}
                   chips={sceneType.singing
                     ? ['Nobody sings in this shot', 'More movement', 'Closer in', 'Different setting']
@@ -741,6 +749,14 @@ function SceneCard({
                       ? ['Slower', 'More movement', 'Closer in', 'Different setting']
                       : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
                   onRegen={rewriteActed} align="left" />
+              )}
+              {actedShape && (
+                <GuidedRegenButton variant="ghost" icon="wand-magic-sparkles" size="sm"
+                  label="Recreate scene" busyLabel="Recreating…"
+                  busy={busy === 'scene'} disabled={isRendering}
+                  chips={['A completely different setting', 'A different visual idea', 'Simpler staging']}
+                  placeholder="Describe the replacement scene…"
+                  onRegen={(instr) => rewriteActed(instr, true)} align="left" />
               )}
               <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
                 label={actedShape ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
@@ -780,6 +796,13 @@ function SceneCard({
                 <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering} onClick={() => setConfirmDel(true)}>Delete</Button>
               )}
             </div>
+
+            {actedShape && (
+              <div className="muted mt-8" style={{ fontSize: 12 }}>
+                Rewrite changes the script only. Recreate writes new image text and makes a new frame
+                and video. It respects No first frame and keeps earlier images and takes in history.
+              </div>
+            )}
 
             <VersionStrip versions={history?.versions} selected={history?.selected}
               onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={selecting || isRendering} />
@@ -845,7 +868,7 @@ function SceneCard({
               </div>
             )}
           </div>
-        </div>
+        </fieldset>
       </Card>
     </>
   )

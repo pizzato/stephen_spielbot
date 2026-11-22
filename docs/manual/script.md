@@ -377,9 +377,11 @@ through different fields — and each is stated once, in its proper place:
 The **video prompt is read-only**: it is assembled from those fields (never write the same
 thing twice), with a legend above it saying which reference each `<Picture N>` number is.
 **Edit prompt** pins hand-written text instead — the fields stop rebuilding it until you
-**Rebuild from the fields**. **Re-generate scene** rewrites the whole take with the LLM
-(dialogue, action, setting — same theme, optionally steered). It keeps whoever is
-**On screen** unless you ask otherwise, and can only cast people the film already
+**Rebuild from the fields**. **Rewrite scene** rewrites the whole take with the LLM
+(dialogue, action, setting — same theme, optionally steered). It also refreshes the
+opening-image and motion descriptions to match the rewritten scene, without
+regenerating the existing first image or video. It keeps whoever is **On screen**
+unless you ask otherwise, and can only cast people the film already
 has — name a catalogue character in the instruction to bring them in
 (see [casting is opt-in, by name](../characters.md#casting-is-opt-in-by-name)). An acted scene's
 **first frame is optional**: painted from the setting with the cast anchored to their
@@ -390,6 +392,14 @@ change those clothes, update the image before shooting the scene.
 **Remove first frame** drops it again. That removal is permanent for the scene: it
 ticks **No first frame**, so no later render paints one back. Re-generating the
 image, or picking a kept version from the strip, clears it.
+
+**Recreate scene** writes a fresh scene concept and opening-image prompt, generates
+a new first frame, then shoots a new video automatically. The adjacent instruction
+menu lets you describe what should replace the old scene. It follows the same cast
+rules, keeps a music-video beat's song segment and timing, and skips the image when
+**No first frame** is on. It turns off **Continues the previous scene** so the replacement
+starts an independent shot. Old images and video takes remain available in their
+version strips; use **Reassemble film** to update the finished film.
 
 Known characters used to generate a first frame are attached to **On screen**
 automatically, including when you select an image from its history. Older ComfyUI PNGs
@@ -423,8 +433,9 @@ over it, but the prompt asks nobody to sing.
 **Every take the film shoots on the reference engine** stages this way, so a
 [performed silent scene](../performance_films.md#silent-scenes-performed) carries the
 same staging — marked *silent*, with no dialogue editor: it is shot the same way and its
-prompt is read the same way. **Re-generate scene** rewrites it (action, setting, camera)
-and leaves it silent. A music-video beat's card leads its re-generate chips with
+prompt is read the same way. **Rewrite scene** rewrites its action, setting, camera,
+image prompt and motion description together, and leaves it silent. **Recreate scene** is also available for these silent and
+music-video takes. A music-video beat's card leads its rewrite chips with
 **"Nobody sings in this shot"** — the rewrite then marks the scene non-performing, so the
 song still plays over it but the cast stops miming (see
 [singing films](../performance_films.md#singing-films-the-music-video-format)).

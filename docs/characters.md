@@ -296,9 +296,9 @@ current style without discarding unsaved lyrics, direction or singer edits. Choi
 refresh on opening the tab or returning to the browser window. Changing the selected
 singer affects the next story draft; existing story text and scenes remain editable.
 
-Rewriting **one scene** follows the same rule. **Re-generate scene** and converting a
-narrated scene to dialogue may only cast people the film already has — the scene's own
-**On screen** names, the rest of the film's scenes, the story's identified characters and
+Rewriting **one scene** follows the same rule. **Rewrite scene**, **Recreate scene**
+and converting a narrated scene to dialogue may only cast people the film already has —
+the scene's own **On screen** names, the rest of the film's scenes, the story's identified characters and
 the per-script cast — widened by any catalogue character your *tell it how* instruction
 names ("bring Denis in from the hall"). Only a film that names nobody at all falls back to
 offering the catalogue. Getting this wrong is not cosmetic: the cast is what picks the

@@ -168,7 +168,7 @@ The pipeline handles the song and its visuals together:
   nothing doubles. The speech gate stands down for these takes — singing is what was
   asked for. Initial scene division preserves `performs: false` for non-singing acting
   and person-free imagery: the song still plays over those shots, but nobody mimes it.
-  An existing beat can also be told **not** to sing: **Re-generate scene** with the
+  An existing beat can also be told **not** to sing: **Rewrite scene** with the
   "Nobody sings in this shot" chip (or any instruction to that effect) marks the scene
   as non-performing — the song still plays over it, but the cast listens and moves with
   the music instead of miming.
@@ -570,9 +570,12 @@ twice. **Edit prompt** pins hand-written text instead: the fields stop rebuildin
 the render sends exactly what is on screen. **Rebuild from the fields** drops the override
 again.
 
-**Re-generate scene** rewrites the whole take with the LLM — dialogue, action, setting,
+**Rewrite scene** rewrites the whole take with the LLM — dialogue, action, setting,
 camera, sound — keeping the film's context and cast, optionally steered by a free-text
-instruction. An acted scene is one coherent take, so it regenerates whole rather than
+instruction. The opening-image and motion descriptions are rewritten to match the
+new setting and action, including on silent and music-video scenes. This changes the
+script and prompts only; the existing first image and video stay in place until
+regenerated. An acted scene is one coherent take, so it rewrites whole rather than
 field by field; a pinned prompt is superseded by the rewrite. On a music-video beat the
 rewrite also decides whether the cast **sings on camera**: the singing directives in the
 prompt come from the scene's flags rather than from the rewrite's prose, so an
@@ -580,11 +583,20 @@ instruction like the default **"Nobody sings in this shot"** chip flips the scen
 listening beat — the song still plays over the shot (and stays pinned into the take),
 but nobody mimes it — and a later rewrite can flip it back.
 
-Editing a scene of a film that has already rendered keeps the existing clip — it is the
-deliverable — and offers **Shoot this scene again** to re-render just that scene, right
-beside **Re-generate scene**: rewrite the take, then shoot it again to film it. Every
-re-shoot is kept as a **take** (the last ten, plus whichever is selected): a strip under
-the player flips between them, and the selected take is what Reassemble puts in the film.
+**Recreate scene** starts the scene over in one action: it writes a new scene concept
+and opening-image prompt, generates a fresh first frame, then shoots a new video. Use
+the adjacent instruction menu to describe the replacement. It keeps the film's context
+and cast rules, and a music-video beat keeps its song segment and timing.
+**No first frame** is respected, so that option skips image generation. Recreation
+turns off **Continues the previous scene**, making this an independent shot. Previous
+images and video takes remain in their version strips.
+
+Editing a scene of a film that has already rendered keeps the existing clip until a
+new take succeeds. **Shoot this scene again** re-renders just the video, using the
+existing first frame; use **Recreate scene** when the whole scene needs a fresh start.
+Every re-shoot is kept as a **take** (the last ten, plus whichever is selected): a strip
+under the player flips between them. Use **Reassemble film** to put the selected take
+in the finished film.
 
 ## Rendering
 

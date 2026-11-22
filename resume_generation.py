@@ -479,7 +479,8 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
                              comfy_url: str, vid_width: int, vid_height: int,
                              style_name: str = "", direction: str = "",
                              prev_ctx: dict | None = None,
-                             handoff_frame: Path | None = None) -> Path:
+                             handoff_frame: Path | None = None,
+                             output_path: Path | None = None) -> Path:
     """Render ONE performance scene: character portraits + dialogue → a clip that
     already contains its own speech. Returns the finished scene_NN_final.mp4.
 
@@ -487,6 +488,8 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     needs as arguments and touches no module state. *direction* is the editor's
     note for THIS take ("Shoot again" with an instruction) — it reaches the
     model as the prompt's [DIRECTION] block and is not persisted to the scene.
+    *output_path* stages a fresh recreation without replacing the current take;
+    split shots are regenerated too when that destination is supplied.
 
     A scene marked ``continues_previous`` arrives with ONE of:
     *prev_ctx* — the PREVIOUS scene's motion-context note; this take is
@@ -538,14 +541,16 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     if len(shots) > 1:
         final = _render_performance_shots(
             scene, shots, scene_meta, work_dir, cfg, comfy_url=comfy_url,
-            vid_width=vid_width, vid_height=vid_height, style_name=style_name)
+            vid_width=vid_width, vid_height=vid_height, style_name=style_name,
+            output_path=output_path)
     else:
         extra = ([{"name": "the closing frame of the previous scene — this take "
                            "picks up from exactly this moment",
                    "kind": "frame", "path": str(handoff_frame)}]
                  if handoff_frame is not None and prev_ctx is None else None)
         final = _render_performance_clip(
-            scene, shots[0], work_dir, cfg, work_dir / f"scene_{scene.id:02d}_final.mp4",
+            scene, shots[0], work_dir, cfg,
+            output_path or work_dir / f"scene_{scene.id:02d}_final.mp4",
             comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
             style_name=style_name, extra_pictures=extra,
             # The scene's own preview/first frame describes a fresh opening;
@@ -892,7 +897,8 @@ def render_acted_group(group: list, work_dir: Path, cfg: dict, *, store,
 
 
 def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_url,
-                              vid_width, vid_height, style_name) -> Path:
+                              vid_width, vid_height, style_name,
+                              output_path: Path | None = None) -> Path:
     """Render each single-speaker shot, then join them into the scene.
 
     Every shot is an independent generation, so left alone they each invent
@@ -904,7 +910,7 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
     room: Path | None = None
     for idx, shot in enumerate(shots):
         out = work_dir / f"scene_{scene.id:02d}_shot_{idx:02d}.mp4"
-        if not (out.exists() and out.stat().st_size > 10_000):
+        if output_path is not None or not (out.exists() and out.stat().st_size > 10_000):
             who = ("establishing wide" if shot.get("establishing")
                    else f"{shot.get('speaker')} speaks")
             logger.info("Scene %d shot %d/%d: %s%s",
@@ -934,7 +940,7 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
                 room = candidate
             except Exception as exc:
                 logger.warning("Scene %d: no continuity frame (%s)", scene.id, exc)
-    final = work_dir / f"scene_{scene.id:02d}_final.mp4"
+    final = output_path or work_dir / f"scene_{scene.id:02d}_final.mp4"
     concatenate_scenes(parts, final)
     return final
 

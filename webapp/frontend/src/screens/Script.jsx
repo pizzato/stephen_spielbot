@@ -516,6 +516,38 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     api.loadPerformanceScript(job.work_dir).then(setPerf).catch(() => {})
   }
   useEffect(() => { setPerf(null); refreshPerf() }, [job?.job_id])
+  const [recreateTask, setRecreateTask] = useState(null)
+  useEffect(() => {
+    setRecreateTask(null)
+    setBusy((current) => current.startsWith('recreate:') ? '' : current)
+  }, [job?.job_id])
+  useEffect(() => {
+    if (!recreateTask) return undefined
+    let stopped = false
+    let timer
+    const poll = async () => {
+      try {
+        const r = await api.filmTaskStatus(recreateTask.taskId)
+        if (stopped) return
+        if (r.status === 'done' || r.status === 'error' || r.status === 'cancelled') {
+          if (r.status !== 'done') setError(r.error || 'Scene recreation cancelled')
+          const fresh = await api.getScenes(job.job_id)
+          if (stopped) return
+          const scene = (fresh.scenes || []).find((s) => s.id === recreateTask.sceneId)
+          if (scene) setScenes((arr) => arr.map((s) => s.id === scene.id
+            ? { ...s, preview_path: scene.preview_path, has_preview: scene.has_preview, history: scene.history, cb: Date.now() }
+            : s))
+          refreshPerf()
+          setRecreateTask(null)
+          setBusy('')
+        } else timer = setTimeout(poll, 3000)
+      } catch (e) {
+        if (!stopped) { setError(e.message); setRecreateTask(null); setBusy('') }
+      }
+    }
+    poll()
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [recreateTask, job?.job_id])
   const perfById = new Map((perf?.scenes || []).map((s) => [s.id, s]))
   const [lightbox, setLightbox] = useState(null)
   const [inpaint, setInpaint] = useState(null)   // scene INDEX being inpainted
@@ -940,7 +972,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       if (fresh) setScenes((arr) => arr.map((x, i) => (i === idx ? { ...x, ...fresh } : x)))
       // Mode/cast/dialogue edits move reference slots — keep the staging honest.
       refreshPerf()
-    } catch (e) { setError(e.message) }
+      return true
+    } catch (e) { setError(e.message); return false }
   }
 
   // Pin / unpin the assembled prompt for an acted scene.
@@ -1121,27 +1154,43 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     const modeChip = s.singing ? '♪ music video'
       : isActedMode(s.mode) ? 'acted'
         : s.mode === 'silent' ? (actedShape ? 'silent · acted' : 'silent') : 'narration'
-    const rewrite = async (instr) => {
-      setBusy('acted-regen'); setError('')
+    const rewrite = async (instr, recreate = false) => {
+      setBusy(recreate ? `recreate:${s.id}` : 'acted-regen'); setError('')
+      let queued = false
       try {
-        const r = await api.regenActedScene(job.job_id, s.id, instr)
+        if (!await persist(i)) return
+        const r = await api.regenActedScene(job.job_id, s.id, instr, recreate)
         if (r?.scene) setScenes((arr) => arr.map((x, j) => (j === i ? { ...x, ...r.scene } : x)))
+        if (r.task_id) {
+          queued = true
+          setRecreateTask({ taskId: r.task_id, sceneId: s.id })
+        }
         refreshPerf()
-      } catch (e) { setError(e.message) } finally { setBusy('') }
+      } catch (e) { setError(e.message) } finally { if (!queued) setBusy('') }
     }
     const rewriteButton = (
-      <GuidedRegenButton variant="ghost" icon="rotate-right"
-        label="Re-generate scene" busyLabel="Rewriting…"
-        busy={busy === 'acted-regen'} disabled={!!busy}
-        chips={s.singing
-          ? ['Nobody sings in this shot', 'More movement', 'Closer in', 'Different setting']
-          : s.mode === 'silent'
-            ? ['Slower', 'More movement', 'Closer in', 'Different setting']
-            : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
-        onRegen={rewrite} />
+      <div className="row gap-8 row--wrap">
+        <GuidedRegenButton variant="ghost" icon="rotate-right"
+          label="Rewrite scene" busyLabel="Rewriting…"
+          busy={busy === 'acted-regen'} disabled={!!busy}
+          chips={s.singing
+            ? ['Nobody sings in this shot', 'More movement', 'Closer in', 'Different setting']
+            : s.mode === 'silent'
+              ? ['Slower', 'More movement', 'Closer in', 'Different setting']
+              : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
+          onRegen={rewrite} />
+        <GuidedRegenButton variant="ghost" icon="wand-magic-sparkles"
+          label="Recreate scene" busyLabel="Recreating…"
+          busy={busy === `recreate:${s.id}`} disabled={!!busy}
+          chips={['A completely different setting', 'A different visual idea', 'Simpler staging']}
+          placeholder="Describe the replacement scene…"
+          onRegen={(instr) => rewrite(instr, true)} />
+      </div>
     )
     return (
       <Card span={12} key={s.id} id={`scene-card-${s.id}`} className="reveal reveal-d2">
+        <fieldset disabled={busy === `recreate:${s.id}`}
+          style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <div className="row center between row--wrap gap-10">
           <div className="row center gap-10">
             <span className="h-title">Scene {i + 1}<span className="muted" style={{ fontWeight: 400 }}> / {total}</span></span>
@@ -1210,7 +1259,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <div>
                   {rewriteButton}
                   <div className="muted mt-8" style={{ fontSize: 12 }}>
-                    Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.
+                    Rewrite changes the script only. Recreate writes new image text and makes a new frame
+                    and video. It respects No first frame and keeps earlier images and takes in history.
                   </div>
                 </div>
                 <ActedPrompt prompt={s.video_prompt || ''} edited={!!s.prompt_edited}
@@ -1238,7 +1288,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     <div>
                       {rewriteButton}
                       <div className="muted mt-8" style={{ fontSize: 12 }}>
-                        Rewrites the whole take — action, setting, camera — and rebuilds the prompt. It stays silent.
+                        Rewrite changes the script only. Recreate writes new image text and makes a new frame
+                        and video. It respects No first frame, keeps song timing and saves earlier takes.
                       </div>
                     </div>
                     {/* The performed silent take's own H3 prompt, assembled from
@@ -1368,6 +1419,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             staging appears here once the scene is saved.
           </div>
         )}
+        </fieldset>
       </Card>
     )
   }

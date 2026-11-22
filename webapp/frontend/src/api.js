@@ -296,8 +296,8 @@ export const api = {
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-field?field=${encodeURIComponent(field)}`, body),
   // Acted scenes regenerate WHOLE (one coherent take): setting, dialogue,
   // beats, camera, sound — the prompt reassembles server-side.
-  regenActedScene: (jobId, sceneId, instruction) =>
-    req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-acted`, { instruction: instruction || '' }),
+  regenActedScene: (jobId, sceneId, instruction, recreate = false) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-acted`, { instruction: instruction || '', recreate }),
   // Switching a scene's type converts the content (same theme, other shape)
   // and stashes the version being left, so switching back restores it.
   convertSceneMode: (jobId, sceneId, mode) =>

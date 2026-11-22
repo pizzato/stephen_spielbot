@@ -674,6 +674,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
                 scene_id = 0
     if scene_id > 0 and component == "continue":
         name = f"Continuing scene {scene_id}"
+    elif scene_id > 0 and component == "scene":
+        name = f"Recreating scene {scene_id}"
     elif scene_id > 0 and component != "narrator":
         name = f"Re-rendering scene {scene_id}"
     elif component == "final_upscale" or task_id.startswith("final_upscale_"):
@@ -5971,6 +5973,11 @@ def _scene_style_note(job_id: str) -> str:
 
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
 def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
+    return _update_scene(job_id, scene_id, body)
+
+
+def _update_scene(job_id: str, scene_id: int, body: SceneUpdate, *,
+                  preserve_media: bool = False) -> dict:
     sid = int(scene_id)
     store = DurableStore.default()
     try:
@@ -6164,7 +6171,8 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
         # which would silently serve the OLD (e.g. narrated) take. A FINISHED film
         # keeps its clips: they are the deliverable, and the film editor re-renders
         # the scene on request rather than leaving a hole in the cut.
-        if ({k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")} != old_dialogue
+        if (not preserve_media
+                and {k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")} != old_dialogue
                 and not gapp._has_finished_video(Path(work_dir))):
             wd = Path(work_dir)
             stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
@@ -7386,6 +7394,20 @@ def _convert_llm_json(user: str, system: str, cfg: dict, label: str) -> dict:
 
 class ActedRegenBody(BaseModel):
     instruction: str = ""   # optional "tell it how" steering (Re-generate popover)
+    recreate: bool = False  # replace the concept, then render a new frame and take
+
+
+def _validate_scene_recreation(job_id: str, sid: int) -> Path:
+    wd = _job_wd_or_404(job_id)
+    if working_files.is_cleaned(wd):
+        raise HTTPException(400, "Working video files were cleaned up. Render a new copy from the saved script.")
+    if _work_dir_render_active(wd) or any(
+            info.get("work_dir") == str(wd)
+            and info.get("scene_id") in (0, sid)
+            and (_film_tasks.get(tid) or {}).get("status") == "running"
+            for tid, info in list(_film_task_meta.items())):
+        raise HTTPException(409, "This scene is rendering right now — wait for it to finish first.")
+    return wd
 
 
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/regenerate-acted")
@@ -7402,6 +7424,8 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     is where a rewrite must not turn a silent beat into a conversation."""
     body = body or ActedRegenBody()
     sid = int(scene_id)
+    if body.recreate:
+        _validate_scene_recreation(job_id, sid)
     cfg = gapp.load_config()
 
     store = DurableStore.default()
@@ -7412,6 +7436,8 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     finally:
         store.close()
     meta = dict(current.get("metadata") or {})
+    if not current:
+        raise HTTPException(404, "Scene not found.")
     jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
     wd = gapp._job_work_dir(job_id)
     silent = performance_mode.is_silent({"metadata": meta})
@@ -7457,7 +7483,10 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
                      f"song plays over it.\n")
         keys = ('  "lines": [] — this scene is silent, nobody says anything\n'
                 '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>} '
-                f"— they must fit inside {round(seconds)} seconds\n")
+                f"— they must fit inside {round(seconds)} seconds\n"
+                '  "image_prompt": a static opening image matching the rewritten setting, '
+                'cast and action; apply the user\'s changes here too\n'
+                '  "video_prompt": motion and camera directions matching the rewritten scene\n')
         if singing:
             keys += ('  "performs": true if the cast visibly sings the song on '
                      'camera in this shot, false if nobody sings or mimes (they '
@@ -7472,6 +7501,14 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         keys = ('  "lines": ordered array of {"speaker": <a cast name>, "delivery": <2-4 words>, '
                 '"text": <ONE short spoken sentence>} — AT MOST 3 lines and 22 spoken words TOTAL\n'
                 '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>}\n')
+    if body.recreate:
+        task += ("\nReplace this draft with a genuinely different scene concept, setting and "
+                 "composition that serves the same story beat. Do not reuse the old opening. "
+                 "Keep the film's cast and any song timing; this starts a new shot, not a continuation.\n")
+        if not silent:
+            task += "The NEW setting and cast will also compose a freshly painted opening image.\n"
+    if singing:
+        task += f'Lyrics for this beat: {meta.get("sings") or "(instrumental)"}\n'
     user = (
         f"Video title: {video_title or topic}\nTopic: {topic}\n"
         f"Full scene outline: {outline}\n\n"
@@ -7507,12 +7544,28 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     # current answer. Only a singing scene carries the switch.
     performs = (bool(raw.get("performs", meta.get("performs") is not False))
                 if singing else None)
-    return update_scene(job_id, sid, SceneUpdate(
+    opening = performance_mode.opening_frame_prompt(
+        {"mode": meta.get("mode") or "dialogue", "setting": raw.get("setting"),
+         "cast": raw.get("cast") or []})
+    image_prompt = (str(raw.get("image_prompt") or "").strip() or opening) if silent else ""
+    video_prompt = ""
+    if silent:
+        video_prompt = str(raw.get("video_prompt") or "").strip() or " ".join(
+            str(value).strip() for value in
+            [raw.get("setting"), raw.get("camera"),
+             *(beat.get("action") for beat in (raw.get("beats") or []) if isinstance(beat, dict))]
+            if value)
+    if (silent or body.recreate) and not (image_prompt or opening) and not meta.get("no_first_frame"):
+        raise HTTPException(502, "The new scene has no opening image description — try again.")
+    if body.recreate:
+        # The LLM call may take a while; don't replace a scene that began rendering meanwhile.
+        wd = _validate_scene_recreation(job_id, sid)
+    result = _update_scene(job_id, sid, SceneUpdate(
         title=str(raw.get("title") or current.get("title") or ""),
-        # A silent take opens on the frame its image prompt paints, so the
-        # rewrite keeps it; a dialogue scene renders no image at all.
-        image_prompt=(current.get("image_prompt") or "") if silent else "",
-        video_prompt=current.get("video_prompt") or "",
+        # Every text field follows the rewrite. Keeping an older silent image
+        # description would repaint the old scene after its setting changed.
+        image_prompt=image_prompt,
+        video_prompt=video_prompt,
         narration="",
         mode=meta.get("mode") or "dialogue",
         lines=lines,
@@ -7522,12 +7575,16 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         soundscape=str(raw.get("soundscape") or ""),
         beats=[b for b in (raw.get("beats") or []) if isinstance(b, dict)],
         performs=performs,
+        continues_previous=False if body.recreate else None,
         # Length follows the new words (update_scene recomputes via acted_meta);
         # a silent take keeps the length it was written for.
         duration=seconds if silent else None,
         seconds=seconds if silent else 0,
         prompt=""  # a rewrite supersedes any pinned prompt
-    ))
+    ), preserve_media=body.recreate)
+    if body.recreate:
+        result["task_id"] = _start_scene_rerender(wd, sid, "scene", body.instruction)
+    return result
 
 
 def _apply_style_prefix(combined_style: str, image_prompt: str) -> str:
@@ -16518,7 +16575,7 @@ def _reassemble_stale_finals() -> None:
 
 class RerenderSceneBody(BaseModel):
     work_dir: str
-    component: str  # "narration", "image", or "video"
+    component: str  # "narration", "image", "video", or "scene" (fresh frame + acted take)
     instruction: str = ""   # optional "tell it how" steering (image/video re-render)
 
 
@@ -16649,7 +16706,7 @@ def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path,
 
 
 def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
-                        instruction: str = "") -> None:
+                        instruction: str = "", *, complete: bool = True) -> None:
     """Background thread: re-render first-frame image only (no video)."""
     import shutil
     import secrets
@@ -16704,7 +16761,8 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
         preview_mtime = int(preview.stat().st_mtime) if preview.exists() else int(time.time())
         preview_url = f"/api/file?path={preview}&t={preview_mtime}" if preview.exists() else ""
-        _film_tasks[task_id] = {"status": "done", "preview_url": preview_url}
+        if complete:
+            _film_tasks[task_id] = {"status": "done", "preview_url": preview_url}
     except Exception as e:
         _finish_film_task_error(task_id, e)
 
@@ -16922,7 +16980,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
 
 def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
-                        instruction: str = "") -> None:
+                        instruction: str = "", *, staged: bool = False) -> None:
     """Background thread: re-render an ACTED scene as one H3 Ref2VA generation.
 
     Acted scenes carry their own voices in-picture, so there is no
@@ -16934,6 +16992,8 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
     cfg = gapp.load_config()
     md = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     final_path = wd / f"scene_{sid:02d}_final.mp4"
+    staged_path = wd / f"scene_{sid:02d}_final.recreate.mp4"
+    staged_started = False
 
     try:
         pool = _shared_edit_render_pool()
@@ -16972,16 +17032,25 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         _film_tasks[task_id] = {"status": "running", "step": "acted scene"}
         url = _acquire_render_worker(pool, task_id)
         try:
+            if staged:
+                _film_checkpoint(task_id)
+                # A failed new render must not bind its latent to the old take's
+                # final_bytes. The worker overwrites those latent slots too.
+                scene_context.path(wd, sid).unlink(missing_ok=True)
+                staged_started = True
             # Guided re-generation: the user's note steers this take only, as
             # the prompt's [DIRECTION] block.
             render_performance_scene(scene, wd, scene_cfg, comfy_url=url,
                                      vid_width=vid_w, vid_height=vid_h,
                                      style_name=scene_cfg["style_name"],
-                                     direction=instruction)
+                                     direction=instruction,
+                                     **({"output_path": staged_path} if staged else {}))
         finally:
             pool.release(url)
 
         _film_checkpoint(task_id)
+        if staged:
+            staged_path.replace(final_path)
         video_history.record(wd, sid, final_path)
         # The fresh final supersedes any legacy narration-style artifacts.
         for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
@@ -16989,6 +17058,36 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             (wd / legacy).unlink(missing_ok=True)
 
         _film_tasks[task_id] = {"status": "done"}
+    except Exception as e:
+        if staged:
+            staged_path.unlink(missing_ok=True)
+        if staged_started:
+            scene_context.path(wd, sid).unlink(missing_ok=True)
+        _finish_film_task_error(task_id, e)
+
+
+def _run_scene_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                        instruction: str = "") -> None:
+    """Paint a fresh opening, then shoot the rewritten take as one tracked operation."""
+    try:
+        _film_checkpoint(task_id)
+        if not (row.get("metadata") or {}).get("no_first_frame"):
+            _run_image_rerender(task_id, wd, sid, jc, row, instruction, complete=False)
+            if (_film_tasks.get(task_id) or {}).get("status") != "running":
+                return
+            preview = wd / f"scene_{sid:02d}_preview.png"
+            if not preview.is_file() or not preview.stat().st_size:
+                raise RuntimeError("The new opening image was not created.")
+            store = DurableStore.default()
+            try:
+                jid = job_id_from_work_dir(wd)
+                store.update_scene_preview(jid, sid, str(preview))
+                rows = store.scene_rows(jid)
+            finally:
+                store.close()
+            gapp._persist_script_snapshot(wd, rows)
+        _film_checkpoint(task_id)
+        _run_acted_rerender(task_id, wd, sid, jc, row, instruction, staged=True)
     except Exception as e:
         _finish_film_task_error(task_id, e)
 
@@ -17046,12 +17145,14 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
         _film_cancelled_tids.discard(tid)
         end = time.time()
         status = (_film_tasks.get(tid) or {}).get("status")
+        operation = "Recreation" if component == "scene" else "Re-render"
         if status == "error":
-            name, st = f"Re-render failed — scene {sid}", "error"
+            name, st = f"{operation} failed — scene {sid}", "error"
         elif status == "cancelled":
-            name, st = f"Re-render cancelled — scene {sid}", "cancelled"
+            name, st = f"{operation} cancelled — scene {sid}", "cancelled"
         else:
-            name, st = f"Re-rendered scene {sid}", "done"
+            name, st = (f"Recreated scene {sid}" if component == "scene"
+                        else f"Re-rendered scene {sid}"), "done"
             # Learn this op's duration so the next re-render predicts its ETA.
             # Acted scenes render as one H3 generation and take far longer
             # than an LTX clip — keep their timings out of the "video" average.
@@ -17075,13 +17176,19 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
     errors."""
     if working_files.is_cleaned(wd):
         raise ValueError("Working video files were cleaned up. Render a new copy from the saved script.")
-    if component not in ("narration", "image", "video"):
+    if component not in ("narration", "image", "video", "scene"):
         raise ValueError(f"Unknown component: {component!r}")
+    if any(info.get("work_dir") == str(wd) and info.get("scene_id") == sid
+           and (component == "scene" or info.get("component") == "scene")
+           and (_film_tasks.get(tid) or {}).get("status") == "running"
+           for tid, info in list(_film_task_meta.items())):
+        raise ValueError("This scene is rendering right now — wait for it to finish first.")
 
     job_id = job_id_from_work_dir(wd)
     store = DurableStore.default()
     try:
         rows = store.scene_rows(job_id)
+        job = store.get_job(job_id) if component == "scene" else None
     finally:
         store.close()
 
@@ -17098,6 +17205,11 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
                          "use Video to re-render its shots.")
 
     jc = _film_job_config(wd)
+    if component == "scene" and job:
+        jc = {**json.loads(_row_to_dict(job).get("config_json") or "{}"), **jc}
+    if component == "scene" and not performance_mode.renders_acted(
+            {"metadata": scene_meta}, _acted_silent_cfg(jc)):
+        raise ValueError("Only acted scenes support complete recreation.")
 
     # Delete stale files for the component and its dependents
     if component == "narration":
@@ -17108,15 +17220,18 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         # interrupted (backend restart / crash mid-render). Keep the current video as a
         # take so the re-mux can be reverted.
         video_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
-    elif component == "image":
+    elif component in ("image", "scene"):
         # Preserve the current images before deleting them so the user can
         # return to them — both canonical files, since the two can differ (a
         # continuation handoff rewrites the first frame alone) and
         # capture_current skips content that is already kept.
-        image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_preview.png")
-        image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_first_frame.png")
-        for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
-            (wd / f).unlink(missing_ok=True)
+        if component == "image" or not scene_meta.get("no_first_frame"):
+            image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_preview.png")
+            image_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_first_frame.png")
+            for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
+                (wd / f).unlink(missing_ok=True)
+        if component == "scene":
+            video_history.capture_current(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
     elif component == "video":
         # Keep the existing first frame AND the existing video. The new clip/final
         # are rendered to staging paths and swapped in atomically only on success
@@ -17138,6 +17253,8 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         target = _run_narration_rerender
     elif component == "image":
         target = _run_image_rerender
+    elif component == "scene":
+        target = _run_scene_rerender
     elif performance_mode.renders_acted({"metadata": scene_meta},
                                         _acted_silent_cfg(jc)):
         # Acted scenes re-render whole: one H3 generation carrying its own
