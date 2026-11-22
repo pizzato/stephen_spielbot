@@ -118,15 +118,9 @@ inherit both like every other style field. Download an engine per worker from
 | **Qwen-Image 2.1 NVFP4** (opt-in, faster on GB10) | Same graph and 25 steps. FP4 diffusion plus the official W4A8 text encoder — the faster weight set on these Blackwell workers | Qwen Research License |
 | **Qwen-Image 2.1 Turbo** (opt-in) | Official INT8 distill, 8 fixed steps with prefix caching and character references | Qwen Research License |
 
-Scene openings can instead use **Settings → Styles → Image model → Scene first
-frames → MiniMax H3 Turbo · short video (experimental)**. It renders 22 frames
-(~0.9 s, below the trained clip range) and uses frame zero as the still. Scenes
-with portraits use `minimax-h3-ref-turbo-lx2v` and named `<Picture N>` references;
-scenery-only scenes use `minimax-h3-turbo` with no image input. Install both
-existing video bundles on each worker. They always run four steps for this
-option. The PNG matches the film's render size; previews and renders reuse it.
-Portraits, covers and edits continue using the image engine. See
-[Settings → Image model](manual/settings.md#image-model) for scope and caching.
+Scene openings can instead use **MiniMax H3 Image**, described
+[below](#minimax-h3-image-scene-first-frames). It is selected through **Scene first
+frames**, separately from the general image generation and masked-edit engines.
 
 FLUX 3 Image Klein NVFP4 notes:
 
@@ -252,6 +246,48 @@ huggingface-cli download Comfy-Org/Qwen-Image-2.1 vae/qwen_image_2.1_vae_bf16.sa
 huggingface-cli download BennyDaBall/Qwen-Image-2.1-NVFP4 diffusion_models/qwen_image_2.1_nvfp4.safetensors --revision 1a38d44a3a2f35cb0b543a25b04da0a963e7b5e6 --local-dir models/diffusion_models --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/Qwen-Image-2.1 text_encoders/qwen3vl_8b_w4a8.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 ```
+
+### MiniMax H3 Image scene first frames
+
+Select **Settings → Styles → Image model → Scene first frames → MiniMax H3 Image**.
+This scene-only option generates the opening still directly, with ordered character
+references labelled `<Picture 1>`, `<Picture 2>`, and so on. Portraits, covers and
+masked edits use their existing image engines. Selecting H3 Image leaves the general
+generation picker, including any selected Qwen engine, unchanged.
+
+**H3 Image size** inherits independently from the parent style. **Video size**
+(`h3_image_size: video`, default) saves the film's render canvas. **4K** (`4k`)
+saves a larger still with a 3840-pixel long edge and the film's aspect ratio; it does
+not change video resolution. This is not the 4-megapixel test canvas. Existing scene
+images are reused until regenerated. See [Settings → Image model](manual/settings.md#image-model)
+for the preview, regeneration and render paths that use this option.
+
+Download **MiniMax H3 Image** (`minimax-h3-image`) from **Infrastructure → Image
+models** on every worker. Its [official native ComfyUI workflow](https://docs.comfy.org/tutorials/image/minimax/minimax-h3-image)
+requires **ComfyUI 0.45.0 or newer** and uses six fixed Euler/simple steps, CFG 1.
+The scene prompt is submitted directly; the optional upstream prompt expander is
+not part of this integration. The video sampling-step setting does not apply.
+The download includes:
+
+- `minimax_h3_image_pruned_int8_convrot.safetensors` — official image diffusion
+  weights, about **20.98 GB**, from `Comfy-Org/MiniMax-H3-Image`.
+- `minimax_h3_image_vae_fp16.safetensors` — official image VAE, about **1.17 GB**,
+  from the same repository.
+- `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` — the shared H3 text encoder from
+  `Comfy-Org/MiniMax-H3`, reused when already installed.
+
+The image-specific files add about **22 GB on disk**, not a peak-memory estimate.
+Readiness checks require the weights, native nodes and compatible ComfyUI version;
+missing prerequisites fail explicitly. Use the **worker update required** notice
+to distinguish missing node support from missing downloads.
+
+The [MiniMax-H3-Image Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE)
+is separate from the video model's licence. It excludes the USA, EU, UK and South
+Korea, and requires prior written authorization for third-party hosted services or
+annualized revenue above **US$1M**, including affiliates. Commercial products must
+display the model name, and public outputs require machine-generated disclosure.
+See [Third-Party Notices](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)
+and the full terms before deployment.
 
 ## Video engines (per style)
 

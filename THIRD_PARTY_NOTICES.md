@@ -21,6 +21,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | Qwen-Image 2.1 (opt-in generate only; INT8 diffusion + INT8 Qwen3-VL 8B encoder + bf16 VAE) | `Comfy-Org/Qwen-Image-2.1` (repackaging of `Qwen/Qwen-Image-2.1`) | **Qwen Research License** (2026-09-20; not an OSI license) | ❌ No — research and evaluation only. Commercial use, including a monetized film, needs a separate grant from Qwen. Masked image edits are not offered on this engine |
 | Qwen-Image 2.1 NVFP4 (opt-in, faster on GB10; FP4 diffusion + official W4A8 encoder + the same bf16 VAE) | Diffusion: `BennyDaBall/Qwen-Image-2.1-NVFP4` (community NVFP4 quant of the official BF16 checkpoint, pinned revision `1a38d44a`). Encoder and VAE: `Comfy-Org/Qwen-Image-2.1` | **Qwen Research License** — the quant inherits it; not an OSI license | ❌ No — same research-only terms as the INT8 weights. Output is still bound by that license |
 | Qwen-Image 2.1 Turbo (opt-in eight-step generation and references; official INT8 diffusion + INT8 Qwen3-VL 8B encoder + bf16 VAE) | `Comfy-Org/Qwen-Image-2.1` (repackaging of `Qwen/Qwen-Image-2.1-Turbo`) | **[Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/LICENSE)**; not an OSI licence | ❌ Research and evaluation only; commercial use needs a separate grant from Qwen. Installed through `make install INSTALL_QWEN_TURBO=1`; weights are not bundled |
+| MiniMax H3 Image (opt-in scene first frames; official INT8 diffusion and FP16 image VAE, shared H3 32B NVFP4 encoder) | `Comfy-Org/MiniMax-H3-Image`; encoder: `Comfy-Org/MiniMax-H3` | **[MiniMax-H3-Image Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE)**; not an OSI licence | Restricted: excludes USA/EU/UK/South Korea. Prior written authorization for third-party hosted services or annualized revenue above US$1M including affiliates. Commercial UI attribution and public-output AI disclosure required; shared encoder retains its H3 licence |
 
 > The non-commercial FLUX engines (FLUX.1 Fill, FLUX.2 dev) have been removed
 > from this project precisely to keep generated imagery commercially usable.
@@ -36,6 +37,10 @@ text-to-image and reference-image system prompts from BFL's ComfyUI workflows,
 revision `feef60b0aaf63a4773ace96636ebbcf43b881312`; the FLUX 3 graph also adapts
 those workflows. Their MIT notice is preserved in
 [`workflows/flux3_LICENSE.upstream`](workflows/flux3_LICENSE.upstream).
+
+The H3 Image scene workflow follows the [official native ComfyUI image workflow](https://docs.comfy.org/tutorials/image/minimax/minimax-h3-image).
+Its weights are downloaded on demand, not bundled. The image model has its own
+licence; the video-model terms below do not substitute for it.
 
 ## Video model
 

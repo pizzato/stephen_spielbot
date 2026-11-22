@@ -466,7 +466,7 @@ still act on the whole film, and deleting a scene takes its mark with it.
 | **Narration** | With a regenerate button |
 | **Spoken text** | Optional split, see below |
 | **Narrator voice** | Per-scene override; defaults to the film narrator |
-| **Image prompt** | Static frame, using the style's current first-frame source: image model or experimental H3 short video (see [Settings → Image model](settings.md#image-model)) |
+| **Image prompt** | Static frame, using the style's current first-frame source: image model or official MiniMax H3 Image and its selected still size (see [Settings → Image model](settings.md#image-model)) |
 | **Video prompt** | LTX — motion & camera |
 
 Every regenerate button takes a free-text instruction plus quick chips, so you can say

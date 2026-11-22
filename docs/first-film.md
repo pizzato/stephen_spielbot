@@ -60,7 +60,7 @@ editable fields:
 |---|---|
 | **Scene title** | Organisation only |
 | **Narration** | The TTS voice |
-| **Image prompt** | The static first frame, using the style's image model or experimental H3 short-video source (see [Settings → Image model](manual/settings.md#image-model)) |
+| **Image prompt** | The static first frame, using the style's image model or official MiniMax H3 Image and its selected still size (see [Settings → Image model](manual/settings.md#image-model)) |
 | **Video prompt** | LTX — motion and camera |
 
 Move through scenes with **Prev** / **Next**. Every field has its own ✨ regenerate button

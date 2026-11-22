@@ -517,6 +517,7 @@ class DurableStore:
             "second_pass_steps": config.get("second_pass_steps"),
             "image_engine": config.get("image_engine"),
             "first_frame_source": config.get("first_frame_source"),
+            "h3_image_size": config.get("h3_image_size"),
             "style_name": config.get("style_name"),
             "video_engine": config.get("video_engine"),
             "video_steps": config.get("video_steps"),

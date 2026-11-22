@@ -458,8 +458,9 @@ Re-shooting a silent or music-video scene keeps its saved duration. A five-secon
 scene stays a five-second generation instead of falling back to a ten-second take.
 
 The source of that still is selected under **Settings → Styles → Image model →
-Scene first frames**: the image engine by default, or an experimental 22-frame
-H3 Turbo clip whose first frame becomes the opening image. This applies to
+Scene first frames**: the image engine by default, or official **MiniMax H3 Image**
+for a directly generated still. H3 Image can save the film's video size or a larger
+4K still without changing video resolution. This applies to
 silent, sung and opted-in dialogue openings alike; it does not change which
 scenes receive a frame. See [Settings → Image model](manual/settings.md#image-model).
 

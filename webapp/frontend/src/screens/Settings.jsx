@@ -1676,7 +1676,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       case 'edit_engine':
         return (engineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'first_frame_source':
-        return v === 'h3' ? 'MiniMax H3 Turbo · short video' : 'Image model'
+        return v === 'h3' ? 'MiniMax H3 Image' : 'Image model'
+      case 'h3_image_size':
+        return v === '4k' ? '4K (3840-pixel long edge)' : 'Video size'
       case 'video_engine':
         return (engineInfo?.video_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'music_engine':
@@ -2240,6 +2242,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       <div className="grow">
                         <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 600 }}>{e.label}</span>
+                          {e.scene_only && <Chip tone="info">scene first frames</Chip>}
                           {avail === true && <Chip tone="ok" dot>installed</Chip>}
                           {avail === false && <Chip tone="warn">{updateWorker ? 'worker update required' : 'not installed'}</Chip>}
                           {(e.commercial_label || !e.commercial_ok) && <Chip tone="info">{e.commercial_label || 'non-commercial'}</Chip>}
@@ -3041,16 +3044,27 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <div className="stack gap-22 mt-16">
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {engineInfo && (<>
-                <Field label="Scene first frames" hint="H3 renders a short 22-frame clip (~0.9 s) and uses its first frame. Experimental: shorter than H3's trained clip range. Uses character portraits when present. Needs H3 Turbo I2V and Ref2VA Turbo (LightX2V) models. Existing images are reused; regenerate a scene image to try it. Portraits, covers and edits keep their image model.">
+                <Field label="Scene first frames" hint="MiniMax H3 Image generates scene openings directly, using available character references. Download it under Infrastructure → Image models. Existing images are reused; regenerate a scene image after changing the source or size. Portraits, covers and edits use their selected image models.">
                   <select className="select" value={eff.first_frame_source || 'image'} onChange={(e) => setStyleField('first_frame_source', e.target.value)}>
                     <option value="image">Image model (default)</option>
-                    <option value="h3">MiniMax H3 Turbo · short video (experimental)</option>
+                    <option value="h3">MiniMax H3 Image</option>
                   </select>
                   <ParentVal k="first_frame_source" />
+                  {eff.first_frame_source === 'h3' && (() => {
+                    const sel = (engineInfo.engines || []).find((e) => e.key === 'minimax-h3-image')
+                    return sel?.license_note ? <div className="field__hint" style={{ marginTop: 6 }}>{sel.license_note}</div> : null
+                  })()}
                 </Field>
+                {eff.first_frame_source === 'h3' && <Field label="H3 Image size" hint="Video size matches the film's render size. 4K saves a larger image with a 3840-pixel long edge, preserving the film's aspect ratio. The video resolution stays unchanged. Regenerate existing scene images to apply a new size.">
+                  <select className="select" value={eff.h3_image_size || 'video'} onChange={(e) => setStyleField('h3_image_size', e.target.value)}>
+                    <option value="video">Video size (default)</option>
+                    <option value="4k">4K (3840-pixel long edge)</option>
+                  </select>
+                  <ParentVal k="h3_image_size" />
+                </Field>}
                 <Field label="Generation">
                   <select className="select" value={eff.image_engine || 'flux1-schnell'} onChange={(e) => setStyleField('image_engine', e.target.value)}>
-                    {(engineInfo.engines || []).filter((e) => e.can_generate).map((e) => (
+                    {(engineInfo.engines || []).filter((e) => e.can_generate && !e.scene_only).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_label ? ` · ${e.commercial_label}` : e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}
                   </select>
@@ -3062,7 +3076,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </Field>
                 <Field label="Edit (mask + prompt)" hint="Model used for masked 'Edit image' inpaints.">
                   <select className="select" value={eff.edit_engine || 'flux1-schnell'} onChange={(e) => setStyleField('edit_engine', e.target.value)}>
-                    {(engineInfo.engines || []).filter((e) => e.can_edit).map((e) => (
+                    {(engineInfo.engines || []).filter((e) => e.can_edit && !e.scene_only).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_label ? ` · ${e.commercial_label}` : e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}
                   </select>
@@ -3123,7 +3137,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {engineInfo && (String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax')
                 || String(eff.reference_engine || engineInfo.default_reference_engine || '').startsWith('minimax')) && (
                 <Field label="Sampling steps — scene videos"
-                  hint="Overrides sampling steps for configurable MiniMax H3 scene engines, including acted-scene Ref2VA. 0 = each engine's own default (Turbo: 4, base H3: 15). More steps take longer. pi-H3 keeps its fixed two-step schedule; LTX ignores this setting, and H3 first-frame clips always use 4 steps.">
+                  hint="Overrides sampling steps for configurable MiniMax H3 scene engines, including acted-scene Ref2VA. 0 = each engine's own default (Turbo: 4, base H3: 15). More steps take longer. pi-H3 keeps its fixed two-step schedule; LTX and H3 Image ignore this setting.">
                   <input className="input" type="number" min={0} max={50} style={{ width: 120 }}
                     value={eff.video_steps ?? 0}
                     onChange={(e) => setStyleField('video_steps', Math.max(0, Math.min(50, Math.round(+e.target.value || 0))))} />

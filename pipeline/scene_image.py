@@ -14,6 +14,23 @@ from PIL import Image, PngImagePlugin
 _CAST_KEY = "spielbot_scene_cast"
 
 
+def first_frame_dimensions(width: int, height: int, size: str = "video") -> tuple[int, int]:
+    """Saved first-frame canvas; 4K keeps orientation and uses a 3840px long edge."""
+    if size != "4k":
+        return width, height
+    scale = 3840 / max(width, height)
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+def matches_first_frame_resolution(path: Path, width: int, height: int) -> bool:
+    """Accept the video canvas or its 4K still, but not another aspect ratio."""
+    try:
+        with Image.open(path) as image:
+            return image.size in ((width, height), first_frame_dimensions(width, height, "4k"))
+    except (OSError, ValueError, SyntaxError):
+        return False
+
+
 def record_cast(image: Path, characters: list[dict]) -> None:
     """Record requested identities, preserving pixels and existing PNG text.
 

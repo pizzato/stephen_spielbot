@@ -85,7 +85,11 @@ def _execute_scene_image(store: DurableStore, task: TaskRecord, endpoint: str) -
         comfy_url=endpoint,
         **({"reference_images": refs} if refs is not None else {}),
     )
-    store.record_artifact(task.job_id, task.id, "image", output, width=int(p.get("width", 0)) or None, height=int(p.get("height", 0)) or None)
+    from pipeline.scene_image import first_frame_dimensions
+    image_width, image_height = first_frame_dimensions(
+        int(p.get("width", p.get("vid_width", 1024))),
+        int(p.get("height", p.get("vid_height", 576))), engine.get("h3_image_size", "video"))
+    store.record_artifact(task.job_id, task.id, "image", output, width=image_width, height=image_height)
     store.complete_task(task.id, result={"path": str(output)}, message="image ready")
 
 
