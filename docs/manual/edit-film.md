@@ -495,7 +495,7 @@ narration.
 
 ### Re-rendering a scene
 
-Each button does only its own part. A narrated scene has:
+A narrated scene has separate controls for each part:
 
 | Button | Re-renders |
 |---|---|
@@ -523,6 +523,18 @@ rather than the picture. Silent and music-video re-shoots preserve their saved d
 The opening image and its shot description also anchor the visual medium, with
 illustrated openings explicitly directed to remain illustrated throughout the take. It also
 gains **Continue**, which shoots more of the take it already has instead of replacing it.
+
+**Rewrite scene** changes an acted scene's dialogue, action, setting and prompts,
+leaving the existing first image and video in place. **Recreate scene** replaces the
+whole take in one action: it writes a fresh scene concept and opening-image prompt,
+generates a new first frame, then shoots a new video. Use the adjacent instruction
+menu to describe the scene you want instead. This also works for performed silent
+and music-video scenes. It keeps the film's context and cast rules, plus a music-video
+beat's song segment and timing. **No first frame** skips the image step; recreation
+turns off **Continues the previous scene** so the replacement starts an independent shot.
+The old images and video takes stay in their version strips. Use **Reassemble film**
+afterward to include the new take in the finished film.
+
 The **scene type** switch converts a scene between narration, dialogue and silent — same
 theme, the other shape — and keeps the version you leave, so switching back restores it.
 
@@ -604,8 +616,8 @@ thumbnails, soundtrack slice and warnings — and, on a music-video beat, the ed
 [**Sung in this shot** rows](script.md#acted-staging): the lyric lines the take mouths
 and when each is heard, saved straight onto the scene so the assembled prompt and the
 captions follow. The card's editor contains the dialogue and
-assembled prompt, while **Re-generate scene**, **Shoot again**, **Continue**, trim and the
-image/video version strips stay with it. Performed silent scenes use the same layout,
+assembled prompt, while **Rewrite scene**, **Recreate scene**, **Shoot again**,
+**Continue**, trim and the image/video version strips stay with it. Performed silent scenes use the same layout,
 marked *silent* and without dialogue controls.
 
 For timing errors across many shots, use [**Realign lyrics to song**](#realign-lyrics-to-song)
