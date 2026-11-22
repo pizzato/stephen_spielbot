@@ -59,7 +59,13 @@ def test_real_dispatch_uses_tested_schedule_and_ignores_inherited_chaining(tmp_p
     assert graph["13"]["class_type"] == "VAEDecodeAudio"
     assert graph["19"]["inputs"]["shift_video"] == 12
     assert graph["19"]["inputs"]["shift_audio"] == 3
-    assert graph["20"]["inputs"]["selection"] == "sol-attn"
+    assert graph["20"]["class_type"] == "SolAttnPatch"
+    assert graph["20"]["inputs"] == {
+        "model": ["19", 0], "tau": 1.0, "start_percent": 0.0,
+        "end_percent": 1.0, "min_tokens": 0, "int8_qk": False,
+        "sink_conditioning": "exact_kv_and_rows", "morton": False,
+        "morton_curve": "2d_frame", "int8_pv": False, "verbose": False,
+        "use_tma": False, "dense_blocks": "0-1"}
 
 
 @pytest.mark.parametrize("missing", ["version", "unknown_version", *ENGINE["extra_nodes"],

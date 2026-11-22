@@ -85,7 +85,9 @@ make install INSTALL_PIH3=1
 
 This installs or repairs the five-file bundle (~42.3 GB total, about 5 GB extra
 when the shared H3 assets are already present) and deploys the supporting ComfyUI
-0.45.0 worker with pinned piFlow nodes. Select **pi-H3 2-step DWD** afterwards under
+0.45.0 worker with pinned piFlow and Kijai BF16 Sol-Attn nodes. Re-run it to update
+workers installed with the earlier INT8 attention workflow; no replacement model
+weights are needed. Select **pi-H3 2-step DWD** afterwards under
 **Settings → Styles → Video models → Narrated & silent scenes**. Existing style
 selections are unchanged. The adapter and base model use the MiniMax H3 Community
 License; see [requirements and limits](models.md#pi-h3-two-step-dwd).

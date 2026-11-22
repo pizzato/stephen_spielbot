@@ -163,7 +163,8 @@ anonymity and does not change the separate description/footer/hashtag settings.
 
 The same list for the scene engines — LTX 2.5, pi-H3 2-step DWD, and the other
 MiniMax H3 variants — with each one's licence note. Base nodes ship with ComfyUI;
-pi-H3 also needs the piFlow extension supplied in the worker image.
+pi-H3 also needs the piFlow and Kijai BF16 Sol-Attn extensions supplied in the
+worker image. Workers from before the BF16 attention correction need a rebuild.
 *Not installed* on a worker whose weights are present can mean its container needs a
 rebuild. See [Models → Video engines](../models.md#video-engines-per-style).
 

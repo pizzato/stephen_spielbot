@@ -185,21 +185,24 @@
     }
   },
   "20": {
-    "class_type": "BlockSparseAttention",
+    "class_type": "SolAttnPatch",
     "inputs": {
       "model": [
         "19",
         0
       ],
-      "selection": "sol-attn",
-      "selection.tau": 1.0,
+      "tau": 1.0,
       "start_percent": 0.0,
       "end_percent": 1.0,
-      "dense_blocks": "0, 1",
-      "min_tokens": 12288,
-      "extra_tokens": 256,
+      "min_tokens": 0,
+      "int8_qk": false,
       "sink_conditioning": "exact_kv_and_rows",
-      "verbose": false
+      "morton": false,
+      "morton_curve": "2d_frame",
+      "int8_pv": false,
+      "verbose": false,
+      "use_tma": false,
+      "dense_blocks": "0-1"
     }
   },
   "21": {
