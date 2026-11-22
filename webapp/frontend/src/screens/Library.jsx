@@ -212,25 +212,25 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
         {loaded && jobs.finished.length > 0 && shown.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No films match this filter.</p></Card>}
         {visibleFilms.map((f, i) => (
           <Card key={f.work_dir} span={4} link onClick={() => openCard(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ position: 'relative', aspectRatio: '16/9' }}>
+            <div className="film-cover">
               {f.cover_url
-                ? <img src={f.cover_url} alt="" loading="lazy" decoding="async" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                ? <img src={f.cover_url} alt="" loading="lazy" decoding="async" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
                 : <div className={`gfill g${i % 6}`} style={{ position: 'absolute', inset: 0 }}></div>
               }
-              <div style={{ position: 'absolute', top: 12, left: 12 }}>
-                {f.published
-                  ? <Chip tone="ok" dot>Published</Chip>
-                  : f.awaiting_approval
-                    ? <Chip tone="warn" dot>Needs approval</Chip>
-                    : f.approved
-                      ? <Chip tone="info" dot>Approved</Chip>
-                      : !f.seen && <Chip tone="info" dot>New</Chip>}
-              </div>
-              {f.resolution && (
-                <div style={{ position: 'absolute', top: 12, right: 12 }}>
+              <div className="row between gap-6 row--wrap" style={{ position: 'absolute', top: 12, left: 12, right: 12 }}>
+                <span>
+                  {f.published
+                    ? <Chip tone="ok" dot>Published</Chip>
+                    : f.awaiting_approval
+                      ? <Chip tone="warn" dot>Needs approval</Chip>
+                      : f.approved
+                        ? <Chip tone="info" dot>Approved</Chip>
+                        : !f.seen && <Chip tone="info" dot>New</Chip>}
+                </span>
+                {f.resolution && (
                   <Chip>{resBadge(f.resolution)}</Chip>
-                </div>
-              )}
+                )}
+              </div>
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>
             <div style={{ padding: '14px 18px 16px' }}>
