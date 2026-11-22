@@ -7,6 +7,11 @@ that render images, video, narration, and music.
 They can be the same machine. `make install` with no worker list sets up a
 single-machine install where the controller is also the (localhost) worker.
 
+On an existing Mac controller, run `make install` there: it reads `comfy_workers`
+from `~/.config/video-generator/config.yaml`, downloads missing models once, then
+syncs them and deploys the containers to each configured worker over SSH.
+The command uses the code in your current checkout.
+
 ## Requirements
 
 === "Controller"
@@ -44,7 +49,7 @@ Then open [http://localhost:8001](http://localhost:8001).
 
 For optional **FLUX 3 Image Klein NVFP4** on Blackwell workers, accept the
 [BFL model conditions](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy),
-export a Hugging Face read token as `HF_TOKEN`, then run:
+save a Hugging Face read token in Settings (or set `HF_TOKEN`), then run:
 
 ```bash
 make install INSTALL_FLUX3=1
@@ -95,6 +100,12 @@ arguments and it prompts once. An existing `config.yaml` is never overwritten.
 
 ### What `make install` does
 
+Model downloads and worker builds use credentials in this order: `HF_TOKEN`,
+`HUGGING_FACE_HUB_TOKEN`, the saved `hf_token` in config, then local Hugging Face
+CLI credentials. The token prompt appears only when none is available; leaving it
+blank lets the download worker use its own CLI credentials. Tokens are passed to
+workers through standard input and to download tools through their environment.
+
 1. Creates `.venv` and installs the Python requirements
 2. Seeds `~/.config/video-generator/config.yaml` with your worker list (first run only)
 3. Downloads the [models](models.md) (~90 GB) and the 10-voice LibriVox character voice library
@@ -104,6 +115,8 @@ arguments and it prompts once. An existing `config.yaml` is never overwritten.
    the controller and workers, including the SoulX conversion checkpoint, pitch
    extractor and content encoder; shared Demucs weights are prefetched on the
    controller, and lyric alignment stays available
+   (SoulX updates its own virtual environment's pip automatically before installing
+   dependencies; it does not upgrade system Python packages)
 6. Installs the web backend deps and builds the React frontend
 
 The macOS login service (a LaunchAgent that keeps the app running) is opt-in — the

@@ -22,6 +22,7 @@ def test_make_install_includes_controller_revoicing_and_propagates_failure(tmp_p
     (tmp_path / "scripts").mkdir()
     shutil.copy2(root / "Makefile", tmp_path / "Makefile")
     shutil.copy2(root / "scripts/install.sh", tmp_path / "scripts/install.sh")
+    shutil.copy2(root / "scripts/_hf_token.sh", tmp_path / "scripts/_hf_token.sh")
     (tmp_path / "config.yaml").write_text("comfy_workers: []\n")
     (tmp_path / "scripts/_config.sh").write_text(
         'CONFIG_YAML="$REPO_ROOT/config.yaml"\nremote_hosts() { :; }\n')
@@ -50,6 +51,47 @@ def test_dependency_pin_matches_the_installers_validated_transformers_version():
     script = (root / "install_soulx.sh").read_text()
     version = re.search(r'transformers\.__version__ == "([^"]+)"', script).group(1)
     assert f"transformers=={version}" in (root / "requirements-soulx.txt").read_text().splitlines()
+
+
+@pytest.mark.parametrize("system_site_packages", [False, True])
+def test_soulx_updates_only_its_venv_pip_before_installing_dependencies(tmp_path, system_site_packages):
+    root = Path(__file__).parents[1]
+    dest = tmp_path / "soulx"
+    (dest / ".git").mkdir(parents=True)
+    (dest / ".venv/bin").mkdir(parents=True)
+    log = tmp_path / "calls.jsonl"
+    shim = (
+        f"#!{sys.executable}\n"
+        "import json, os, sys\nfrom pathlib import Path\n"
+        "with Path(os.environ['CALL_LOG']).open('a') as output:\n"
+        " output.write(json.dumps({'python': sys.argv[0], 'args': sys.argv[1:], "
+        "'version_check': os.environ.get('PIP_DISABLE_PIP_VERSION_CHECK')}) + '\\n')\n"
+        "if sys.argv[1] == '-':\n"
+        " Path(sys.argv[2]).write_text('torch===test\\ntorchaudio===test\\n')\n"
+    )
+    for command in (tmp_path / "base-python", dest / ".venv/bin/python", dest / ".venv/bin/pip"):
+        command.write_text(shim)
+        command.chmod(0o755)
+    (tmp_path / "bin").mkdir()
+    git = tmp_path / "bin/git"
+    git.write_text("#!/bin/sh\nprintf '%s\\n' 81aeb3ae772c70093c3de74dc23c92d983801ae4\n")
+    git.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(root / "docker/comfyui/singing/install_soulx.sh"), str(dest),
+         str(tmp_path / "base-python"), "--system-site-packages" if system_site_packages else ""],
+        env={**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "CALL_LOG": str(log)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    pip_calls = [call for call in calls if call["args"][:2] == ["-m", "pip"]]
+    assert pip_calls[0]["args"] == ["-m", "pip", "install", "--quiet", "--upgrade", "pip"]
+    assert sum("--upgrade" in call["args"] for call in pip_calls) == 1
+    assert all(call["python"] == str(dest / ".venv/bin/python") for call in pip_calls)
+    assert all(call["version_check"] == "1" for call in pip_calls)
+    assert (any(call["args"] == ["-m", "pip", "install", "torch", "torchaudio"]
+                for call in pip_calls)) is not system_site_packages
+    assert "requirements-soulx.txt" in pip_calls[-1]["args"][4]
 
 
 @pytest.fixture
@@ -199,6 +241,7 @@ def test_controller_token_resolution(tmp_path, token_source):
         "HF_TOKEN": "env-secret", "HUGGING_FACE_HUB_TOKEN": "legacy-secret",
         "HF_TOKEN_PATH": str(token_file), "HF_HOME": str(token_file.parent),
         "XDG_CACHE_HOME": str(tmp_path),
+        "CONFIG_YAML": str(tmp_path / "absent-config.yaml"),
     })
     order = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_TOKEN_PATH", "HF_HOME", "XDG_CACHE_HOME")
     for key in order[:order.index(token_source)]:
@@ -217,6 +260,7 @@ def test_controller_without_credentials_can_build_anonymously(tmp_path):
     root = Path(__file__).parents[1]
     env = {k: v for k, v in os.environ.items() if not k.startswith(("HF_", "HUGGING_FACE_"))}
     env["HF_TOKEN_PATH"] = str(tmp_path / "absent-token")
+    env["CONFIG_YAML"] = str(tmp_path / "absent-config.yaml")
     result = subprocess.run(
         ["bash", "-c", 'set -euo pipefail; source "$1/scripts/_hf_token.sh"; hf_token', "_", str(root)],
         env=env, capture_output=True, text=True,
