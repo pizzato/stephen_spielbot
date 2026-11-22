@@ -23,8 +23,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV="$REPO_ROOT/.venv"
 COMFY_ENV="$HOME/github/comfyui-env"
 
-# Accept token from env (set by install.sh or caller)
-HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+# Direct make download-models uses the same saved token as Settings. The
+# standalone copy sent to a worker receives credentials over SSH stdin.
+if [[ -f "$REPO_ROOT/scripts/_hf_token.sh" ]]; then
+    source "$REPO_ROOT/scripts/_hf_token.sh"
+    HF_TOKEN="$(hf_token)"
+else
+    HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+fi
+export HF_TOKEN
 
 if [[ ! -d "$COMFY_DIR" ]]; then
     echo "ERROR: ComfyUI directory not found: $COMFY_DIR"
@@ -89,7 +96,6 @@ download() {
     echo "  [download] $filename  ← $repo/$remote_path"
     mkdir -p "$COMFY_DIR/$local_dir"
     local extra_args=()
-    [[ -n "$HF_TOKEN" ]] && extra_args+=(--token "$HF_TOKEN")
     [[ -n "$revision" ]] && extra_args+=(--revision "$revision")
     "$HF_CMD" download "$repo" "$remote_path" \
         --local-dir "$COMFY_DIR/$local_dir" \

@@ -34,6 +34,10 @@ if [[ ! -x "$DEST/.venv/bin/pip" ]]; then
     fi
 fi
 VENV_PY="$DEST/.venv/bin/python"
+# Refresh installer tooling in SoulX's own environment before dependency work.
+# The bootstrap handles updates; individual installs need not repeat notices.
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+"$VENV_PY" -m pip install --quiet --upgrade pip
 if [[ "$MODE" == "--system-site-packages" ]]; then
     # Constraints prevent dependency resolution from replacing the worker's
     # validated CUDA torch/torchaudio, even inside this separate environment.

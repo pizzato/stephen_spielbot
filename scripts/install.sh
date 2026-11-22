@@ -9,6 +9,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # shellcheck source=scripts/_config.sh
 source "$REPO_ROOT/scripts/_config.sh"
+# shellcheck source=scripts/_hf_token.sh
+source "$REPO_ROOT/scripts/_hf_token.sh"
 
 banner() { echo ""; echo "=== $* ==="; }
 
@@ -86,6 +88,10 @@ fi
 # F5-TTS runs in the worker containers, so the controller needs no local F5-TTS
 # environment (the workers handle narration over HTTP).
 
+# Resolve saved credentials before local prefetch and remote model downloads.
+HF_TOKEN="$(hf_token)"
+export HF_TOKEN
+
 banner "Setting up song revoicing (SoulX-Singer SVC and Seed-VC)"
 bash "$REPO_ROOT/scripts/install_svc.sh"
 
@@ -93,7 +99,7 @@ bash "$REPO_ROOT/scripts/install_svc.sh"
 # Strategy:
 #   • Local ComfyUI present  → download directly here
 #   • Remote workers only    → download once on MODEL_SOURCE, others rsync from it
-# Either way, ask for an optional HuggingFace token once to speed things up.
+# Prompt only when neither environment, Settings nor CLI credentials exist.
 
 banner "Downloading models"
 
@@ -112,7 +118,6 @@ for host in $(remote_hosts); do
 done
 
 COMFY_DIR="${COMFY_DIR:-$HOME/github/ComfyUI}"
-HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 
 # Use the first cluster node as the model source (download once there, rsync to others)
 FIRST_HOST="$(remote_hosts | head -1)"
@@ -182,7 +187,7 @@ _ask_hf_token() {
         echo ""
         echo "Missing model files need to be downloaded."
         echo "Gated models (including FLUX 3) need a read token with their HF conditions accepted."
-        read -rsp "HuggingFace token (press Enter to use existing CLI credentials): " HF_TOKEN
+        read -rsp "HuggingFace token (press Enter to use worker CLI credentials): " HF_TOKEN
         echo ""
     fi
 }
@@ -210,9 +215,9 @@ else
     _ask_hf_token
     echo "[models] Downloading models to $MODEL_SOURCE (first worker; others rsync from it during deploy)..."
     rsync -q "$REPO_ROOT/scripts/download_models.sh" "${MODEL_SOURCE}:/tmp/spielbot_download_models.sh"
-    printf -v _download_env 'HF_TOKEN=%q INSTALL_FLUX3=%q INSTALL_QWEN_TURBO=%q INSTALL_PIH3=%q' "$HF_TOKEN" "${INSTALL_FLUX3:-0}" "${INSTALL_QWEN_TURBO:-0}" "${INSTALL_PIH3:-0}"
-    ssh "$MODEL_SOURCE" \
-        "$_download_env bash /tmp/spielbot_download_models.sh \$HOME/github/ComfyUI"
+    printf -v _download_env 'INSTALL_FLUX3=%q INSTALL_QWEN_TURBO=%q INSTALL_PIH3=%q' "${INSTALL_FLUX3:-0}" "${INSTALL_QWEN_TURBO:-0}" "${INSTALL_PIH3:-0}"
+    printf '%s\n' "$HF_TOKEN" | ssh "$MODEL_SOURCE" \
+        "$_download_env bash -c 'IFS= read -r HF_TOKEN; export HF_TOKEN; exec bash /tmp/spielbot_download_models.sh \"\$HOME/github/ComfyUI\"'"
 fi
 
 # ── 3b. Web UI (FastAPI backend deps + React frontend build) ──────────────────

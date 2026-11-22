@@ -110,6 +110,10 @@ checks the official INT8 transformer, INT8 encoder, VAE and native cache/samplin
 nodes. Both bundles can also be installed or repaired with
 `make install INSTALL_FLUX3=1 INSTALL_QWEN_TURBO=1`.
 
+`make install` and `make download-models` also read this saved token automatically.
+An explicit `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` overrides it; otherwise local
+Hugging Face CLI credentials are used when no token is saved.
+
 **Model files downloaded** confirms the download only. If the files are present
 but ComfyUI lacks the engine's required nodes or minimum version, the row shows **worker update required**
 and identifies the checked worker. Run `make start` on the controller to rebuild
