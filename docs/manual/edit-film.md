@@ -525,7 +525,8 @@ illustrated openings explicitly directed to remain illustrated throughout the ta
 gains **Continue**, which shoots more of the take it already has instead of replacing it.
 
 **Rewrite scene** changes an acted scene's dialogue, action, setting and prompts,
-leaving the existing first image and video in place. **Recreate scene** replaces the
+including new opening-image and motion descriptions for the rewritten scene. The
+existing first image and video stay in place until regenerated. **Recreate scene** replaces the
 whole take in one action: it writes a fresh scene concept and opening-image prompt,
 generates a new first frame, then shoots a new video. Use the adjacent instruction
 menu to describe the scene you want instead. This also works for performed silent

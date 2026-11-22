@@ -564,9 +564,11 @@ class ActedViewTests(unittest.TestCase):
         self.assertEqual(scene["lines"], [])
         self.assertEqual(scene["narration"], "")
         self.assertIn("The same bench, colder now.", scene["setting"])
-        # The take still opens on its own frame, and keeps the length it was
-        # written for (a silent beat has no words to size it from).
-        self.assertEqual(scene["image_prompt"], "a shadowed bench")
+        # Missing explicit image/motion descriptions are composed from the new
+        # setting, never carried over from the previous draft.
+        self.assertIn("The same bench, colder now.", scene["image_prompt"])
+        self.assertIn("the hand withdraws", scene["video_prompt"])
+        # A silent beat has no words to size it from, so its length stays fixed.
         self.assertEqual(scene["duration"], 8.0)
 
     def _make_singing(self):

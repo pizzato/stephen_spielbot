@@ -125,12 +125,50 @@ def test_dialogue_recreation_paints_from_new_setting_and_keeps_unfinished_video(
     assert (wd / "scene_01_final.mp4").read_bytes() == b"original video"
 
 
-def test_rewrite_alone_keeps_image_and_does_not_render(film):
+def test_rewrite_alone_updates_descriptions_but_keeps_media_and_does_not_render(film):
     wd, jid, meta, reply, llm, threads = film
     result = backend.regenerate_acted_scene(jid, 1, backend.ActedRegenBody())
-    assert saved_scene(jid)["image_prompt"] == "old image concept"
+    assert saved_scene(jid)["image_prompt"] == reply["image_prompt"]
+    assert "bright rooftop" in saved_scene(jid)["video_prompt"]
     assert (wd / "scene_01_preview.png").read_bytes() == b"original preview"
     assert "task_id" not in result
+    assert not threads
+
+
+@pytest.mark.parametrize("returns_visual_prompts", [False, True])
+def test_no_mirror_rewrite_updates_image_and_motion_payloads(film, monkeypatch, returns_visual_prompts):
+    wd, jid, meta, reply, llm, threads = film
+    store = DurableStore.default()
+    try:
+        store.upsert_scene(jid, 1, title="A mirror", image_prompt="Ana beside a mirror, her reflection in its frame.",
+                           video_prompt="Move closer to the mirror and her reflection.", narration="",
+                           metadata={**meta, "setting": "A mirror on a cream wall."})
+    finally:
+        store.close()
+    reply.update(title="A Slip of Paper Rests Beside the Window",
+                 setting="A curtained window with a slip of paper on the windowsill.",
+                 camera="Close on the windowsill, pulling back toward Ana.",
+                 beats=[{"t0": 0, "t1": 5, "action": "Ana rests her fingertips on the paper."}])
+    if returns_visual_prompts:
+        reply.update(image_prompt="Ana beside a curtained window, a slip of paper on the windowsill.",
+                     video_prompt="Ana touches the paper on the windowsill; the camera pulls back.")
+    else:
+        reply.pop("image_prompt")
+    llm.return_value = json.dumps(reply)
+    result = backend.regenerate_acted_scene(jid, 1, backend.ActedRegenBody(instruction="No mirror"))
+    row = saved_scene(jid)
+    for field in ("image_prompt", "video_prompt"):
+        assert "windowsill" in row[field]
+        assert "mirror" not in row[field].lower()
+        assert "reflection" not in row[field].lower()
+        assert result["scene"][field] == row[field]
+    monkeypatch.setattr(backend.gapp, "_characters_prompt_and_refs", lambda p, *a, **kw: (p, []))
+    render_prompt, _ = backend._film_scene_image_prompt({}, row, {}, wd)
+    assert "windowsill" in render_prompt
+    assert "mirror" not in render_prompt.lower()
+    assert '"image_prompt":' in llm.call_args.args[1]
+    assert '"video_prompt":' in llm.call_args.args[1]
+    assert "No mirror" in llm.call_args.args[1]
     assert not threads
 
 

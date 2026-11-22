@@ -7483,7 +7483,10 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
                      f"song plays over it.\n")
         keys = ('  "lines": [] — this scene is silent, nobody says anything\n'
                 '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>} '
-                f"— they must fit inside {round(seconds)} seconds\n")
+                f"— they must fit inside {round(seconds)} seconds\n"
+                '  "image_prompt": a static opening image matching the rewritten setting, '
+                'cast and action; apply the user\'s changes here too\n'
+                '  "video_prompt": motion and camera directions matching the rewritten scene\n')
         if singing:
             keys += ('  "performs": true if the cast visibly sings the song on '
                      'camera in this shot, false if nobody sings or mimes (they '
@@ -7502,14 +7505,10 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         task += ("\nReplace this draft with a genuinely different scene concept, setting and "
                  "composition that serves the same story beat. Do not reuse the old opening. "
                  "Keep the film's cast and any song timing; this starts a new shot, not a continuation.\n")
-        if silent:
-            keys += ('  "image_prompt": a fresh static opening image matching the NEW setting, '
-                     'cast and action, never the previous image composition\n'
-                     '  "video_prompt": fresh motion and camera directions for the new scene\n')
-        else:
+        if not silent:
             task += "The NEW setting and cast will also compose a freshly painted opening image.\n"
-        if singing:
-            task += f'Lyrics for this beat: {meta.get("sings") or "(instrumental)"}\n'
+    if singing:
+        task += f'Lyrics for this beat: {meta.get("sings") or "(instrumental)"}\n'
     user = (
         f"Video title: {video_title or topic}\nTopic: {topic}\n"
         f"Full scene outline: {outline}\n\n"
@@ -7545,28 +7544,26 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     # current answer. Only a singing scene carries the switch.
     performs = (bool(raw.get("performs", meta.get("performs") is not False))
                 if singing else None)
-    image_prompt = (current.get("image_prompt") or "") if silent else ""
-    video_prompt = current.get("video_prompt") or ""
+    opening = performance_mode.opening_frame_prompt(
+        {"mode": meta.get("mode") or "dialogue", "setting": raw.get("setting"),
+         "cast": raw.get("cast") or []})
+    image_prompt = (str(raw.get("image_prompt") or "").strip() or opening) if silent else ""
+    video_prompt = ""
+    if silent:
+        video_prompt = str(raw.get("video_prompt") or "").strip() or " ".join(
+            str(value).strip() for value in
+            [raw.get("setting"), raw.get("camera"),
+             *(beat.get("action") for beat in (raw.get("beats") or []) if isinstance(beat, dict))]
+            if value)
+    if (silent or body.recreate) and not (image_prompt or opening) and not meta.get("no_first_frame"):
+        raise HTTPException(502, "The new scene has no opening image description — try again.")
     if body.recreate:
-        opening = performance_mode.opening_frame_prompt(
-            {"mode": meta.get("mode") or "dialogue", "setting": raw.get("setting"),
-             "cast": raw.get("cast") or []})
-        image_prompt = ((str(raw.get("image_prompt") or "").strip() or opening)
-                        if silent else opening)
-        if not image_prompt and not meta.get("no_first_frame"):
-            raise HTTPException(502, "The new scene has no opening image description — try again.")
-        if silent:
-            video_prompt = str(raw.get("video_prompt") or "").strip() or " ".join(
-                str(value).strip() for value in
-                [raw.get("setting"), raw.get("camera"),
-                 *(beat.get("action") for beat in (raw.get("beats") or []) if isinstance(beat, dict))]
-                if value)
         # The LLM call may take a while; don't replace a scene that began rendering meanwhile.
         wd = _validate_scene_recreation(job_id, sid)
     result = _update_scene(job_id, sid, SceneUpdate(
         title=str(raw.get("title") or current.get("title") or ""),
-        # Ordinary rewrites retain a silent take's image description; recreation
-        # replaces it. Dialogue openings are composed from their new setting.
+        # Every text field follows the rewrite. Keeping an older silent image
+        # description would repaint the old scene after its setting changed.
         image_prompt=image_prompt,
         video_prompt=video_prompt,
         narration="",

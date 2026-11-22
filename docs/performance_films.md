@@ -572,8 +572,10 @@ again.
 
 **Rewrite scene** rewrites the whole take with the LLM — dialogue, action, setting,
 camera, sound — keeping the film's context and cast, optionally steered by a free-text
-instruction. This changes the script and prompts only; the existing first image and
-video stay in place. An acted scene is one coherent take, so it rewrites whole rather than
+instruction. The opening-image and motion descriptions are rewritten to match the
+new setting and action, including on silent and music-video scenes. This changes the
+script and prompts only; the existing first image and video stay in place until
+regenerated. An acted scene is one coherent take, so it rewrites whole rather than
 field by field; a pinned prompt is superseded by the rewrite. On a music-video beat the
 rewrite also decides whether the cast **sings on camera**: the singing directives in the
 prompt come from the scene's flags rather than from the rewrite's prose, so an
