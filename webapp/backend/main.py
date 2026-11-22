@@ -2936,6 +2936,8 @@ def _copy_song_artifacts(src: Path, dst: Path) -> None:
     if (src / "music_history").is_dir():
         shutil.copytree(src / "music_history", dst / "music_history",
                         dirs_exist_ok=True)
+    if (src / "suno_requests").is_dir():
+        shutil.copytree(src / "suno_requests", dst / "suno_requests", dirs_exist_ok=True)
 
 
 def _copy_script_reference_files(src: Path, dst: Path, *,
@@ -3619,7 +3621,9 @@ class SongGenerateBody(BaseModel):
 _MAX_SONG_EXTEND = 30.0
 
 
-def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
+def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
+                      automatic: bool = False, operation_id: str | None = None,
+                      engine_override: str = "") -> dict:
     """Render the song itself (song.json → background_music.wav) on a worker.
 
     The finished track IS the film's final soundtrack: the render's music step
@@ -3652,7 +3656,21 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
              or (data.get("vocalist") or "").strip())
     sound = (data.get("caption") or "").strip()
     ss = gapp.style_settings(cfg, data.get("style_name") or "")
-    engine = gapp._norm_music_engine(ss.get("music_engine"))
+    engine = ("minimax-music3" if automatic else
+              gapp._norm_music_engine(engine_override or ss.get("music_engine")))
+    if engine == "suno":
+        if add_seconds:
+            raise ValueError("Suno continuation is not available here; generate a new pair of takes instead.")
+        from pipeline.suno_music import generate_suno_takes
+        caption = song_caption(sound, vocal, engine)
+        with _track_op("Singing the song", f"{int(secs)}s · Suno",
+                       work_dir=str(wd), title=str(data.get("title") or wd.name), category="film"):
+            result = generate_suno_takes(
+                str(data.get("title") or wd.name), secs, work_dir=wd,
+                caption=caption, lyrics=data.get("lyrics") or None,
+                model=ss.get("suno_model") or "", voice_id=ss.get("suno_voice_id") or "",
+                operation_id=operation_id)
+        return {"ok": True, "imported_count": 0, "suno_takes": result["suno_takes"]}
     urls = gapp._preview_worker_urls()
     if not urls:
         raise RuntimeError("No ComfyUI workers reachable.")
@@ -3737,7 +3755,7 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
 def _run_song_generate_task(task_id: str, wd: Path, add_seconds: float = 0.0) -> None:
     try:
         _script_tasks[task_id] = {"status": "done",
-                                  "result": _do_song_generate(wd, add_seconds)}
+                                  "result": _do_song_generate(wd, add_seconds, operation_id=task_id)}
     except Exception as e:
         _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
 
@@ -4019,6 +4037,7 @@ def get_job_song(job_id: str) -> dict:
     """A song film's song.json — the caption and tagged lyrics the music model
     sings (404 for every other film) — plus the generated track and its kept
     versions, so the Song tab is the whole studio in one payload."""
+    from pipeline.suno_music import list_suno_takes
     wd = _job_wd_or_404(job_id)
     path = wd / "song.json"
     if not path.exists():
@@ -4038,6 +4057,8 @@ def get_job_song(job_id: str) -> dict:
                 for c in gapp.song_singer_candidates(cfg, style_name)
                 if not any(gapp._characters_refer_to_same(c, n) for n in news_cast)]
     return {"caption": str(data.get("caption") or ""),
+            "music_engine": gapp._norm_music_engine(
+                gapp.style_settings(cfg, style_name).get("music_engine")),
             "lyrics": str(data.get("lyrics") or ""),
             # The film's direction — editable in the studio because a song is
             # often steered long after Create, and a re-write needs it.
@@ -4059,6 +4080,7 @@ def get_job_song(job_id: str) -> dict:
                          if track.exists() else ""),
             "versions": hist.get("versions", []),
             "selected": hist.get("selected"),
+            "suno_takes": list_suno_takes(wd),
             **_song_svc_info(wd, cfg, data)}
 
 
@@ -4071,7 +4093,8 @@ def _stamp_song_voice(wd: Path, version_id: int) -> str:
     ("" for the original)."""
     from pipeline.assembler import _get_duration
 
-    voice = ((music_history.find(wd, version_id) or {}).get("voice") or "")
+    selected = music_history.find(wd, version_id) or {}
+    voice = selected.get("voice") or ""
     path = wd / "song.json"
     if path.exists():
         try:
@@ -4080,6 +4103,21 @@ def _stamp_song_voice(wd: Path, version_id: int) -> str:
             track = wd / "background_music.wav"
             if track.exists():
                 data["duration"] = _get_duration(track)
+            if selected.get("provider") == "suno":
+                from pipeline.suno_music import request_for_take
+                request = request_for_take(wd, selected.get("remote_id", ""))
+                if request:
+                    data.update({"lyrics": request.get("lyrics", ""),
+                                 "caption": request.get("style", ""),
+                                 "seconds": data.get("duration", 0),
+                                 "suno_model": selected.get("model", ""),
+                                 "suno_voice_id": selected.get("singing_voice_id", "")})
+                    data.pop("seed", None)
+                    jc_path = wd / "job_config.json"
+                    if jc_path.exists():
+                        jc = json.loads(jc_path.read_text())
+                        jc.update({"music_lyrics": data["lyrics"], "music_desc": data["caption"]})
+                        jc_path.write_text(json.dumps(jc, indent=2))
             _write_song(wd, data)
         except Exception:
             gapp.logger.warning("Could not update sung_as in song.json", exc_info=True)
@@ -4103,6 +4141,67 @@ def select_song_version(job_id: str, body: dict) -> dict:
     return {"ok": True, "sung_as": sung_as,
             "song_url": f"/api/file?path={track}&t={int(time.time())}",
             **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
+
+
+def _do_suno_import(wd: Path, clip_id: str) -> dict:
+    from pipeline.suno_music import download_suno_take, import_suno_takes, list_suno_takes
+    from pipeline.assembler import _get_duration
+    with _song_conversion_guard(wd):
+        existing = next((v for v in music_history.history(wd)["versions"]
+                         if v.get("provider") == "suno" and v.get("remote_id") == clip_id), None)
+        if existing:
+            music_history.select(wd, existing["id"])
+        else:
+            with _track_op("Importing the selected Suno take", wd.name, work_dir=str(wd), category="film"):
+                result = download_suno_take(wd, clip_id)
+                import_suno_takes(wd, result, result["request"].get("style", ""))
+        hist = music_history.history(wd)
+        selected = next(v for v in hist["versions"] if v["id"] == hist["selected"])
+        _stamp_song_voice(wd, hist["selected"])
+        path = wd / "song.json"
+        if path.exists():
+            data = json.loads(path.read_text())
+            data.update({"music_engine": "suno", "suno_model": selected.get("model", ""),
+                         "suno_voice_id": selected.get("singing_voice_id", ""),
+                         "generated_at": time.time(), "sung_as": ""})
+            data.pop("seed", None)
+            _write_song(wd, data)
+        track = wd / "background_music.wav"
+        return {"ok": True, "duration": _get_duration(track), "imported_count": 1,
+                "song_url": f"/api/file?path={track}&t={int(time.time())}",
+                "suno_takes": list_suno_takes(wd), **hist}
+
+
+def _run_suno_import(task_id: str, wd: Path, clip_id: str, remix: bool = False) -> None:
+    try:
+        result = _do_suno_import(wd, clip_id)
+        if remix:
+            _film_checkpoint(task_id)
+            final_path = _remux_with_current_music(wd)
+            _film_tasks[task_id] = {"status": "done", "final_url": _busted_file_url(Path(final_path)),
+                                    "music_history": music_history.history(wd), **result}
+        else:
+            _script_tasks[task_id] = {"status": "done", "result": result}
+    except Exception as exc:
+        if remix:
+            _finish_film_task_error(task_id, exc)
+        else:
+            _script_tasks[task_id] = {"status": "error", "error": str(exc).splitlines()[0][:300]}
+
+
+class SunoTakeBody(BaseModel):
+    clip_id: str
+
+
+@api.post("/api/jobs/{job_id}/song/suno/import")
+def import_suno_song(job_id: str, body: SunoTakeBody) -> dict:
+    wd = _job_wd_or_404(job_id)
+    if not (wd / "song.json").exists():
+        raise HTTPException(404, "This film has no song.")
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_suno_import, args=(task_id, wd, body.clip_id), daemon=True).start()
+    return {"task_id": task_id}
 
 
 @api.post("/api/jobs/{job_id}/song/version/delete")
@@ -6572,6 +6671,70 @@ def inpaint_scene_preview(job_id: str, scene_id: int, body: InpaintBody) -> dict
 
 # ── image engines: list, availability, and automated model install ───────────
 
+@api.get("/api/suno/status")
+def suno_status() -> dict:
+    from pipeline import suno
+    if not suno.is_connected():
+        return {"connected": False, "allowed_models": []}
+    try:
+        usage = suno.account_usage()
+        account = usage.get("suno_account") or {}
+        plan = account.get("plan") or {}
+        return {"connected": True, "plan": plan.get("name", "") if isinstance(plan, dict) else plan,
+                "credits_remaining": account.get("credits_remaining"),
+                "download_credits_remaining": account.get("download_credits_remaining"),
+                "allowed_models": usage.get("allowed_models") or []}
+    except Exception as exc:
+        return {"connected": False, "allowed_models": [], "error": str(exc)}
+
+
+@api.post("/api/suno/connect")
+def suno_connect() -> dict:
+    from pipeline import suno
+    return suno.start_auth_flow()
+
+
+@api.get("/api/suno/auth/status")
+def suno_auth_status() -> dict:
+    from pipeline import suno
+    result = suno.poll_auth_flow()
+    return {**result, **suno_status()} if result.get("status") == "connected" else result
+
+
+@api.post("/api/suno/disconnect")
+def suno_disconnect() -> dict:
+    from pipeline import suno
+    suno.disconnect()
+    return {"connected": False, "status": "disconnected"}
+
+
+@api.get("/api/suno/voices")
+def suno_voices() -> dict:
+    from pipeline import suno
+    if not suno.is_connected():
+        return {"available": False, "voices": []}
+    try:
+        voices = {}
+        for collection in ("own", "loved"):
+            cursor = None
+            seen = set()
+            while True:
+                args = {"collection": collection, "limit": 100}
+                if cursor:
+                    args["cursor"] = cursor
+                page = suno.call_tool("voices-list", args)
+                for voice in page.get("voices") or []:
+                    if voice.get("id"):
+                        voices[voice["id"]] = {"id": voice["id"], "name": voice.get("name") or voice["id"],
+                                               "description": voice.get("description") or ""}
+                cursor = page.get("next_cursor")
+                if not cursor or cursor in seen:
+                    break
+                seen.add(cursor)
+        return {"available": True, "voices": list(voices.values())}
+    except Exception as exc:
+        return {"available": False, "voices": [], "error": str(exc)}
+
 _model_install_tasks: dict[str, dict] = {}
 _model_install_lock = threading.Lock()
 
@@ -6602,6 +6765,9 @@ def list_engines() -> dict:
         """Model file present AND (when the engine needs newer ComfyUI nodes)
         the node class registered — False pinpoints "worker needs an update"."""
         nonlocal worker_version
+        if e.get("provider") == "suno":
+            from pipeline import suno
+            return suno.is_connected()
         if e.get("worker_preflight"):
             # This optional bundle may be installed on only one worker. A
             # representative first worker must not hide a runnable choice.
@@ -6738,6 +6904,8 @@ def install_engine(body: EngineInstallBody) -> dict:
     e = eng.get(body.engine) or eng.get_video(body.engine) or eng.get_music(body.engine)
     if not e:
         raise HTTPException(400, f"Unknown engine: {body.engine!r}")
+    if e.get("provider") == "suno":
+        raise HTTPException(400, "Connect Suno in Settings; it has no worker models to download.")
     if not e.get("models"):
         raise HTTPException(400, "This engine's models are part of the bulk worker install.")
     cfg = gapp.load_config()
@@ -7611,10 +7779,11 @@ def start_generation(body: GenerateBody) -> dict:
         # Score this film? The Create-time choice (stamped on the job) wins over
         # the style's default; music is a final-mix ingredient either way.
         "music_enabled": _job_music_enabled(job_id, ss),
-        # The style's music engine writes the background bed (ACE-Step / MiniMax
-        # Music 3). Stamped like the engines above so a resumed render and a
-        # later Remix re-generation both keep the style's choice.
+        # Keep the style's choice for explicit Song/Remix generation. The
+        # render pipeline uses MiniMax when no imported soundtrack exists.
         "music_engine": gapp._norm_music_engine(ss.get("music_engine")),
+        "suno_model": ss.get("suno_model") or "",
+        "suno_voice_id": ss.get("suno_voice_id") or "",
         "music_vol": ss.get("music_vol"),
         "voice_vol": ss.get("voice_vol"),
         "ambient_vol": ss.get("ambient_vol"),
@@ -8346,6 +8515,7 @@ def _remix_song_info(wd: Path) -> dict | None:
 
 @api.get("/api/remix")
 def remix_load(work_dir: str = Query("")) -> dict:
+    from pipeline.suno_music import list_suno_takes
     wd = Path(work_dir) if work_dir else gapp._latest_work_dir()
     if wd is None:
         raise HTTPException(404, "No job available.")
@@ -8388,6 +8558,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "voices": gapp.get_voice_choices(),
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
+        "suno_takes": list_suno_takes(wd),
+        "music_engine": gapp._norm_music_engine(jc.get("music_engine") or
+                           gapp.style_settings(cfg, jc.get("style_name") or "").get("music_engine")),
         "video_history": final_video_history.history(wd),
         # A song film's song, so the finished film still shows WHAT is being
         # sung (lyrics, current voice) and can re-sing / re-voice from here.
@@ -9505,12 +9678,6 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
     started = _film_task_started_at(task_id) or time.time()
     try:
         _film_checkpoint(task_id)
-        worker_urls = gapp._preview_worker_urls()
-        if not worker_urls:
-            _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
-            return
-        pool = WorkerPool(worker_urls)
-
         jc = _film_job_config(wd)
         title = (jc.get("video_title") or jc.get("title") or wd.name).strip()
         # Duration of the narration video the music plays under; fall back to the
@@ -9529,6 +9696,24 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         except Exception:
             song = {}
         lyrics = lyrics or str(song.get("lyrics") or "")
+        if gapp._norm_music_engine(music_engine) == "suno":
+            from pipeline.suno_music import generate_suno_takes, list_suno_takes
+            ss = gapp.style_settings(cfg, jc.get("style_name") or "")
+            _film_tasks[task_id] = {"status": "running", "step": "music"}
+            generate_suno_takes(
+                title, music_dur, work_dir=wd, caption=music_desc or None,
+                lyrics=lyrics or None, model=jc.get("suno_model", ss.get("suno_model")) or "",
+                voice_id=jc.get("suno_voice_id", ss.get("suno_voice_id")) or "",
+                operation_id=task_id)
+            _film_tasks[task_id] = {"status": "done", "imported_count": 0,
+                                    "suno_takes": list_suno_takes(wd),
+                                    "music_history": music_history.history(wd)}
+            return
+        worker_urls = gapp._preview_worker_urls()
+        if not worker_urls:
+            _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
+            return
+        pool = WorkerPool(worker_urls)
         if lyrics and gapp._norm_music_engine(music_engine) == "minimax-music3":
             voices = {v.get("name"): v for v in (cfg.get("voices") or []) if v.get("name")}
             vocal = (sections(music_desc).get("vocal details")
@@ -9618,7 +9803,7 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
     except Exception:
         gapp.logger.warning("Could not persist music_desc to job_config", exc_info=True)
 
-    tid = f"music_regen_{int(time.time())}"
+    tid = f"music_regen_{uuid.uuid4().hex[:12]}"
     _film_tasks[tid] = {"status": "running", "step": "music"}
     _film_task_meta[tid] = {
         "work_dir": str(wd), "scene_id": 0, "component": "music",
@@ -9628,6 +9813,27 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
         target=_run_music_regen, args=(tid, wd, body.music_desc or ""), daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
+
+
+class SunoRemixTakeBody(SunoTakeBody):
+    work_dir: str
+
+
+@api.post("/api/remix/music/suno/import")
+def import_suno_remix(body: SunoRemixTakeBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    _require_working_video(wd)
+    if not (wd / "combined.mp4").exists():
+        raise HTTPException(404, "Render the film first.")
+    task_id = f"suno_import_{uuid.uuid4().hex[:12]}"
+    _film_tasks[task_id] = {"status": "running", "step": "music"}
+    _film_task_meta[task_id] = {"work_dir": str(wd), "scene_id": 0,
+                               "component": "music", "started_at": time.time()}
+    threading.Thread(target=_run_suno_import,
+                     args=(task_id, wd, body.clip_id, True), daemon=True).start()
+    return {"ok": True, "task_id": task_id}
 
 
 def _remux_with_current_music(wd: Path) -> str:
@@ -17559,8 +17765,9 @@ def _auto_song_needed(cfg: dict, style_name: str = "") -> bool:
 def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
                      style_name: str, n_scenes: int, queue_item_id: str) -> dict:
     """Do unattended what the Song tab does by hand: write the song, QC the
-    lyrics, render the track, and re-voice it — into a fresh work dir the story
-    is then drafted FROM.
+    lyrics, render the track with MiniMax Music 3, and re-voice it — into a
+    fresh work dir the story is then drafted FROM. Unattended generation never
+    spends Suno credits, even when the style selects Suno for manual work.
 
     Order is the point, not convenience. A music video's scene windows are
     timed against the REAL track and each singing take has its stretch of it
@@ -17607,7 +17814,7 @@ def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
             data.update(revised)
             _write_song(wd, data)
 
-    _do_song_generate(wd)
+    _do_song_generate(wd, automatic=True, engine_override="minimax-music3")
 
     # Re-voice the finished track with the style-selected converter. The engine's
     # own vocalist is kept as a version either way, so this is recoverable
@@ -18795,7 +19002,10 @@ def engagement_best_times(body: EngagementBody) -> dict:
 
 @api.get("/api/file")
 def serve_file(path: str = Query(...)):
+    from pipeline import suno
     p = Path(path)
+    if p.resolve() == suno._TOKEN_PATH.resolve():
+        raise HTTPException(404, "File not found.")
     roots = [gapp.OUTPUT_DIR, gapp.VOICES_DIR, gapp.CONFIG_FILE.parent]
     if not _safe_under(p, *roots) or not p.exists():
         raise HTTPException(404, "File not found.")

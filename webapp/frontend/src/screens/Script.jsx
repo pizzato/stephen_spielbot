@@ -3,6 +3,7 @@ import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Ba
 import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
+import SunoTakes from './SunoTakes.jsx'
 import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines, ActedTakes } from '../acted.jsx'
 import { styleLineage, resolveStyle } from '../styleUtils.js'
 
@@ -142,6 +143,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // A song film's song (music-video format): caption + tagged lyrics the music
   // model sings. 404 for every other film — the tab simply doesn't appear.
   const [song, setSong] = useState(null)
+  const sunoSong = song?.music_engine === 'suno'
   const musicVideo = !!song || job?.create_brief?.format === 'song'
     || (job?.scenes || []).some((s) => s.singing)
   const [songDraft, setSongDraft] = useState(null)   // {caption, lyrics} while editing
@@ -177,7 +179,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     if (view !== 'song' || !job?.job_id) return
     let alive = true
     const reload = () => api.getSong(job.job_id)
-      .then((fresh) => { if (alive) setSong((cur) => cur ? { ...cur, singers: fresh.singers || [] } : cur) })
+      .then((fresh) => { if (alive) setSong((cur) => cur ? { ...cur, singers: fresh.singers || [], music_engine: fresh.music_engine } : cur) })
       .catch(() => {})
     reload()
     window.addEventListener('focus', reload)
@@ -258,10 +260,22 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                                          add_seconds: addSeconds })
       setSongDraft(null); await refreshSong()
       setSongMsg(!addSeconds
-        ? 'Song generated — listen below, re-voice it, or draft the story.'
+        ? sunoSong ? 'Suno takes ready — preview them below, then use the take you want to download.'
+          : 'Song generated — listen below, re-voice it, or draft the story.'
         : s?.result?.extended
           ? `Same song, about ${addSeconds}s longer — the take you had is the context and is kept as-is; only the new ending is generated.`
             : `Sung again about ${addSeconds}s longer — this take can't be continued in place, so it's a fresh take. Pick whichever ends better below.`)
+    } catch (e) {
+      setError(e.message)
+      if (sunoSong) await api.getSong(job.job_id).then(setSong).catch(() => {})
+    } finally { setBusy('') }
+  }
+  const importSunoTake = async (clipId) => {
+    setBusy(`song-suno-import:${clipId}`); setError(''); setSongMsg('')
+    try {
+      await api.songSunoImport(job.job_id, clipId)
+      await refreshSong()
+      setSongMsg('Chosen Suno take imported and selected — listen below, re-voice it, or draft the story.')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   // The other half of the same problem: keep this take and just give it a
@@ -1652,7 +1666,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Button variant={song.song_url ? 'ghost' : 'primary'} icon="music"
                   disabled={!!busy || !(songDraft ?? song).lyrics?.trim()}
                   onClick={() => generateSongTrack()}>
-                  {busy === 'song-gen' ? 'Singing it…' : song.song_url ? 'Generate again' : '1. Generate the song'}
+                  {busy === 'song-gen' ? 'Singing it…' : sunoSong ? 'Generate two Suno takes' : song.song_url ? 'Generate again' : '1. Generate the song'}
                 </Button>
                 {song.song_url && !!songVoiceSel && (
                   <Button variant="ghost" icon="microphone-lines" disabled={!!busy || !song.svc_available}
@@ -1662,6 +1676,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 )}
                 {song.sung_as && <span className="muted" style={{ fontSize: 12.5 }}>♪ currently sung as <strong>{song.sung_as}</strong></span>}
               </div>
+              {sunoSong && <p className="muted" style={{ fontSize: 12.5 }}>
+                Suno generates two takes using generation credits. Play on Suno before choosing which to download; Use this take imports only that song and may spend one download credit. Automation generates new music with MiniMax Music 3. Choose your Suno model and singing voice in Settings → Styles → Narrator &amp; audio.
+              </p>}
+              <SunoTakes takes={song.suno_takes} busy={!!busy}
+                importing={busy.startsWith('song-suno-import:') ? busy.slice('song-suno-import:'.length) : ''}
+                onUse={importSunoTake} />
               {song.song_url && (
                 <p className="muted" style={{ fontSize: 12.5 }}>
                   {song.svc_available
@@ -1677,7 +1697,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   a blunt ending needs a tail, an unfinished one needs room. */}
               {song.song_url && (
                 <Field label="Ending"
-                  hint={`Currently ${(Number(song.duration) || 0).toFixed(0)} s. Extending the take fades its last seconds out into ${extendOk ? extendSecsN : 'X'} s of silence — instant, nothing is re-generated, and the arrangement you approved is untouched. Re-generating longer continues the same song: the take in use is kept as it is and the model sings only the added tail, finishing the words it cut off. Either way the current one stays in the list below.`}>
+                  hint={`Currently ${(Number(song.duration) || 0).toFixed(0)} s. Extending the take fades its last seconds out into ${extendOk ? extendSecsN : 'X'} s of silence — instant, nothing is re-generated, and the arrangement you approved is untouched. ${sunoSong ? 'Suno continuation is not available here. The current take stays in the list below.' : 'Re-generating longer continues the same song: the take in use is kept as it is and the model sings only the added tail, finishing the words it cut off. Either way the current one stays in the list below.'}`}>
                   <div className="row center gap-8 row--wrap">
                     <input className="input" type="number" min={0.5} max={30} step={0.5}
                       style={{ width: 110 }} value={extendSecs} disabled={!!busy}
@@ -1687,10 +1707,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                       disabled={!!busy || !extendOk} onClick={extendSongTail}>
                       {busy === 'song-extend' ? 'Extending…' : 'Extend the ending'}
                     </Button>
-                    <Button variant="ghost" icon="music"
+                    {!sunoSong && <Button variant="ghost" icon="music"
                       disabled={!!busy || !extendOk} onClick={() => generateSongTrack(extendSecsN)}>
                       {busy === 'song-gen-longer' ? 'Singing it longer…' : 'Re-generate that much longer'}
-                    </Button>
+                    </Button>}
                   </div>
                 </Field>
               )}

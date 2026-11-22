@@ -175,8 +175,10 @@ Music videos only. Where the film's song comes from:
 ## Singing voice
 
 Music videos only. Who sings the film: the vocalist is described to the music model from
-this voice's gender, age and tone — matched by description, never cloned, because the music
-engines cannot be handed a voice. Left on **Automatically choose the singer**, news videos
+this voice's gender, age and tone. This library selection describes the vocalist;
+Suno's separate **Suno singing voice** setting selects a voice available in your Suno
+account under **Settings → Styles → Narrator & audio**.
+Left on **Automatically choose the singer**, news videos
 prefer their main available news character; other videos use the style's cast or let
 the songwriter define a vocalist when no cast is available. You
 can change it, and actually re-voice the finished track, in the

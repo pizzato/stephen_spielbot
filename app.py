@@ -255,9 +255,12 @@ DEFAULT_CFG = {
     # Ref2VA model for acted scenes: portraits
     # and dialogue instead of a first frame. Narrated films never use it.
     "default_reference_engine": "minimax-h3-ref-w4a8",
-    # Music engine per style (see pipeline/engines.py MUSIC_ENGINES): which model
-    # writes the background bed. Default = ACE-Step 1.5.
+    # Music engine for explicit Song/Remix generation. Automatic songs and
+    # render-time scoring use MiniMax Music 3.
     "default_music_engine": "ace-step",
+    # Empty uses the connected Suno account's default model.
+    "default_suno_model": "",
+    "default_suno_voice_id": "",
     # Singing voice conversion per style; choosing a model does not enable
     # automatic re-voicing (youtube_auto_song_revoice remains opt-in).
     "default_svc_engine": "soulx-svc",
@@ -607,8 +610,10 @@ STYLE_FIELD_TO_FLAT = {
     "second_pass_steps":    "second_pass_steps",
     # Narrator & audio mix
     "music_enabled":        "music_enabled",
-    # Music engine selection (background bed) — see pipeline/engines.py MUSIC_ENGINES
+    # Manual music generation — see pipeline/engines.py MUSIC_ENGINES
     "music_engine":         "default_music_engine",
+    "suno_model":           "default_suno_model",
+    "suno_voice_id":        "default_suno_voice_id",
     "svc_engine":           "default_svc_engine",
     # Music videos: whisper-align lyric lines to the sung track at divide time
     "song_align_lyrics":    "default_song_align_lyrics",
@@ -1279,6 +1284,8 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "h3_first_frames", _norm_h3_first_frames)
         _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "music_engine", _norm_music_engine)
+        _coerce(row, "suno_model", lambda v: v.strip() if isinstance(v, str) else "")
+        _coerce(row, "suno_voice_id", lambda v: v.strip() if isinstance(v, str) else "")
         _coerce(row, "svc_engine", _norm_svc_engine)
         _coerce(row, "song_align_lyrics", _norm_song_align_lyrics)
         _coerce(row, "tts_engine", _norm_tts_engine)

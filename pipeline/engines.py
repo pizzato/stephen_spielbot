@@ -874,10 +874,9 @@ def public_list_reference() -> list[dict]:
 
 
 # ── Music engines (per-style ``music_engine``) ───────────────────────────────
-# The background-music bed, generated once per film and mixed under the
-# narration. ACE-Step 1.5 Turbo is the default; MiniMax Music 3 is opt-in and
-# needs newer ComfyUI nodes. Both graphs take the same three placeholders
-# (TAGS/DURATION/SEED), so comfyui.generate_music only swaps the workflow file.
+# Manual song and background-music regeneration choices. Automatic songs and
+# render-time scoring use MiniMax Music 3. Suno runs through its account
+# connection on the controller, with no ComfyUI model download.
 MUSIC_ENGINES: dict[str, dict] = {
     "ace-step": {
         "key": "ace-step",
@@ -906,6 +905,18 @@ MUSIC_ENGINES: dict[str, dict] = {
             _model("Comfy-Org/ace_step_1.5_ComfyUI_files",
                    "split_files/text_encoders/qwen_4b_ace15.safetensors", "models/text_encoders"),
         ],
+    },
+    "suno": {
+        "key": "suno",
+        "label": "Suno",
+        "sub": "Connected account · account credits · plan-dependent rights",
+        "provider": "suno",
+        "commercial_ok": None,
+        "license": "Suno terms (plan-dependent)",
+        "license_note": ("Usage rights depend on your Suno plan, the track and Suno's applicable terms. "
+                         "Check the track's Suno licence before commercial use."),
+        "timeout": 1800,
+        "models": [],
     },
     "minimax-music3": {
         "key": "minimax-music3",
@@ -961,4 +972,5 @@ def resolve_music(key: str) -> dict:
 
 def public_list_music() -> list[dict]:
     """Compact music-engine descriptors for the Settings UI."""
-    return [_public_video(e) for e in MUSIC_ENGINES.values()]
+    return [{**_public_video(e), "provider": e.get("provider", "comfy")}
+            for e in MUSIC_ENGINES.values()]

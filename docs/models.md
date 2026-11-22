@@ -16,7 +16,7 @@ rebuilds.
 | [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) | ~40 GB | Scene video generation (default engine; gated repo — needs an HF token) |
 | [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) | ~28 GB | Keyframed establishing shots + Remix spatial upscalers |
 | [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) | ~16 GB | Scene first-frame images and the "Edit image" inpaint |
-| [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music (default engine) |
+| [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music (default manual engine) |
 | [FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) | ~7 GB | Default finishing / Edit-film upscaler (video super-resolution) |
 | Chatterbox Multilingual | ~3.5 GB | Optional multilingual narration (pre-warmed into each TTS worker's HF cache) |
 | LibriVox character voices | small | 10 public-domain voices auto-cast onto script characters (`make download-voices`) |
@@ -546,15 +546,45 @@ huggingface-cli download lightx2v/Minimax-h3-Turbo minimax_h3_ref2v_turbo_4step_
 
 ## Music engines (per style)
 
-Each style picks the model that writes its background bed under **Settings →
-Styles → Narrator & audio → Music model** (shown only when music is on); child
-styles inherit the choice like every other style field. Download either engine
-per worker from **Settings → Infrastructure → Music models**.
+Each style picks the model that writes its songs and background bed under **Settings →
+Styles → Narrator & audio → Manual music generation** (shown only when music is on); child
+styles inherit the choice like every other style field. Download local engines
+per worker, or connect Suno, from **Settings → Infrastructure → Music models**.
+This choice controls explicit **Generate the song** and **Regenerate music** actions.
+The read-only **Automatic music: MiniMax Music 3** row shows the fixed automatic
+engine, including scoring during rendering, regardless of the style's manual
+selection. An already imported soundtrack is reused without generating another.
+Suno requires manual generation followed by **Use this take** to import a song.
 
 | Engine | Character | License |
 |---|---|---|
-| **ACE-Step 1.5 Turbo** (default) | ~5 GB, 8 sampling steps, seconds per film. Instrumental beds from a tag list, any length | Apache-2.0 |
-| **MiniMax Music 3** (opt-in) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps. Song-shaped and higher fidelity, capped at 6 minutes. Measured on a GB10 worker: **83 s for a 30 s bed** | MiniMax-Music3 Community License |
+| **ACE-Step 1.5 Turbo** (manual default) | ~5 GB, 8 sampling steps, seconds per film. Instrumental beds from a tag list, any length | Apache-2.0 |
+| **MiniMax Music 3** (automatic) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps. Song-shaped and higher fidelity, capped at 6 minutes. Measured on a GB10 worker: **83 s for a 30 s bed** | MiniMax-Music3 Community License |
+| **Suno** (account connection) | Cloud generation through the official MCP service. Models and singing voices come from your account; no music weights or GPU worker required | Suno terms and account entitlements |
+
+Suno notes:
+
+- Sign in inside Spielbot's Infrastructure settings. This is a separate connection
+  from a Suno MCP connection in Codex; Spielbot keeps its own authorization.
+- Select **Suno model** and **Suno singing voice** per style. Blank selections use
+  the account's default model and the model's own vocalist. The voice picker lists
+  voices already available in Suno; create or clone voices in Suno itself.
+- Each generation creates two songs. Manual generation shows both as previews;
+  open **Play on Suno** to listen before downloading. Choose
+  **Use this take** to download and select that song. Only imported takes join the
+  normal version strip. Unchosen takes remain in Suno.
+  Suno's MCP service provides song links rather than an embedded audio stream.
+- Generation credits and download entitlements are separate. Imports can spend
+  one download credit per chosen take when Suno requires it; manual previews do
+  not request a download. The connection panel shows
+  the live account balances.
+- Usage rights depend on Suno's terms and the track's generation plan. Check the
+  licence of each track in Suno before commercial use.
+- Suno continuation is not available in Spielbot. The Song tab can still extend
+  a downloaded take's ending with a local fade and silence.
+
+See Suno's [official MCP setup](https://suno.com/mcp) and
+[connection guide](https://help.suno.com/en/articles/14551425) for the service itself.
 
 MiniMax Music 3 notes:
 

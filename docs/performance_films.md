@@ -123,7 +123,7 @@ The pipeline handles the song and its visuals together:
   writes the film's **song** (`song.json` in the work dir): tagged lyrics —
   `[Verse]`/`[Chorus]`/`[Bridge]` — telling the story's arc in singable lines, plus a
   music **caption** (genre, tempo, mood, arrangement) that becomes the film's music
-  description. Both music engines sing lyrics natively; the caption reads best structured,
+  description. The music engines sing lyrics natively; the caption reads best structured,
   and for song films it must *not* say "instrumental".
   The lyrics are also saved as UTF-8 `lyrics.txt` beside `song.json`, with section
   tags and line breaks preserved. Saving or re-writing the lyrics updates this
@@ -195,7 +195,7 @@ The pipeline handles the song and its visuals together:
   change the sound. The script's [Song tab](manual/script.md#song) edits — or re-writes
   with the LLM — both the words and the sound.
 
-**When it stops dead.** Both engines fill exactly the seconds they are asked for, so a
+**When it stops dead.** The local engines fill the seconds they are asked for, so a
 song can end mid-bar or mid-word. The Song tab's **Ending** control cures either fault:
 *Extend the ending* fades the take's last seconds out into a tail of silence (ffmpeg on
 the controller — the approved arrangement is kept and the extended track becomes the
@@ -204,9 +204,14 @@ longer* continues the take in use: MiniMax Music 3 re-runs the same seed at the 
 length so the extra seconds finish the words it cut off, and the take you heard is
 kept as it is (not sung again). A take with no saved seed falls back to a fresh longer
 take — the Song tab says which happened. Both keep the previous track as a version.
+Suno chooses its generated track's length, which becomes the film's song duration.
+Suno continuation is not available in Spielbot; **Extend the ending** still works on
+the downloaded take.
 
-**Whose voice sings?** Two levels. The music engines can't clone a voice, so at
-generation time the chosen singing voice only *describes* the vocalist (below). But the
+**Whose voice sings?** The library **Singing voice** selection *describes* the vocalist
+at generation time (below). Suno also supports a separate **Suno singing voice**
+picker under **Settings → Styles → Narrator & audio**, using voices already available
+in your connected Suno account. Create or clone Suno voices in Suno itself. The
 song panel's **"Sing this as [voice]"** step clones the voice's timbre into the existing
 performance. **SoulX-Singer SVC** is the default; choose **Seed-VC** under
 [Settings → Styles → Narrator & audio → Singing voice conversion](manual/settings.md#narrator-audio)
@@ -267,10 +272,21 @@ matched by description, not by cloning.
 Lip movement is a performance, not a phoneme-accurate sync — exactly like a real music
 video shot without playback.
 
-**Engine choice matters.** MiniMax Music 3's caption-driven vocals are the stronger
+**Engine choice matters.** Among the local engines, MiniMax Music 3's caption-driven vocals are the stronger
 singer; ACE-Step also sings but our workflow pins its BPM, key and **English-only**
-language, so non-English songs need Music 3. And Music 3 caps a track at ~6 minutes — a
+language, so use Music 3 for non-English songs generated locally. Music 3 caps a track at ~6 minutes — a
 longer film loops the song, restart audible, so keep song films short.
+
+**Suno** is the account-based alternative, connected under **Settings → Infrastructure
+→ Music models** without music weights or a GPU worker. Select its model and optional
+Suno singing voice per style. Manual generation shows both songs for preview without
+downloading them; **Play on Suno** opens each song to listen, then **Use this take**
+to import only your choice. Unchosen songs remain in Suno. Automatic music generation,
+including scoring during rendering, always uses MiniMax Music 3, regardless of the
+style's manual model selection; it reuses an already imported song. Suno creates two songs per request. Generation credits and download
+entitlements are separate: importing a chosen take may spend one download credit.
+Usage rights depend on Suno's terms and the track's generation plan;
+see [Music engines](models.md#music-engines-per-style).
 
 !!! note "It is still one song under many takes"
     H3 cannot lip-sync to an external track (it writes picture and audio together), so a

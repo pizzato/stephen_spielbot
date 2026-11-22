@@ -40,6 +40,12 @@ export const api = {
   listEngines: () => req('GET', '/models/engines'),
   installEngine: (engine) => req('POST', '/models/install', { engine }),
   installEngineStatus: (taskId) => req('GET', `/models/install/status?task_id=${encodeURIComponent(taskId)}`),
+  // Suno's cloud account connection, independent of worker model installs.
+  sunoStatus: () => req('GET', '/suno/status'),
+  sunoConnect: () => req('POST', '/suno/connect'),
+  sunoAuthStatus: () => req('GET', '/suno/auth/status'),
+  sunoDisconnect: () => req('POST', '/suno/disconnect'),
+  sunoVoices: () => req('GET', '/suno/voices'),
   // TTS narration models (per-style voice engine) — reuses the install-status machinery.
   listTtsEngines: () => req('GET', '/models/tts-engines'),
   installTtsEngine: (engine) => req('POST', '/models/tts-install', { engine }),
@@ -146,6 +152,15 @@ export const api = {
       const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
       if (s.status === 'done') return s
       if (s.status === 'error') throw new Error(s.error || 'Song generation failed.')
+    }
+  },
+  songSunoImport: async (jobId, clipId) => {
+    const { task_id } = await req('POST', `/jobs/${encodeURIComponent(jobId)}/song/suno/import`, { clip_id: clipId })
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error' || s.status === 'cancelled') throw new Error(s.error || 'Suno import failed.')
     }
   },
   // Extend an abrupt ending: the take's last seconds fade out into `seconds` of
@@ -328,6 +343,15 @@ export const api = {
   listLocalizeLanguages: () => api.listTtsEngines().then((r) =>
     (r.engines || []).find((e) => e.key === 'chatterbox-multilingual')?.languages || {}),
   regenMusic: (body) => req('POST', '/remix/music', body),
+  remixSunoImport: async (workDir, clipId) => {
+    const { task_id } = await req('POST', '/remix/music/suno/import', { work_dir: workDir, clip_id: clipId })
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const s = await req('GET', `/films/task?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error' || s.status === 'cancelled') throw new Error(s.error || 'Suno import failed.')
+    }
+  },
   // "Sing it as [voice]" on a finished song film: the SVC model re-voices the song
   // and the final is re-muxed with it. Returns a film task to poll.
   revoiceSong: (workDir, voice) => req('POST', '/remix/song-voice', { work_dir: workDir, voice }),

@@ -6,6 +6,7 @@ import {
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
+import SunoTakes from './SunoTakes.jsx'
 import WorkingFiles from './WorkingFiles.jsx'
 import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines } from '../acted.jsx'
 
@@ -886,6 +887,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
   const [musicHistory, setMusicHistory] = useState(null)
   const [videoHistory, setVideoHistory] = useState(null)
   const [musicBusy, setMusicBusy] = useState(false)
+  const [sunoImportId, setSunoImportId] = useState('')
   const [realignBusy, setRealignBusy] = useState(false)
   const [realignResult, setRealignResult] = useState(null)
   const [songVoice, setSongVoice] = useState('')    // "Sing it as" (song films)
@@ -1184,7 +1186,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
               clearInterval(poll)
               if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
               if (t.music_history) setMusicHistory(t.music_history)
-              setStatus('Regenerated the music and re-muxed the film.')
+              if (t.suno_takes) setData((d) => ({ ...d, suno_takes: t.suno_takes }))
+              setStatus(t.suno_takes?.length
+                ? 'Suno takes ready — preview them, then use one to download it and update the film.'
+                : 'Regenerated the music and re-muxed the film.')
               resolve()
             } else if (t.status === 'error' || t.status === 'cancelled') {
               clearInterval(poll); reject(new Error(t.error || `Music regen ${t.status}.`))
@@ -1192,7 +1197,24 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
           } catch (e) { clearInterval(poll); reject(e) }
         }, 3000)
       })
-    } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+    } catch (e) {
+      setError(e.message)
+      if (data.music_engine === 'suno' || data.song?.music_engine === 'suno') {
+        await api.loadRemix(workDir).then((fresh) => setData((d) => ({ ...d, suno_takes: fresh.suno_takes }))).catch(() => {})
+      }
+    } finally { setMusicBusy(false) }
+  }
+
+  const importSunoTake = async (clipId) => {
+    setMusicBusy(true); setSunoImportId(clipId); setError(''); setStatus('')
+    try {
+      const t = await api.remixSunoImport(data.work_dir, clipId)
+      if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+      if (t.music_history) setMusicHistory(t.music_history)
+      if (t.suno_takes) setData((d) => ({ ...d, suno_takes: t.suno_takes }))
+      setStatus('Chosen Suno take imported and the film re-muxed with it.')
+    } catch (e) { setError(e.message) }
+    finally { setMusicBusy(false); setSunoImportId('') }
   }
 
   // Re-voice a song film's song and re-mux the final with it. Slow
@@ -2338,7 +2360,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
             </Field>
           </div>
           <div className="mt-24 row center gap-10 row--wrap">
-            <Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button>
+            <Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{sunoImportId ? 'Importing song…' : musicBusy ? 'Regenerating music…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button>
             {data?.song && (
               <>
                 <select className="select" style={{ maxWidth: 240 }} value={songVoice}
@@ -2353,6 +2375,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
               </>
             )}
           </div>
+          {(data.music_engine === 'suno' || data.song?.music_engine === 'suno') && <p className="muted" style={{ fontSize: 12.5 }}>
+            Suno generates two previews. Use this take downloads only your chosen song and may spend one download credit, then updates the film with it.
+          </p>}
+          <SunoTakes takes={data.suno_takes} busy={anyBusy} importing={sunoImportId} onUse={importSunoTake} />
           {data?.song && (
             <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
               {data.song.svc_available

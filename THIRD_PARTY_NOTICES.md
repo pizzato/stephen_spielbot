@@ -84,6 +84,11 @@ licence; the video-model terms below do not substitute for it.
 
 ## Runtime tools
 
+- **MCP Python SDK** (`mcp`, 1.x) —
+  [MIT](https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/LICENSE).
+  Used for Suno's official hosted MCP service, OAuth account connection and music
+  generation. Suno is a separate service; no Suno model weights are bundled.
+  Output rights follow the Suno plan active when a song is generated.
 - **ComfyUI** — GPL-3.0 (run as a separate service; not linked into this code).
 - **FFmpeg** — used as an external binary; your build is typically LGPL/GPL.
   Stephen Spielbot calls it as a subprocess and does not bundle it.

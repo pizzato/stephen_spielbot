@@ -1484,6 +1484,10 @@ def _finish_upscale_scenes(
 def main(work_dir: Path) -> None:
     global _PROGRESS_STORE, _PROGRESS_JOB_ID
     cfg = load_job_config(work_dir)
+    # Rendering reuses an imported soundtrack, or makes missing music with
+    # MiniMax. The style's music choice applies to explicit Song/Remix actions.
+    music_engine = _engines.resolve_music("minimax-music3")
+    cfg["music_engine"] = music_engine["key"]
 
     # Load script
     script_data = json.loads((work_dir / "script.json").read_text())
@@ -1931,15 +1935,6 @@ def main(work_dir: Path) -> None:
     else:
         write_progress(status_file, tts_band[1], f"Generating background music ({music_dur:.0f}s)…")
         _MAX_MUSIC_ATTEMPTS = 3
-        # Same three-step fallback as the image/video engines above: the stamped
-        # job_config key, then the style row, then the flat default mirror.
-        music_key = cfg.get("music_engine")
-        if not music_key:
-            for s in cfg.get("styles") or []:
-                if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or ""):
-                    music_key = s.get("music_engine")
-                    break
-        music_engine = _engines.resolve_music(music_key or cfg.get("default_music_engine"))
         music_task = task_id(durable_job_id, "music")
         store.update_task_payload(
             music_task,

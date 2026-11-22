@@ -668,7 +668,7 @@ class DurableStore:
                     "music_desc": config.get("music_desc", ""),
                     # A song film's tagged lyrics — the track is sung, not a bed.
                     "music_lyrics": config.get("music_lyrics", ""),
-                    "music_engine": config.get("music_engine"),
+                    "music_engine": "minimax-music3",
                     "output_path": str(Path(work_dir) / "background_music.wav"),
                     "resource_class": resource_classes.get("music", "comfy:music"),
                 },

@@ -68,7 +68,8 @@ def _save(work_dir: Path, data: dict) -> None:
 
 
 def _add_version(work_dir: Path, music: Path, entry: dict, desc: str = "",
-                 voice: str = "", source_id: int | None = None) -> dict:
+                 voice: str = "", source_id: int | None = None,
+                 metadata: dict | None = None) -> dict:
     """Copy *music* into the history dir as a new version and select it.
 
     Mutates and returns *entry*; the caller saves the manifest."""
@@ -79,7 +80,7 @@ def _add_version(work_dir: Path, music: Path, entry: dict, desc: str = "",
     shutil.copy2(music, hist / fname)
     entry.setdefault("versions", []).append(
         {"id": vid, "file": fname, "desc": desc or "", "voice": voice or "",
-         "source_id": int(source_id) if source_id else None})
+         "source_id": int(source_id) if source_id else None, **(metadata or {})})
     entry["selected"] = vid
     entry["next_id"] = vid + 1
     return entry
@@ -101,12 +102,15 @@ def seed_if_empty(work_dir: Path, current: Path, desc: str = "",
 
 
 def record(work_dir: Path, music: Path, desc: str = "", voice: str = "",
-           source_id: int | None = None) -> dict:
+           source_id: int | None = None, *, provider: str = "", remote_id: str = "",
+           model: str = "", singing_voice_id: str = "") -> dict:
     """Add the just-generated track as a new selected version. Returns ``history``."""
     work_dir = Path(work_dir)
     with _LOCK:
         data = _load(work_dir)
-        _add_version(work_dir, Path(music), data, desc, voice, source_id)
+        metadata = ({"provider": provider, "remote_id": remote_id, "model": model,
+                     "singing_voice_id": singing_voice_id} if provider else None)
+        _add_version(work_dir, Path(music), data, desc, voice, source_id, metadata)
         _save(work_dir, data)
     return history(work_dir)
 
@@ -179,7 +183,9 @@ def history(work_dir: Path) -> dict:
         if f.exists():
             versions.append({"id": int(v["id"]), "path": str(f),
                              "desc": v.get("desc", ""), "voice": v.get("voice", ""),
-                             "source_id": v.get("source_id")})
+                             "source_id": v.get("source_id"),
+                             **{k: v[k] for k in ("provider", "remote_id", "model", "singing_voice_id")
+                                if k in v}})
     selected = data.get("selected")
     valid = {v["id"] for v in versions}
     if selected not in valid:

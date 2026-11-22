@@ -169,8 +169,28 @@ rebuild. See [Models → Video engines](../models.md#video-engines-per-style).
 
 ### Music models
 
-ACE-Step 1.5 and the opt-in MiniMax Music 3, downloaded the same way. See
-[Models → Music engines](../models.md#music-engines-per-style).
+ACE-Step 1.5 and the opt-in MiniMax Music 3 are downloaded onto workers. **Suno**
+runs through an account connection and needs no music model download.
+
+Choose **Sign in to Suno**, finish the authorization in your browser, and return to
+Spielbot. The sign-in link is also shown so you can copy it into your default browser.
+Use **Cancel sign-in** to discard a pending authorization and start again.
+The panel updates when connected and shows the account plan, generation credits,
+download credits and available models. **Refresh account** checks the current
+entitlements; **Disconnect** removes Spielbot's connection. These actions save
+immediately, separately from **Save settings**. A connection made in Codex does not
+sign Spielbot in.
+The callback returns to the controller's localhost: use a browser on the controller,
+or forward the callback port to it when signing in from another machine.
+
+Each Suno generation creates two songs. Manual generation shows both for preview;
+**Use this take** downloads only the chosen song. Suno generation is manual only;
+automatic music generation, including scoring during rendering, always uses MiniMax
+Music 3. An already imported soundtrack is reused.
+When Suno charges for downloads, importing a take can use one download credit,
+in addition to the generation charge. Previewing does not request a download.
+Usage rights depend on Suno's terms and the track's plan when
+generated. See [Models → Music engines](../models.md#music-engines-per-style).
 
 ### Voice models
 
@@ -387,13 +407,27 @@ film, either from its **Narrator** card or a scene's **Narration** button. The n
 is saved on that film; its language, pacing and mix settings stay as recorded. See
 [Edit film → Narrator](edit-film.md#narrator).
 
-**Music model** (shown when music is on) picks what writes the bed:
+**Manual music generation** (shown when music is on) picks the model for explicit
+**Generate the song** and **Regenerate music** actions:
 [ACE-Step 1.5](../models.md#music-engines-per-style) — the default, instrumental and quick
 — or the opt-in **MiniMax Music 3**, which is song-shaped and higher fidelity but takes
-minutes per film, caps at 6 minutes, and carries its own community licence. Download
-either under **Infrastructure → Music models**.
+minutes per film, caps at 6 minutes, and carries its own community licence. **Suno**
+uses your connected account. Download local engines or sign in to Suno under
+**Infrastructure → Music models**.
+The read-only **Automatic music: MiniMax Music 3** row is shown in both the style's
+audio settings and **Automation**. This engine is fixed for automatic songs and
+scoring during rendering, regardless of the manual selection. An already imported
+soundtrack is reused. Suno requires manual generation followed by **Use this take**.
 For music videos, MiniMax expands short Sound descriptions into a detailed structured
 caption before generating a fresh take; see the [Song tab](script.md#song).
+
+Selecting Suno reveals **Suno model** and **Suno singing voice**, both inherited by
+child styles. The model list follows the connected account; **Account default** lets
+Suno choose. The voice list contains voices already available in that Suno account,
+subject to its plan and entitlements; leave it on **The model’s own vocalist** to
+generate without a selected Suno voice. Create or clone voices in Suno itself.
+These voices control Suno generation, independently of Spielbot's library voice
+descriptions and the separate conversion engine below.
 
 **Singing voice conversion** chooses **SoulX-Singer SVC** (default) or **Seed-VC** for
 this style's **Sing this as…** / **Sing it as…** actions and automated song re-voicing.
@@ -762,7 +796,11 @@ way round from every other film — the song comes first and the pictures follow
   scenes are then divided against the real track's length and each performed take has its
   own stretch of the song pinned in, so the cast sings the actual words. Off, the song is
   only made at render time, alongside the takes — which means the takes have nothing to
-  sing to and the scene timings are guesses
+  sing to and the scene timings are guesses.
+  **Automatic music: MiniMax Music 3** is fixed for new music, including scoring
+  during rendering, regardless of the style's manual music model. It reuses a
+  soundtrack already imported into the film.
+  Suno model and singing voice selections apply only to manual Suno generation.
 - **Song critic** — `Off`, or **1, 2, 3 passes** of QC over the lyrics (length against the
   clock, singability, hook, subject) before the track is rendered. A pass is one LLM call;
   a bad song caught after the render costs a worker slot

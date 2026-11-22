@@ -122,6 +122,25 @@ workers through standard input and to download tools through their environment.
 The macOS login service (a LaunchAgent that keeps the app running) is opt-in — the
 installer asks, or set `INSTALL_SERVICE=1 make install` to install it without asking.
 
+### Suno account connection
+
+Suno is an optional cloud music provider. It needs no music weights or GPU worker;
+the app's backend dependencies include its MCP client. Under **Settings →
+Infrastructure → Music models**, choose **Sign in to Suno** and complete the
+browser authorization. A free account can connect; the available models, voices,
+generation credits and download entitlements come from the account.
+
+Spielbot has its own connection, separate from Codex's Suno MCP authorization.
+The callback returns to the controller's localhost, so complete sign-in in a
+browser on that machine or forward its callback port when using a remote browser.
+Then select **Suno** under **Styles → Narrator & audio → Manual music generation**, with the
+optional model and singing voice selections. See
+[Music models](manual/settings.md#music-models) for credits and take handling.
+Suno requires explicit generation and **Use this take** to import a song. Automatic
+music generation, including scoring during rendering, always uses MiniMax Music 3,
+which must be available on a GPU worker even when a style selects Suno for manual work.
+An already imported soundtrack is reused.
+
 ### Song voice conversion
 
 Both [singing voice conversion engines](models.md#singing-voice-conversion-per-style)

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, resolutionTier, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import SettingsAssets from './SettingsAssets.jsx'
+import SunoConnection from './SunoConnection.jsx'
 import { NEWS_CHECK_MODES, NEWS_RESEARCH_PROVIDERS, newsCheckLabel, newsProviderLabel } from '../newsUtils.js'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
   globalAutomation, resolveAutomation, automationSource } from '../styleUtils.js'
@@ -1431,6 +1432,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [workerBusy, setWorkerBusy] = useState('')  // host with a start/stop action in flight
   const [clearingDeclined, setClearingDeclined] = useState(false)  // declined-ideas reset in flight
   const [engineInfo, setEngineInfo] = useState(null)  // {engines, availability, hf_token_set, default_engine}
+  const [sunoAccount, setSunoAccount] = useState(null)
+  const [sunoVoices, setSunoVoices] = useState(null)
   const [ttsEngineInfo, setTtsEngineInfo] = useState(null)  // {engines, availability, default_engine}
   const [fontInfo, setFontInfo] = useState(null)  // [{path, name}] — host fonts for cover text
   const [fontBundled, setFontBundled] = useState([])  // [{path, name}] — fonts shipped in assets/fonts
@@ -1459,6 +1462,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   // the download buttons). Refreshed after an install completes.
   const reloadEngines = () => api.listEngines().then(setEngineInfo).catch(() => {})
   useEffect(() => { reloadEngines() }, [])
+  useEffect(() => {
+    api.sunoAuthStatus().then(setSunoAccount).catch((e) => setSunoAccount({ connected: false, error: e.message }))
+  }, [])
+  useEffect(() => {
+    let active = true
+    setSunoVoices(null)
+    if (sunoAccount?.connected) api.sunoVoices()
+      .then((r) => { if (active) setSunoVoices(r) })
+      .catch((e) => { if (active) setSunoVoices({ voices: [], error: e.message }) })
+    return () => { active = false }
+  }, [sunoAccount])
   const installEngine = async (key) => {
     setEngInstall((m) => ({ ...m, [key]: { status: 'running' } }))
     try {
@@ -1683,6 +1697,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return (engineInfo?.video_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'music_engine':
         return (engineInfo?.music_engines || []).find((e) => e.key === v)?.label || String(v || '')
+      case 'suno_model':
+        return v || '(account default)'
+      case 'suno_voice_id':
+        return (sunoVoices?.voices || []).find((voice) => voice.id === v)?.name || v || '(model’s own vocalist)'
       case 'svc_engine':
         return v === 'seed-vc' ? 'Seed-VC' : 'SoulX-SVC'
       case 'tts_engine':
@@ -2354,12 +2372,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={12} className="reveal reveal-d2">
             <div className="row center between">
               <span className="label-sm">Music models</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>pick per style under <strong>Styles</strong> · download here</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>pick per style under <strong>Styles</strong> · download or connect here</span>
             </div>
             <div className="stack gap-10 mt-16">
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {(engineInfo?.music_engines || []).map((e) => {
-                const avail = engineInfo?.music_availability?.[e.key]
+                const remote = e.provider === 'suno'
+                const avail = remote ? sunoAccount?.connected : engineInfo?.music_availability?.[e.key]
                 const updateWorker = engineInfo?.worker_updates?.[e.key]
                 const ins = engInstall[e.key]
                 const running = ins?.status === 'running'
@@ -2368,8 +2387,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     <div className="grow">
                       <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 600 }}>{e.label}</span>
-                        {avail === true && <Chip tone="ok" dot>installed</Chip>}
-                        {avail === false && <Chip tone="warn">{updateWorker ? 'worker update required' : 'not installed'}</Chip>}
+                        {avail === true && <Chip tone="ok" dot>{remote ? 'connected' : 'installed'}</Chip>}
+                        {avail === false && <Chip tone="warn">{remote ? 'sign in below' : updateWorker ? 'worker update required' : 'not installed'}</Chip>}
                       </div>
                       <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
                       {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
@@ -2387,6 +2406,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </div>
                 )
               })}
+              <SunoConnection account={sunoAccount} onChange={setSunoAccount} />
               <div className="field__hint">MiniMax Music 3 is ~14 GB per worker and needs ComfyUI ≥ v0.33.0 for its nodes — “not installed” with the weights already downloaded means the worker container needs a rebuild. It writes song-shaped tracks and takes minutes where ACE-Step takes seconds (measured on a GB10: 83 s for a 30 s bed); it also stops at 6 minutes, and a longer film loops the bed.</div>
             </div>
           </Card>
@@ -3191,9 +3211,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   label="Add background music" />
                 <ParentVal k="music_enabled" />
               </Field>
+              <div className="stack gap-8">
+                <strong>Automatic music: MiniMax Music 3</strong>
+                <div className="field__hint">Fixed for automatic songs and scoring during rendering. An already imported soundtrack is reused.</div>
+              </div>
               {engineInfo && eff.music_enabled !== false && (
-                <Field label="Music model"
-                  hint="Writes the background bed. ACE-Step is quick and stays instrumental; MiniMax Music 3 writes song-shaped tracks at much higher quality but takes minutes per film and caps at 6 minutes. Download models under Infrastructure.">
+                <Field label="Manual music generation"
+                  hint="Choose the model for Generate the song and Regenerate music. Suno creates two takes to play on Suno; Use this take downloads your choice. Download models or sign in under Infrastructure.">
                   <select className="select" value={eff.music_engine || engineInfo.default_music_engine || 'ace-step'} onChange={(e) => setStyleField('music_engine', e.target.value)}>
                     {(engineInfo.music_engines || []).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}</option>
@@ -3205,6 +3229,34 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     return sel?.license_note ? <div className="field__hint" style={{ marginTop: 6 }}>{sel.license_note}</div> : null
                   })()}
                 </Field>
+              )}
+              {(eff.music_engine || engineInfo?.default_music_engine) === 'suno' && (
+                <>
+                  <Field label="Suno model" hint="Account default follows the models available to your connected Suno plan. Preview both takes manually and import your choice. Automation generates new music with MiniMax Music 3.">
+                    <select className="select" value={eff.suno_model || ''} onChange={(e) => setStyleField('suno_model', e.target.value)}>
+                      <option value="">Account default</option>
+                      {eff.suno_model && !(sunoAccount?.allowed_models || []).includes(eff.suno_model) && (
+                        <option value={eff.suno_model}>{eff.suno_model} ({sunoAccount?.connected ? 'unavailable — choose another' : 'saved selection'})</option>
+                      )}
+                      {(sunoAccount?.allowed_models || []).map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                    <ParentVal k="suno_model" />
+                    {!sunoAccount?.connected && <div className="field__hint">Sign in to Suno under Infrastructure → Music models before generating.</div>}
+                  </Field>
+                  <Field label="Suno singing voice" hint="Use a singing voice from your Suno account. Available voices depend on your account and plan. This controls Suno generation; library voice conversion is selected separately below.">
+                    <select className="select" value={eff.suno_voice_id || ''} onChange={(e) => setStyleField('suno_voice_id', e.target.value)}>
+                      <option value="">The model’s own vocalist</option>
+                      {eff.suno_voice_id && !(sunoVoices?.voices || []).some((voice) => voice.id === eff.suno_voice_id) && (
+                        <option value={eff.suno_voice_id}>{eff.suno_voice_id} ({sunoVoices ? 'unavailable — choose another' : 'saved selection'})</option>
+                      )}
+                      {(sunoVoices?.voices || []).map((voice) => <option key={voice.id} value={voice.id}>{voice.name || voice.id}</option>)}
+                    </select>
+                    <ParentVal k="suno_voice_id" />
+                    {sunoAccount?.connected && !sunoVoices && <div className="field__hint">Loading your Suno voices…</div>}
+                    {sunoVoices?.error && <div className="field__hint" style={{ color: 'var(--warn)' }}>{sunoVoices.error}</div>}
+                    {sunoVoices && !sunoVoices.error && !sunoVoices.voices?.length && <div className="field__hint">No singing voices are available from this Suno account.</div>}
+                  </Field>
+                </>
               )}
               <Field label="Singing voice conversion"
                 hint="The model used when you re-voice a song as a library voice. Choosing a model does not turn on automatic re-voicing.">
@@ -3664,6 +3716,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <div className="row center between">
               <span className="label-sm">Automation</span>
               <span className="muted" style={{ fontSize: 11.5 }}>Global is the baseline; a style overrides only what it changes, and styles under it inherit that.</span>
+            </div>
+            <div className="stack gap-8 mt-16">
+              <strong>Automatic music: MiniMax Music 3</strong>
+              <div className="field__hint">Fixed for every style, including scoring during rendering. An already imported soundtrack is reused. Suno requires manual generation and Use this take.</div>
             </div>
             {styles.some((s) => s.parent) ? (() => {
               const cells = []

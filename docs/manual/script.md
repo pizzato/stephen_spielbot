@@ -105,23 +105,38 @@ the format does to the render.
   voice), re-writing the sound describes the music for the lyrics you have. Either way
   everything is saved, unsaved edits included.
 - **Singing voice** — a library voice whose casting metadata (gender, age, tone)
-  *replaces* the Vocalist description at generation (the engines cannot be handed a
-  voice — either way the vocalist is only described). It is also the target of the
+  *replaces* the Vocalist description at generation. This library selection describes
+  the vocalist; Suno's separate **Suno singing voice** setting selects an available
+  voice in your Suno account. The library voice is also the target of the
   re-voicing below, which is an actual clone. The story is drafted for the voice the track
   in use was sung as: the re-voicing when there is one, else this voice, else the Vocalist.
 - **Save edits** keeps your typing (**Discard edits** throws it away); **Generate the
-  song** renders the track on a worker, and **Sing this as [voice]** re-voices it with
+  song** renders the track on a worker or through the connected Suno account, and **Sing this as [voice]** re-voices it with
   the style's **Singing voice conversion** engine — **SoulX-Singer SVC** by default,
   or **Seed-VC** selected in [Settings → Styles → Narrator & audio](settings.md#narrator-audio).
   Wait for the current re-voicing to finish before starting another for the same film,
   including one started in the finished-film editor.
-  It always converts the sung original, never a previous re-voicing. Every generation
-  and re-voicing is kept as a version — the one marked *In use* is the film's track and the one every operation
+  It always converts the sung original, never a previous re-voicing. Every local generation,
+  imported Suno take and re-voicing is kept as a version — the one marked *In use* is the film's track and the one every operation
   works from: extending, re-generating longer and re-voicing all act on it (a
   re-voicing in use is converted from its own sung source, not from the newest take),
   and they travel with the film
   so either side of a re-voicing can be
   [put back after the render](edit-film.md#a-song-films-song) too.
+- **Suno previews** — manual generation shows both songs Suno creates without
+  downloading them. Choose **Play on Suno** to audition each take in Suno; the MCP
+  service does not provide an embedded audio stream. **Use this take** imports only that song and
+  selects it for the film; it then appears in the saved version strip. Importing
+  can spend one download credit, separately from generation credits. Using an
+  already imported take reuses its local file. Automatic music generation, including
+  scoring during rendering, always uses MiniMax Music 3; it reuses a song you have
+  already imported.
+  Sign in and check the balances under **Settings → Infrastructure → Music models**;
+  select the Suno model and singing voice under **Styles → Narrator & audio**.
+  If generation takes longer than the app can wait, its saved song links still
+  appear as **Still generating**. Open them on Suno to check progress. **Use this
+  take** waits for the selected song to finish before importing it; you do not
+  need to generate and pay for another pair.
 - **Deleting a version** — landing a song takes takes, and the list only grows. The **×**
   beside a version you aren't using deletes it (click it again to confirm); the file goes
   with it. The version *in use* has no × — put another one back first — and the last
@@ -137,11 +152,13 @@ the format does to the render.
     - **Extend the ending** keeps the take you have — its last couple of seconds are faded
       out and that many seconds of silence padded after them. It runs on the controller,
       so it is instant, and the arrangement is untouched.
-    - **Re-generate that much longer** keeps the song and gives it a real ending: the
+    - **Re-generate that much longer** is available for local engines. It keeps the song and gives it a real ending: the
       take in use is kept as it is — it is not sung again — and MiniMax Music 3
       continues from the same seed for only the added seconds, finishing the words it
       cut off. If that take has no seed (generated before this), it falls back to a
       fresh longer take, and the message under the button says which one you got.
+      Suno continuation is not available here; its downloaded takes can still use
+      **Extend the ending**.
     - Either way the previous track stays in the version list and can be put back.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
   **Draft the story →** writes the story from these lyrics. The song's *current* length is
