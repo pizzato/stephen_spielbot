@@ -303,6 +303,9 @@ body {
 .pbar { height: 10px; border-radius: 999px; background: var(--paper-2); overflow: hidden; }
 .pbar__fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width .4s ease; }
 
+/* Library covers favour shorts while fitting landscape artwork in full. */
+.film-cover { position: relative; width: 100%; aspect-ratio: 4/5; max-height: min(360px, 55vh); background: var(--paper-2); }
+
 /* ── Scene thumb grid ── */
 .scene-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; }
 .scene { border-radius: var(--r-md); overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); cursor: pointer; transition: border-color .15s, transform .15s; }
