@@ -206,12 +206,12 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
           </div>
         </div>
       )}
-      <div className="bento">
+      <div className="film-grid">
         {!loaded && <Card span={12}><p className="muted" role="status">Loading films…</p></Card>}
         {loaded && jobs.finished.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No finished films yet — create your first one.</p></Card>}
         {loaded && jobs.finished.length > 0 && shown.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No films match this filter.</p></Card>}
         {visibleFilms.map((f, i) => (
-          <Card key={f.work_dir} span={4} link onClick={() => openCard(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
+          <Card key={f.work_dir} link onClick={() => openCard(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
             <div className="film-cover">
               {f.cover_url
                 ? <img src={f.cover_url} alt="" loading="lazy" decoding="async" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
