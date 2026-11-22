@@ -325,9 +325,17 @@ To change the style of a script that has *not* rendered yet, use **Restyle** on 
 
 ### Background music
 
-Edit the music prompt and **Regenerate music**. This re-runs the film's
-[music engine](../models.md#music-engines-per-style) on a GPU worker and re-muxes with
-your current levels. Every generated track is kept in a version strip.
+Edit the music prompt and **Regenerate music**. For local
+[music engines](../models.md#music-engines-per-style), this runs on a GPU worker and
+re-muxes with your current levels. Every generated track is kept in a version strip.
+With Suno, a manual request generates two previews without downloading or changing
+the film. Open **Play on Suno** to listen there before choosing.
+**Use this take** downloads only the chosen song, adds it to the version strip and
+re-muxes the film. The import may spend one download credit, separately from the
+generation charge. Already imported takes reuse their local file.
+If the request times out while Suno is still working, the saved links appear as
+**Still generating**. **Use this take** waits for that song before importing it;
+generating another pair is unnecessary.
 
 #### A song film's song
 
@@ -365,6 +373,12 @@ With MiniMax Music 3, **Sing it again** expands a short sound caption into detai
 Global Metadata and Arrangement sections and supplies the saved vocalist separately.
 The expanded caption is kept for later takes. Voice and accent instructions still
 need a listening check; see the [Song tab](script.md#song).
+
+With Suno, **Sing it again** shows both generated takes for preview; **Use this take**
+imports only your choice and updates the film. The
+style's **Suno model** and **Suno singing voice** settings control generation. The
+voice picker selects voices already available in your Suno account; **Sing it as**
+below remains the separate library voice conversion operation.
 
 *Sing it as* uses the style's **Singing voice conversion** engine: **SoulX-Singer SVC**
 by default, or **Seed-VC** selected under [Settings → Styles → Narrator & audio](settings.md#narrator-audio).

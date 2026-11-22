@@ -72,7 +72,7 @@ class SongFirstSequenceTests(TempConfigCase):
             return {"work_dir": str(self.wd), "job_id": "job-song"}
 
         for name, fn in [("song_draft", _draft),
-                         ("_do_song_generate", lambda wd: self.calls.append("generate")),
+                         ("_do_song_generate", lambda wd, **kwargs: self.calls.append("generate")),
                          ("_do_song_convert", lambda wd, v: self.calls.append(f"convert:{v}"))]:
             p = mock.patch.object(backend, name, side_effect=fn)
             p.start()
@@ -132,6 +132,11 @@ class SongFirstSequenceTests(TempConfigCase):
         with mock.patch.object(backend.story_mode, "critique_song") as judge:
             self._run({"youtube_auto_song_critic_passes": 0})
         judge.assert_not_called()
+
+    def test_unattended_song_forces_minimax_even_when_style_selects_suno(self):
+        with mock.patch.object(backend, "_do_song_generate") as generate:
+            self._run({"default_music_engine": "suno"})
+        generate.assert_called_once_with(self.wd, automatic=True, engine_override="minimax-music3")
 
 
 class AutoWriteScriptsSongTests(TempConfigCase):

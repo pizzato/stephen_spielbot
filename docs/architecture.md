@@ -40,8 +40,9 @@ at the top is the documented key set.
 |---|---|
 | `llm.py` | Script generation across the local vLLM, Claude, Grok, and OpenAI backends |
 | `story.py` | Script generation — draft the story, critique it, then divide it into scenes; for a music video it also writes and critiques the song, and the divide places the lyrics on the track's timeline |
-| `engines.py` | The engine registries — image (FLUX.2 Klein, FLUX.1 schnell, opt-in Qwen-Image 2.1 and FLUX 3 Klein NVFP4, plus scene-only MiniMax H3 Image), video (LTX 2.5, pi-H3 two-step DWD and the MiniMax H3 family), and music (ACE-Step, MiniMax Music 3) |
+| `engines.py` | The engine registries — image (FLUX.2 Klein, FLUX.1 schnell, opt-in Qwen-Image 2.1 and FLUX 3 Klein NVFP4, plus scene-only MiniMax H3 Image), video (LTX 2.5, pi-H3 two-step DWD and the MiniMax H3 family), and music (ACE-Step, MiniMax Music 3, Suno) |
 | `comfyui.py`, `scene_video.py` | ComfyUI workflow submission, per-scene video rendering, and music generation |
+| `suno.py` | Official Suno MCP client, Spielbot-owned OAuth connection, account and voice lookup, generation and audio downloads; cloud music bypasses the ComfyUI worker path |
 | `tts_engines.py`, `openf5.py`, `chatterbox.py`, `tts_text.py` | Narration: engine choice, weights, and spoken-text handling |
 | `performance.py`, `shot_gate.py` | Acted scenes and performance films: the acted script shape, the H3 Ref2VA prompt, and the speech gate |
 | `song_timing.py`, `lyric_align.py` | Music videos: measure the sung track's vocal stem, whisper-align the lyric sheet, cut scenes between sung lines |
@@ -74,6 +75,10 @@ ready tasks from the durable graph instead of the controller pushing work.
    exception: they chain, rendering in order on one worker.
 5. `assembler.py` muxes scenes, narration, and music into the final cut.
 6. The final lands at `~/videos/<name>.mp4`, alongside the work directory that produced it.
+
+Automatic music generation, including scoring during rendering, uses MiniMax Music
+3. A soundtrack already generated or imported at script time is reused. Suno is
+available through explicit manual generation and **Use this take** imports.
 
 Every stage writes a task row into the [durable graph](orchestration.md) with attempts,
 leases, and produced artifacts, which is what the **Render** screen shows.

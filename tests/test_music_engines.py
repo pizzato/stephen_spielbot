@@ -15,8 +15,10 @@ class MusicEngineRegistryTests(unittest.TestCase):
         self.assertEqual(engines.resolve_music("nonsense")["key"], "ace-step")
         self.assertEqual(engines.resolve_music("minimax-music3")["key"], "minimax-music3")
 
-    def test_every_engine_has_a_workflow_file(self):
+    def test_every_comfy_engine_has_a_workflow_file(self):
         for key, eng in engines.MUSIC_ENGINES.items():
+            if eng.get("provider") == "suno":
+                continue
             path = comfyui.WORKFLOWS_DIR / eng["workflow"]
             self.assertTrue(path.exists(), f"{key}: missing {eng['workflow']}")
             # Placeholders are shared, so generate_music can stay engine-agnostic.
@@ -25,10 +27,18 @@ class MusicEngineRegistryTests(unittest.TestCase):
                 self.assertIn(placeholder, text, f"{key}: {eng['workflow']} lacks {placeholder}")
 
     def test_style_field_normalizes_and_mirrors(self):
+        self.assertEqual(gapp._norm_music_engine("suno"), "suno")
         self.assertEqual(gapp._norm_music_engine("minimax-music3"), "minimax-music3")
         self.assertEqual(gapp._norm_music_engine("ace-step-2"), "ace-step")
         self.assertEqual(gapp._norm_music_engine(None), "ace-step")
         self.assertEqual(gapp.STYLE_FIELD_TO_FLAT["music_engine"], "default_music_engine")
+
+    def test_suno_has_no_download_and_no_blanket_commercial_claim(self):
+        public = next(e for e in engines.public_list_music() if e["key"] == "suno")
+        self.assertEqual(public["provider"], "suno")
+        self.assertFalse(public["downloadable"])
+        self.assertIsNone(public["commercial_ok"])
+        self.assertIn("plan", public["license"])
 
 
 class MusicWorkflowTests(unittest.TestCase):
@@ -140,7 +150,7 @@ class MusicEngineStampTests(unittest.TestCase):
     def test_orchestrator_puts_the_engine_in_the_music_payload(self):
         from pipeline import orchestrator
         src = Path(orchestrator.__file__).read_text()
-        self.assertIn('"music_engine": config.get("music_engine")', src)
+        self.assertIn('"music_engine": "minimax-music3"', src)
 
     def test_worker_agent_passes_the_payload_engine_through(self):
         import worker_agent
