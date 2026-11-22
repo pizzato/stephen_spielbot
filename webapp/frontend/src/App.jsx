@@ -300,7 +300,7 @@ export default function App() {
       </header>
       <Sidebar route={route} go={go} badges={badges} />
       <div className="scrim" onClick={() => setMenuOpen(false)} aria-hidden="true" />
-      <main className="main" key={route}>
+      <main className={`main${route === 'library' ? ' main--library' : ''}`} key={route}>
         {uiWait && (
           <Banner tone="info">A render worker for the UI will be free in {uiWorker.eta_text}.</Banner>
         )}

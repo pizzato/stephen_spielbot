@@ -151,6 +151,7 @@ body {
 
 /* ── Main column ── */
 .main { padding: 30px 38px 60px; max-width: 1180px; }
+.main--library { max-width: none; min-width: 0; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; flex-wrap: wrap; }
 .page-head__intro { display: flex; flex-direction: column; gap: 6px; }
 
@@ -304,6 +305,8 @@ body {
 .pbar__fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width .4s ease; }
 
 /* Library covers favour shorts while fitting landscape artwork in full. */
+.film-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: var(--gap); }
+.film-grid > .col-12 { grid-column: 1 / -1; }
 .film-cover { position: relative; width: 100%; aspect-ratio: 4/5; max-height: min(360px, 55vh); background: var(--paper-2); }
 
 /* ── Scene thumb grid ── */
@@ -398,6 +401,7 @@ body {
   }
 
   .main { padding: 22px 18px 60px; }
+  .film-grid { grid-template-columns: minmax(0, 1fr); }
   .bento > * { grid-column: span 12 !important; }
 
   /* Tighter card padding reclaims width on a narrow screen. */

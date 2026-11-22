@@ -51,8 +51,10 @@ returns to the same page. Covers load as they approach the visible area.
 
 Cover previews use a portrait-friendly frame and fit the entire image without cropping.
 Portrait shorts and landscape films can appear together; any extra space stays neutral.
-Preview height is capped to fit comfortably on screen, and the card grid adapts from
-three columns on desktop to two on smaller screens and one on phones.
+Preview height is capped to fit comfortably on screen. The library uses the available
+width beside the sidebar, adding more columns as the window grows instead of stopping
+at three. Cards keep enough room for their titles and actions; smaller screens show
+fewer columns, with one column on phones.
 
 Each film shows its cover, its title, and a state chip — **Published**, **Needs
 approval**, **Approved**, or **New** for a film you haven't opened yet. Its resolution sits
