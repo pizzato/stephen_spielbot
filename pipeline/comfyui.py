@@ -2158,11 +2158,13 @@ def inpaint_scene_image(
 
 
 def _run_and_save(workflow: dict, output_path: Path, comfy_url: str,
-                  timeout: int = 600) -> Path:
+                  timeout: int = 600,
+                  heartbeat_warmup: int = _HEARTBEAT_INITIAL_DELAY) -> Path:
     """Queue a prepared workflow, wait, and save its first image output."""
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=timeout, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=timeout, comfy_url=comfy_url,
+                         heartbeat_warmup=heartbeat_warmup)
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:
         raise RuntimeError(f"No image output from ComfyUI for prompt {prompt_id} ({comfy_url})")
@@ -2328,53 +2330,52 @@ def _generate_flux3(engine: dict, prompt: str, output_path: Path, *,
                          timeout=int(engine["timeout"]))
 
 
-def _generate_h3_first_frame(prompt: str, output_path: Path, *, width: int,
-                             height: int, seed: int | None, refs: list[Path],
-                             comfy_url: str) -> Path:
-    """Experimental 22-frame (~0.9 s) H3 take, decoded at frame zero.
-
-    This deliberately bypasses the normal clip-duration floor; full video
-    renders retain their supported duration range. No image model is used.
-    """
+def _generate_h3_image(engine: dict, prompt: str, output_path: Path, *, width: int,
+                       height: int, seed: int | None, refs: list[Path],
+                       comfy_url: str) -> Path:
+    """Native H3 still image, optionally conditioned by ordered references."""
     import tempfile
-    from PIL import Image
-    from pipeline.assembler import extract_first_frame
+    from PIL import Image, PngImagePlugin
+    from pipeline.scene_image import first_frame_dimensions
 
-    engine = (_engines.resolve_reference({}, "minimax-h3-ref-turbo-lx2v") if refs
-              else _engines.resolve_video({}, "minimax-h3-turbo"))
-    check_engine_supported(engine, comfy_url)
-    gen_w, gen_h = h3_dimensions(width, height)
-    length = 22
-    workflow = _fill_template(_load_workflow(engine["workflow"]), {
-        "UNET_NAME": engine["unet"], "CLIP_NAME": engine["clip"],
-        "VIDEO_VAE": engine["video_vae"], "AUDIO_VAE": engine["audio_vae"],
-        "POSITIVE_PROMPT": f"{prompt} One continuous shot, steady camera, minimal motion.",
-        "WIDTH": gen_w, "HEIGHT": gen_h, "LENGTH": length,
+    if len(refs) > 16:
+        raise ValueError("H3 Image supports up to 16 reference images")
+    node = "MiniMaxH3ImageConditioning"
+    if comfy_node_exists(comfy_url, node) is not True:
+        raise RuntimeError(f"H3 Image needs ComfyUI node {node} — rebuild "
+                           f"the worker at {comfy_url} with make install.")
+    target = first_frame_dimensions(width, height, engine.get("h3_image_size", "video"))
+    gen_w, gen_h = (max(32, round(d / 32) * 32) for d in target)
+    workflow = _fill_template(_load_workflow(engine["t2i_workflow"]), {
+        "UNET": engine["model_file"], "CLIP": engine["clip_t5"], "VAE": engine["vae"],
+        "POSITIVE_PROMPT": prompt, "WIDTH": gen_w, "HEIGHT": gen_h,
         "SEED": seed if seed is not None else random.randint(0, 2**32 - 1),
-        "STEPS": engine["steps"], "LORA_NAME": engine["lora"],
-        "LORA_STRENGTH": _lora_strength(engine),
+        "STEPS": int(engine["steps"]), "CFG": float(engine.get("cfg", 1.0)),
     })
-    if refs:
-        if len(refs) > H3_MAX_REF_IMAGES:
-            raise ValueError(f"H3 first frames support up to {H3_MAX_REF_IMAGES} reference images")
-        _wire_ref_slots(workflow, [_upload_image(p, comfy_url=comfy_url) for p in refs], [])
-    else:
-        # The I2V node is also H3's text-to-video node when no keyframe is wired.
-        workflow[_node_id(workflow, "MiniMaxH3ImageToVideo")]["inputs"].pop("first_frame")
-        for nid in [k for k, n in workflow.items()
-                    if n["class_type"] in ("LoadImage", "ImageScale")]:
-            del workflow[nid]
-    logger.info("[comfy] H3 first frame %dx%d length=%d refs=%d",
-                gen_w, gen_h, length, len(refs))
-    with tempfile.TemporaryDirectory(prefix="h3-first-frame-") as td:
-        clip, frame = Path(td) / "opening.mp4", Path(td) / "frame.png"
-        _h3_submit(workflow, clip, gen_w=gen_w, gen_h=gen_h, length=length,
-                   what="H3 first frame", comfy_url=comfy_url)
-        extract_first_frame(clip, frame)
-        # Match the requested render canvas so preview caching and I2V reuse it.
+    for i, path in enumerate(refs, 1):
+        nid = str(8 + i)
+        workflow[nid] = {"class_type": "LoadImage", "inputs": {
+            "image": _upload_image(path, comfy_url=comfy_url),
+        }}
+        workflow["4"]["inputs"][f"images.image_{i}"] = [nid, 0]
+    logger.info("[comfy] H3 Image %dx%d → %dx%d refs=%d", gen_w, gen_h, *target, len(refs))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep the selected image intact until download, decoding and sizing succeed.
+    with tempfile.TemporaryDirectory(prefix="h3-image-", dir=output_path.parent) as td:
+        frame, ready = Path(td) / "generated.png", Path(td) / "ready.png"
+        _run_and_save(workflow, frame, comfy_url, timeout=int(engine["timeout"]),
+                      heartbeat_warmup=_H3_HEARTBEAT_WARMUP)
         with Image.open(frame) as im:
-            im.convert("RGB").resize((width, height), Image.Resampling.LANCZOS).save(
-                output_path, "PNG")
+            metadata = PngImagePlugin.PngInfo()
+            for key, value in im.text.items():
+                metadata.add_text(key, value)
+            settings = {key: im.info[key] for key in ("icc_profile", "dpi", "exif")
+                        if key in im.info}
+            pixels = im.convert("RGB")
+            if pixels.size != target:
+                pixels = pixels.resize(target, Image.Resampling.LANCZOS)
+            pixels.save(ready, "PNG", pnginfo=metadata, **settings)
+        ready.replace(output_path)
     return output_path
 
 
@@ -2388,14 +2389,15 @@ def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
     ``flux2_t2i_ref.json`` when *reference_images* are given. Qwen-Image 2.1
     runs ``qwen_image_2_1_t2i.json`` and splices references into
     ``TextEncodeQwenImage21``. FLUX 3 uses ``ReferenceMultiLatent`` with its
-    own CLIP loader and sampler graph. flux1 ignores references."""
+    own CLIP loader and sampler graph. H3 Image uses native still-image
+    conditioning with optional references. flux1 ignores references."""
     if not engine.get("can_generate"):
         raise RuntimeError(f"Engine {engine.get('key')!r} cannot generate images.")
     check_engine_supported(engine, comfy_url)
     refs = [Path(p) for p in (reference_images or []) if p]
-    if engine.get("family") == "h3-first-frame":
-        return _generate_h3_first_frame(prompt, output_path, width=width, height=height,
-                                        seed=seed, refs=refs, comfy_url=comfy_url)
+    if engine.get("family") == "h3-image":
+        return _generate_h3_image(engine, prompt, output_path, width=width, height=height,
+                                  seed=seed, refs=refs, comfy_url=comfy_url)
     if engine.get("family") == "flux3":
         return _generate_flux3(engine, prompt, output_path, width=width, height=height,
                                seed=seed, refs=refs, comfy_url=comfy_url)

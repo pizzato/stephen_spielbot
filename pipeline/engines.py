@@ -45,6 +45,51 @@ def _model(repo: str, remote: str, subdir: str, *, gated: bool = False,
 
 
 ENGINES: dict[str, dict] = {
+    "minimax-h3-image": {
+        "key": "minimax-h3-image",
+        "label": "MiniMax H3 Image",
+        "sub": "Scene first frames · 6 steps · up to 16 references",
+        "family": "h3-image",
+        "scene_only": True,
+        "can_generate": True,
+        "can_edit": False,
+        "t2i_workflow": "h3_image_t2i.json",
+        "t2i_ref_workflow": "h3_image_t2i.json",
+        "steps": 6,
+        "cfg": 1.0,
+        "timeout": 1800,
+        "lease_seconds": 14400,
+        "commercial_ok": True,
+        "commercial_label": "restricted licence",
+        "license": "MiniMax H3 Image Community License",
+        "license_note": (
+            "Not licensed in the USA, EU, UK or South Korea. Separate written "
+            "authorization is required for third-party hosted services or annualized "
+            "revenue above US$1M. Attribution and AI disclosure requirements apply. "
+            "https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE"),
+        "model_file": "minimax_h3_image_pruned_int8_convrot.safetensors",
+        "clip_t5": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "clip_l": None,
+        "vae": "minimax_h3_image_vae_fp16.safetensors",
+        "requires_node": "MiniMaxH3ImageConditioning",
+        "min_comfyui": (0, 45, 0),
+        "too_old_note": "H3 Image requires native MiniMaxH3ImageConditioning support",
+        "probe": ("UNETLoader", "unet_name", "minimax_h3_image_pruned_int8_convrot.safetensors"),
+        "extra_probes": [
+            ("CLIPLoader", "clip_name", "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"),
+            ("VAELoader", "vae_name", "minimax_h3_image_vae_fp16.safetensors"),
+        ],
+        "models": [
+            _model("Comfy-Org/MiniMax-H3-Image",
+                   "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3-Image",
+                   "vae/minimax_h3_image_vae_fp16.safetensors", "models/vae"),
+        ],
+    },
     "flux1-schnell": {
         "key": "flux1-schnell",
         "label": "FLUX.1 schnell",
@@ -335,9 +380,8 @@ def resolve_first_frame(cfg: dict, settings: dict | None = None) -> dict:
     """Scene-only generation; portraits, covers and edits keep their image engine."""
     settings = cfg if settings is None else settings
     if settings.get("first_frame_source") == "h3":
-        return {"key": "minimax-h3-first-frame", "family": "h3-first-frame",
-                "can_generate": True, "t2i_ref_workflow": "h3_ref2v_turbo.json",
-                "lease_seconds": 14400}
+        return {**ENGINES["minimax-h3-image"],
+                "h3_image_size": "4k" if settings.get("h3_image_size") == "4k" else "video"}
     return resolve(cfg, settings.get("image_engine") or cfg.get("default_image_engine"))
 
 
@@ -350,6 +394,7 @@ def public_list(commercial_only: bool = False) -> list[dict]:
         out.append({
             "key": e["key"], "label": e["label"], "sub": e["sub"],
             "can_generate": e["can_generate"], "can_edit": e["can_edit"],
+            "scene_only": bool(e.get("scene_only")),
             "commercial_ok": e["commercial_ok"], "license": e["license"],
             "license_note": e.get("license_note"),
             "commercial_label": e.get("commercial_label"),

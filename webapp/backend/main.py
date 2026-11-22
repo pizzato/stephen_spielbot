@@ -7566,6 +7566,7 @@ def start_generation(body: GenerateBody) -> dict:
         # legacy flux_* keys, breaking installs without the opt-in FLUX.1 models).
         "image_engine": ss.get("image_engine"),
         "first_frame_source": gapp._norm_first_frame_source(ss.get("first_frame_source")),
+        "h3_image_size": gapp._norm_h3_image_size(ss.get("h3_image_size")),
         # The style's video engine drives the scene I2V model (LTX / MiniMax H3).
         "video_engine": ss.get("video_engine"),
         # Ref2VA model for performance films (portraits + dialogue, no first
@@ -16481,13 +16482,9 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
 
 def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
-    """True only if *path* is a readable image with exactly width×height pixels."""
-    try:
-        from PIL import Image
-        with Image.open(path) as img:
-            return img.size == (width, height)
-    except Exception:
-        return False
+    """Reuse a video-size or matching 4K first frame without overwriting it."""
+    from pipeline.scene_image import matches_first_frame_resolution
+    return matches_first_frame_resolution(path, width, height)
 
 
 def _resolve_video_for_job(cfg: dict, jc: dict) -> dict:

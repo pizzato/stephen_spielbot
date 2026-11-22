@@ -312,7 +312,7 @@ A **narrated or silent** scene has:
 |---|---|
 | **Scene title** | Organisation only — not rendered |
 | **Narration** | The TTS voice (narration-mode scenes) |
-| **Image prompt** | Static first frame, using the style's image model or experimental H3 short-video source (see [Settings → Image model](settings.md#image-model)) |
+| **Image prompt** | Static first frame, using the style's image model or official MiniMax H3 Image and its selected still size (see [Settings → Image model](settings.md#image-model)) |
 | **Video prompt** | LTX — motion and camera |
 
 A **silent** scene also carries a **Duration** and an **On screen** cast. The cast matters

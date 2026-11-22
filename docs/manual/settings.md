@@ -110,6 +110,13 @@ checks the official INT8 transformer, INT8 encoder, VAE and native cache/samplin
 nodes. Both bundles can also be installed or repaired with
 `make install INSTALL_FLUX3=1 INSTALL_QWEN_TURBO=1`.
 
+**MiniMax H3 Image** (`minimax-h3-image`) is also downloaded here, but selected
+only under **Styles → Image model → Scene first frames**. It requires ComfyUI
+0.45.0 or newer, the official image diffusion and VAE files (about 21 GB and
+1.17 GB), and the shared 32B H3 NVFP4 text encoder. Its row shows its separate
+[H3 Image licence](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE)
+terms; it is not an unrestricted commercial model.
+
 `make install` and `make download-models` also read this saved token automatically.
 An explicit `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` overrides it; otherwise local
 Hugging Face CLI credentials are used when no token is saved.
@@ -358,12 +365,12 @@ A film can hold two kinds of scene, and each has its own model, picked side by s
 
 **Sampling steps** beneath them overrides configurable MiniMax scene engines,
 including acted Ref2VA. 0 keeps each engine's default (Turbo 4, base H3 15).
-**pi-H3 2-step DWD always uses two steps**, LTX ignores this setting, and short H3
-first-frame clips always use four steps. Selecting pi-H3 leaves the shared control
+**pi-H3 2-step DWD always uses two steps**; LTX and H3 Image ignore this setting.
+Selecting pi-H3 leaves the shared control
 available for the acted-scene model.
 
 **Chained scenes** continues to apply to acted scenes when pi-H3 is selected.
-pi-H3 first-frame clips do not chain; their scene budgets remain single-clip.
+pi-H3 I2V clips do not chain; their scene budgets remain single-clip.
 Install pi-H3 through Infrastructure, or `make install INSTALL_PIH3=1`, before
 selecting it. See [pi-H3 requirements and limits](../models.md#pi-h3-two-step-dwd).
 
@@ -433,29 +440,41 @@ back to Fast rather than failing the film.
 
 ### Image model
 
-**Scene first frames** chooses **Image model** (default) or **MiniMax H3 Turbo ·
-short video (experimental)** (`first_frame_source: image` / `h3`). H3 generates a
-22-frame clip (about 0.9 seconds), extracts frame zero, and resizes it to the
-film's render size. This duration is below H3's trained clip range, so compare
-the result before committing to a full film. It uses the scene's image prompt
-and named character portraits, without an image-model pass. The temporary clip
-and its audio are discarded; the normal video render uses the extracted PNG.
+**Scene first frames** chooses **Image model** (default) or **MiniMax H3 Image**
+(`first_frame_source: image` / `h3`). H3 Image generates a still directly from the
+scene's image prompt and available character references. Selecting it does not
+change the style's generation or edit engine. Existing styles with `h3` selected
+now use the official image model for newly generated scene openings.
+
+When H3 Image is selected, **H3 Image size** (`h3_image_size`) offers:
+
+- **Video size** (`video`, default): save the image at the film's render size.
+- **4K** (`4k`): save a larger image with a **3840-pixel long edge**, preserving
+  the film's aspect ratio. This is an image size, not a 4-megapixel target. The
+  video's resolution stays unchanged.
+
+The source and size settings inherit independently from the parent style.
+Changing either setting applies to new or regenerated images, not existing files.
 
 The option applies to script previews, film scene-image regeneration, and missing
 first frames during rendering, including silent and sung takes. It inherits through
 parent styles and is stamped into render jobs for resume. Existing frames are reused:
-regenerate a scene image to try the new source. **No first frame**, hand-picked
+regenerate a scene image to apply the new source or size. **No first frame**, hand-picked
 locations and continuation handoffs retain their existing behaviour. Film-editor
 image regeneration uses the style's current source. Portraits, covers and masked
 edits keep their selected image engine.
 
-Install both **MiniMax H3 33B Turbo** (`minimax-h3-turbo`, for scenes without
-portraits) and **MiniMax H3 33B Ref2VA Turbo (LightX2V)**
-(`minimax-h3-ref-turbo-lx2v`, for portrait references) on each rendering worker
-under **Infrastructure → Video models** and **Acted-scene models**, respectively.
-First-frame clips always use these four-step engines; the style's video sampling-step override applies to full
-scene videos. The existing MiniMax H3 licence terms apply. A missing model fails
-the request instead of silently switching to an image engine.
+Install **MiniMax H3 Image** (`minimax-h3-image`) on each rendering worker under
+**Infrastructure → Image models**. It uses the official native ComfyUI workflow
+with six fixed sampling steps; the video sampling-step override does not affect
+it. It is available only through **Scene first frames**, not the general generation
+or masked-edit picker. A missing model or required node fails the request instead
+of silently switching engines. See [model requirements](../models.md#minimax-h3-image-scene-first-frames).
+
+The [MiniMax-H3-Image Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image/blob/main/LICENSE)
+has territorial restrictions and requires separate written authorization for
+third-party hosted services or annualized revenue above US$1M, including affiliates.
+Check its commercial attribution and public-output disclosure requirements before use.
 
 Separate engines for **generation** and for **edit (mask + prompt)** inpainting. Default is
 FLUX.2 Klein for both. **Qwen-Image 2.1**, **Qwen-Image 2.1 NVFP4** and

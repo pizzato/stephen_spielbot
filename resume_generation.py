@@ -31,7 +31,6 @@ logging.basicConfig(level=logging.WARNING, handlers=[_file_handler, _stream_hand
 logger = logging.getLogger("video_gen")
 logger.setLevel(logging.DEBUG)
 
-from PIL import Image as _PILImage
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -89,12 +88,9 @@ OUTPUT_DIR  = Path.home() / "videos"
 
 
 def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
-    """Return True only if *path* is a readable image with exactly width×height pixels."""
-    try:
-        with _PILImage.open(path) as img:
-            return img.size == (width, height)
-    except Exception:
-        return False
+    """Reuse a video-size or matching 4K first frame without overwriting it."""
+    from pipeline.scene_image import matches_first_frame_resolution
+    return matches_first_frame_resolution(path, width, height)
 
 _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
                         "ConnectionRefused", "RemoteDisconnected")
@@ -1688,7 +1684,8 @@ def main(work_dir: Path) -> None:
         "voice_speed": voice_speed,
         "h3_silent_scenes": bool(silent_flag),
         "h3_first_frames": first_frames_flag(cfg),
-        "first_frame_source": "h3" if frame_engine.get("family") == "h3-first-frame" else "image",
+        "first_frame_source": "h3" if frame_engine.get("family") == "h3-image" else "image",
+        "h3_image_size": frame_engine.get("h3_image_size", "video"),
     }
     store.ensure_generation_plan(durable_job_id, work_dir, title, scenes, plan_cfg)
     store.recover_incomplete_tasks(durable_job_id)
