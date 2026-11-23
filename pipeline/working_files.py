@@ -8,6 +8,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from pipeline import final_video_history, image_history, music_history, video_history
+from pipeline.spotify_canvas import FILENAME as SPOTIFY_CANVAS
 
 
 def state(work_dir: Path) -> dict:
@@ -148,7 +149,9 @@ def preview(work_dir: Path, final: Path) -> dict:
         kept = {path: "Other retained files" for path in work_dir.rglob("*")
                 if _local_file(work_dir, path) and path not in candidates}
         for path in kept:
-            if path.suffix.lower() in {".wav", ".mp3", ".flac", ".m4a", ".ogg"}:
+            if path == work_dir / SPOTIFY_CANVAS:
+                kept[path] = "Spotify Canvas"
+            elif path.suffix.lower() in {".wav", ".mp3", ".flac", ".m4a", ".ogg"}:
                 kept[path] = "Music, narration and other audio"
             elif path.suffix.lower() in {".srt", ".vtt"}:
                 kept[path] = "Closed captions"

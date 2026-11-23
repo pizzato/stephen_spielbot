@@ -32,7 +32,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Make the repo root importable so `import app` and `import pipeline.*` resolve
 # the same way they do when app.py runs directly.
@@ -70,6 +70,7 @@ from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
 from pipeline import music_history  # noqa: E402
 from pipeline import final_video_history  # noqa: E402
+from pipeline import spotify_canvas  # noqa: E402
 from pipeline import working_files  # noqa: E402
 from pipeline import scene_context  # noqa: E402
 from pipeline.cover import (  # noqa: E402
@@ -687,6 +688,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
         name = "Re-voicing the song"
     elif component == "song_realign":
         name = "Realigning song lyrics"
+    elif component == "spotify_canvas":
+        name = "Generating Spotify Canvas"
     elif component == "music" or task_id.startswith("music_regen_"):
         name = "Regenerating music"
     elif component == "narrator" or task_id.startswith("narrator_regen_"):
@@ -15801,13 +15804,15 @@ def _finish_film_task_error(task_id: str, e: Exception) -> None:
                                 "finished_at": time.time()}
 
 
-def _clear_finished_film_tasks(work_dir: str, scene_id: int) -> None:
+def _clear_finished_film_tasks(work_dir: str, scene_id: int, *, component: str = "") -> None:
     """Drop terminal (error/cancelled/done) re-render records for a scene. Called
     when a fresh re-render starts so it supersedes any earlier failed attempt on
     that scene (clears the stale 'failed' badge) and terminal records don't pile
     up in the in-memory task stores."""
     for tid, meta in list(_film_task_meta.items()):
         if meta.get("work_dir") != work_dir or meta.get("scene_id") != scene_id:
+            continue
+        if component and meta.get("component") != component:
             continue
         if (_film_tasks.get(tid) or {}).get("status") == "running":
             continue
@@ -17838,6 +17843,116 @@ def film_tasks_for_work_dir(work_dir: str = Query(...)) -> dict:
                 "error": task.get("error", "Re-render failed"),
             })
     return {"ok": True, "tasks": out}
+
+
+class SpotifyCanvasBody(BaseModel):
+    work_dir: str
+    prompt: str = Field(default="", max_length=1500)
+
+
+def _spotify_canvas_film(work_dir: str) -> tuple[Path, Path]:
+    wd = _working_files_dir(work_dir)
+    if not _is_music_video(wd):
+        raise HTTPException(404, "Spotify Canvas is available for music videos.")
+    output = wd / spotify_canvas.FILENAME
+    if output.is_symlink():
+        raise HTTPException(400, "Spotify Canvas cannot be a symbolic link.")
+    return wd, output
+
+
+@api.get("/api/films/spotify-canvas")
+def film_spotify_canvas(work_dir: str = Query(...)) -> dict:
+    wd, output = _spotify_canvas_film(work_dir)
+    task = next((task for task in film_tasks_for_work_dir(str(wd))["tasks"]
+                 if task["component"] == "spotify_canvas"), None)
+    url = ""
+    if output.is_file():
+        query = urllib.parse.urlencode({"work_dir": str(wd), "v": output.stat().st_mtime_ns})
+        url = f"/api/films/spotify-canvas/file?{query}"
+    return {"url": url, "download_url": f"{url}&download=true" if url else "", "task": task}
+
+
+@api.get("/api/films/spotify-canvas/file")
+def film_spotify_canvas_file(work_dir: str = Query(...), download: bool = False) -> FileResponse:
+    wd, output = _spotify_canvas_film(work_dir)
+    if not output.is_file():
+        raise HTTPException(404, "Generate a Spotify Canvas first.")
+    return FileResponse(output, media_type="video/mp4",
+                        filename=f"{wd.name}-spotify-canvas.mp4" if download else None)
+
+
+def _run_spotify_canvas(task_id: str, wd: Path, final: Path, prompt: str) -> None:
+    from pipeline import comfyui
+
+    try:
+        _film_checkpoint(task_id)
+        if not prompt:
+            spotify_canvas.generate_default(wd, final)
+        else:
+            cfg, jc = gapp.load_config(), _film_job_config(wd)
+            image_engine = gapp.scene_frame_engine(cfg, jc.get("style_name", ""))
+            video_engine = _resolve_video_for_job(cfg, jc)
+            pool = _shared_edit_render_pool()
+            if pool is None:
+                raise RuntimeError("No ComfyUI workers reachable.")
+            allowed = comfyui.compatible_video_workers(pool.urls, video_engine)
+            reference = spotify_canvas.reference_frame(wd)
+            art_direction = (
+                "A single cinematic Spotify Canvas shot, with the main subject near the center. "
+                "No lyrics, text, logos, singing, talking, cuts or flashing. "
+                f"Music video look: {jc.get('style') or 'match the reference when provided'}. "
+                f"Creative direction: {prompt}"
+            )
+            with tempfile.TemporaryDirectory(prefix=".spotify-canvas-", dir=wd) as temp:
+                frame = Path(temp) / "frame.png"
+                clip = Path(temp) / "clip.mp4"
+                staged = Path(temp) / spotify_canvas.FILENAME
+                width, height = spotify_canvas.WIDTH, spotify_canvas.HEIGHT
+                url = _acquire_render_worker(pool, task_id, allowed=allowed)
+                try:
+                    _film_checkpoint(task_id)
+                    _film_tasks[task_id]["step"] = "Canvas image"
+                    comfyui.generate_with_engine(
+                        image_engine, art_direction, frame, width=width, height=height,
+                        reference_images=[reference] if reference else None, comfy_url=url,
+                    )
+                    _film_checkpoint(task_id)
+                    _film_tasks[task_id]["step"] = "Canvas motion"
+                    comfyui.generate_video_with_engine(
+                        video_engine, f"{art_direction} Gentle motion suitable for playing in reverse.",
+                        "singing, talking, text, letters, logos, cuts, flashing", frame, clip,
+                        width=width, height=height, duration_seconds=3, comfy_url=url,
+                    )
+                finally:
+                    pool.release(url)
+                _film_checkpoint(task_id)
+                _film_tasks[task_id]["step"] = "Encoding Canvas loop"
+                spotify_canvas.render_loop(clip, staged)
+                _film_checkpoint(task_id)
+                staged.replace(wd / spotify_canvas.FILENAME)
+        _film_tasks[task_id] = {"status": "done"}
+    except Exception as exc:
+        _finish_film_task_error(task_id, exc)
+
+
+@api.post("/api/films/spotify-canvas")
+def generate_film_spotify_canvas(body: SpotifyCanvasBody) -> dict:
+    wd, output = _spotify_canvas_film(body.work_dir)
+    prompt = body.prompt.strip()
+    if output.is_file() and not prompt:
+        raise HTTPException(400, "Enter a prompt to regenerate the Canvas.")
+    final = _working_files_final(wd)
+    if not gapp._has_finished_video(wd) or not final.is_file() or not _safe_under(final, gapp.OUTPUT_DIR):
+        raise HTTPException(409, "Finish rendering the music video first.")
+    with _reassemble_lock(wd):
+        if _film_edit_busy(wd):
+            raise HTTPException(409, "Wait for this film's current edit or upload to finish.")
+        _clear_finished_film_tasks(str(wd), 0, component="spotify_canvas")
+        tid = uuid.uuid4().hex
+        _film_tasks[tid] = {"status": "running", "step": "Preparing Spotify Canvas"}
+        _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": 0, "component": "spotify_canvas"}
+        threading.Thread(target=_run_spotify_canvas, args=(tid, wd, final, prompt), daemon=True).start()
+    return {"task_id": tid}
 
 
 @api.post("/api/films/delete")

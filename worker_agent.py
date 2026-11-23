@@ -252,6 +252,7 @@ def _execute_scene_mux(store: DurableStore, task: TaskRecord) -> None:
 
 def _execute_final(store: DurableStore, task: TaskRecord) -> None:
     from app import load_config, video_provenance_settings
+    from pipeline.spotify_canvas import finish_music_video
 
     p = task.payload
     work_dir = Path(p["work_dir"]).expanduser()
@@ -260,6 +261,7 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
         raise RetryLater("final assembly needs scene_count")
     final_path = Path(p["final_path"]).expanduser()
     if store.skip_task_if_artifact_exists(task.id, final_path, artifact_kind="final_video", min_size=10_000):
+        finish_music_video(work_dir, final_path)
         return
 
     scene_finals = [work_dir / f"scene_{i:02d}_final.mp4" for i in range(1, scene_count + 1)]
@@ -304,6 +306,7 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
     )
     if p.get("vid_width") and p.get("vid_height"):
         ensure_video_resolution(final_path, int(p["vid_width"]), int(p["vid_height"]))
+    finish_music_video(work_dir, final_path)
     store.record_artifact(task.job_id, task.id, "final_video", final_path, duration_seconds=_get_duration(final_path))
     store.complete_task(task.id, result={"path": str(final_path)}, message="final video ready")
 

@@ -50,6 +50,7 @@ It keeps:
   current scene video is extracted to a separate `scene_NN_original_audio.wav`
   before deleting that clip; an extraction failure stops cleanup.
 - **Closed captions (SRT)**, saved with the final cut's timing before removing clips.
+- The **[Spotify Canvas](#spotify-canvas)** for a music video.
 - Current images, cover artwork, character/original reference assets and metadata.
 
 Unknown files and symbolic links are left alone. The finished film remains in
@@ -66,6 +67,24 @@ filenames cannot be recovered. Empty folders and retained WAVs are expected.
 Automatic cleanup belongs to **[Settings → Styles](settings.md#automatic-working-file-cleanup)**,
 not individual videos. There is no per-video automatic-cleanup control, and
 legacy per-video preferences are ignored. Manual cleanup remains available here.
+
+### Spotify Canvas
+
+Each new music video gets a Canvas after final assembly. The default adds a gentle
+camera push to a scene image and then reverses it. If the automatic export fails,
+you can retry from the Film tab. For an older music video, open
+**Film → Spotify Canvas → Generate Canvas**. Leave the prompt blank for the same
+automatic treatment.
+
+Enter a **Canvas prompt** to generate a new shot with the film's image and video
+engines. Describe both the image and a small motion that will look natural in
+reverse, such as curtains swaying in blue light. **Regenerate Canvas** replaces
+the current download after the new render succeeds. The Film tab previews the
+loop and offers **Download MP4**. Both actions remain available after cleanup.
+
+The file is a silent six-second 576 × 1024 MP4 with matching first and last frames.
+Upload it yourself under **Spotify for Artists → Music → select the track → Add Canvas**.
+See [Spotify's Canvas guidelines](https://support.spotify.com/us/artists/article/canvas-guidelines/).
 
 ### Cover image
 
