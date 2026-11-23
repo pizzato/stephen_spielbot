@@ -573,9 +573,9 @@ VIDEO_ENGINES: dict[str, dict] = {
         "adapter": "pi_h3_2step_dwd_adapter_int8_convrot.safetensors",
         "requires_node": "Load LakonLab Adapter",
         "extra_nodes": ["pi-Flow Scheduler", "DWD Decode", "MiniMaxH3SigmaShift",
-                        "BlockSparseAttention", "MiniMaxH3ImageToVideo", "SpielbotDWDNoise"],
+                        "SolAttnPatch", "MiniMaxH3ImageToVideo", "SpielbotDWDNoise"],
         "min_comfyui": (0, 45, 0),
-        "too_old_note": "pi-H3 requires the piFlow nodes and ComfyUI 0.45.0 or newer",
+        "too_old_note": "pi-H3 requires piFlow, Kijai's BF16 Sol-Attn and ComfyUI 0.45.0 or newer",
         "probe": ("UNETLoader", "unet_name", "minimax_h3_fl2va_pruned_int8_convrot.safetensors"),
         "extra_probes": [
             ("CLIPLoader", "clip_name", "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"),

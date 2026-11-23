@@ -383,31 +383,39 @@ The installer reuses existing files and repairs incomplete bundles across the
 configured workers. It does not change style selections or the default LTX engine.
 
 - Requires **ComfyUI 0.45.0 or newer** and the pinned
-  [ComfyUI-piFlow](https://github.com/Lakonik/ComfyUI-piFlow) nodes supplied by the
-  worker image. Rebuild older workers before selecting it; downloading weights
-  alone cannot add the required nodes.
+  [ComfyUI-piFlow](https://github.com/Lakonik/ComfyUI-piFlow) and
+  [ComfyUI-SolAttn_triton](https://github.com/kijai/ComfyUI-SolAttn_triton) nodes
+  supplied by the worker image. Rebuild older workers before selecting it;
+  downloading weights alone cannot add the required nodes.
 - Downloads the pruned INT8 H3 transformer, Qwen3-VL 32B NVFP4 encoder, INT8 video
   VAE, audio VAE and the pinned
   [two-step DWD adapter](https://huggingface.co/Lakonik/pi-H3). The complete stack
   is about **42.3 GB**; the adapter and INT8 VAE add about **5 GB** when the shared
   H3 transformer, encoder and audio VAE are already present.
 - Uses **two fixed steps**, with the adapter's published schedule and direct
-  video decoding. The style's Sampling steps and LTX pass controls do not change
-  this recipe. It generates native stereo ambience and has no negative-prompt
-  input. H3's usual resolution and duration bounds apply.
+  video decoding. Attention uses Kijai's **BF16 Sol-Attn**, with INT8 QK and PV
+  disabled, matching the upstream
+  [quality correction](https://github.com/Lakonik/ComfyUI-piFlow/commit/9f211e98b44597ba1595e482591a28a2203988d3).
+  This corrects attention precision; the existing quantized model files remain
+  valid. Triton compiles and tunes the attention kernels on first use, so the
+  first render can take longer. The style's Sampling steps and LTX pass controls
+  do not change this recipe. It generates native stereo ambience and has no
+  negative-prompt input. H3's usual resolution and duration bounds apply.
 - It animates a first frame. It does not replace the independent Ref2VA model for
   acted scenes, voice references or pinned-song conditioning. It also does not
   use H3 Motion Context: **Chained scenes** still controls acted scenes, but
   pi-H3 I2V scenes are planned and rendered as single clips.
-- In the 22 November 2026 GB10 screen, original five-second cases took **57–71 s**
+- In the 22 November 2026 GB10 screen using the earlier native INT8 attention
+  workflow, original five-second cases took **57–71 s**
   versus **103–118 s** for LTX 2.5 (1.51–1.81× faster; the 57 s result was a warm
   repeat). A later model-switch control took 98 s versus 105 s. These are render
   times including encoding, with slightly different native frame counts, not
-  whole-film throughput or a general quality ranking.
-- Sampled frames retained recognizable characters and object geometry, but a
-  locked-camera prompt produced an unwanted zoom. Review shots where exact
-  framing matters. The screen did not validate full-motion/audio quality or
-  long-scene consistency.
+  whole-film throughput or a general quality ranking. These timings do not
+  measure the corrected BF16 attention workflow.
+- That earlier screen's sampled frames retained recognizable characters and
+  object geometry, but a locked-camera prompt produced an unwanted zoom. Review
+  shots where exact framing matters. The screen did not validate full-motion/audio
+  quality or long-scene consistency.
 - Both the adapter and base weights carry the **MiniMax H3 Community License**;
   the Apache-2.0 licence on the node code does not change those model terms.
 

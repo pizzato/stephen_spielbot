@@ -2561,7 +2561,8 @@ def compatible_video_workers(urls: list[str], engine: dict) -> list[str]:
         raise RuntimeError(
             f"No worker is ready for {engine['label']}. Rebuild a worker with "
             "make install INSTALL_PIH3=1, or install its models from Settings "
-            "after updating the worker. Required: ComfyUI >= 0.45.0, piFlow "
+            "after updating the worker. Required: ComfyUI >= 0.45.0, piFlow, "
+            "Kijai's BF16 Sol-Attn "
             "and the complete pi-H3 model bundle.")
     return compatible
 

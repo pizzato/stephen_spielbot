@@ -102,9 +102,15 @@ The optional pi-H3 first-frame video bundle is installed with
 `make install INSTALL_PIH3=1`. The worker image includes
 [ComfyUI-piFlow](https://github.com/Lakonik/ComfyUI-piFlow), pinned by Docker build
 argument `PIFLOW_NODES_REF=bcb6ffb8ff6191115e5803c4ddddef6a73b0b8a8`; this node pack
-requires ComfyUI 0.45.0 or newer. Plain installs include the nodes but omit pi-H3's
-optional model weights. [Model setup](../docs/models.md#pi-h3-two-step-dwd) covers
-selection, shared files and the fixed two-step recipe.
+requires ComfyUI 0.45.0 or newer. The image also includes
+[ComfyUI-SolAttn_triton](https://github.com/kijai/ComfyUI-SolAttn_triton), pinned by
+`SOLATTN_NODES_REF=26d816ebd4f1e43a2c6e4d4759be3137f10a7a73`.
+pi-H3 uses its BF16 attention with INT8 QK and PV disabled, following the upstream
+quality fix. Existing weights are reused; older workers need a rebuild. Triton
+from the CUDA PyTorch environment compiles the kernels on first use. Plain
+installs include the nodes but omit pi-H3's optional model weights.
+[Model setup](../docs/models.md#pi-h3-two-step-dwd) covers selection, shared files
+and the fixed two-step recipe.
 
 ## Configuration knobs (`docker/.env`)
 

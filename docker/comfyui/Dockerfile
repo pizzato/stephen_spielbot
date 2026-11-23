@@ -207,6 +207,12 @@ ARG PIFLOW_NODES_REF=bcb6ffb8ff6191115e5803c4ddddef6a73b0b8a8
 RUN git clone https://github.com/Lakonik/ComfyUI-piFlow.git \
         custom_nodes/ComfyUI-piFlow \
     && git -C custom_nodes/ComfyUI-piFlow checkout "${PIFLOW_NODES_REF}"
+# Upstream's pi-H3 quality fix uses BF16 Sol-Attn: the native INT8 attention
+# degrades its two-step output. Triton is provided by the CUDA PyTorch install.
+ARG SOLATTN_NODES_REF=26d816ebd4f1e43a2c6e4d4759be3137f10a7a73
+RUN git clone https://github.com/kijai/ComfyUI-SolAttn_triton.git \
+        custom_nodes/ComfyUI-SolAttn_triton \
+    && git -C custom_nodes/ComfyUI-SolAttn_triton checkout "${SOLATTN_NODES_REF}"
 # Resample each pi-H3 request: DWD's decoded pixels live in a bounded cache,
 # so a cached sampler latent cannot safely be reused after its pixels expire.
 COPY docker/comfyui/pih3/ custom_nodes/spielbot_pih3/
