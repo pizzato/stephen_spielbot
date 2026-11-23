@@ -106,6 +106,7 @@ function SceneCard({
     singing: !!scene.singing, no_wardrobe: !!scene.no_wardrobe,
     continues_previous: !!scene.continues_previous,
     no_first_frame: !!scene.no_first_frame,
+    face_repair_mode: scene.face_repair_mode || 'inherit',
   })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
@@ -143,6 +144,7 @@ function SceneCard({
       no_wardrobe: !!s.no_wardrobe,
       continues_previous: !!s.continues_previous,
       no_first_frame: !!s.no_first_frame,
+      face_repair_mode: s.face_repair_mode || 'inherit',
       cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
       singing: !!s.singing,
     })
@@ -166,6 +168,7 @@ function SceneCard({
         no_wardrobe: !!st.no_wardrobe,
         continues_previous: !!st.continues_previous,
         no_first_frame: !!st.no_first_frame,
+        face_repair_mode: st.face_repair_mode || 'inherit',
       })
       return true
     } catch (e) {
@@ -370,7 +373,7 @@ function SceneCard({
   }
 
   const rerender = async (component, instruction = '') => {
-    await persist()
+    if (!await persist()) return
     setBusy(component)
     setError('')
     onRerenderStart(component)
@@ -807,6 +810,21 @@ function SceneCard({
             <VersionStrip versions={history?.versions} selected={history?.selected}
               onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={selecting || isRendering} />
 
+            <div className="row center gap-10 mt-16 row--wrap">
+              <label className="label-sm" htmlFor={`face-repair-${scene.id}`}>H3 face repair</label>
+              <select id={`face-repair-${scene.id}`} className="select" style={{ width: 'auto' }}
+                value={sceneType.face_repair_mode} disabled={isRendering}
+                onChange={(e) => changeType({ face_repair_mode: e.target.value }, true)}>
+                <option value="inherit">Style default</option>
+                <option value="off">Off</option>
+                <option value="auto">Automatic (small faces)</option>
+                <option value="on">On</option>
+              </select>
+              <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !scene.has_final}
+                title="Create an alternate take from the current video"
+                onClick={() => rerender('face_repair')}>{busy === 'face_repair' ? 'Repairing…' : 'Repair face'}</Button>
+            </div>
+
             <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
               onSelect={selectVideoVersion} onDelete={deleteVideoVersion} aspect={aspect} busy={selecting || isRendering} />
 
@@ -900,6 +918,74 @@ function TitleCardPreview({ workDir, card, imageUrl, aspect }) {
 }
 
 // ── Film tab: final cut + whole-video metadata + audio remix ──────────────────
+
+function SpotifyCanvas({ workDir, disabled }) {
+  const [canvas, setCanvas] = useState(null)
+  const [prompt, setPrompt] = useState('')
+  const [starting, setStarting] = useState(false)
+  const [error, setError] = useState('')
+  const running = canvas?.task?.status === 'running'
+
+  useEffect(() => {
+    let active = true
+    let timer
+    const load = async () => {
+      try {
+        const result = await api.spotifyCanvas(workDir)
+        if (!active) return
+        setCanvas(result)
+        if (result.task?.status === 'running') timer = setTimeout(load, 2000)
+      } catch (e) {
+        if (!active) return
+        setError(e.message)
+        if (running) timer = setTimeout(load, 3000)
+      }
+    }
+    load()
+    return () => { active = false; clearTimeout(timer) }
+  }, [workDir, running])
+
+  const generate = async () => {
+    setStarting(true)
+    setError('')
+    try {
+      const { task_id } = await api.generateSpotifyCanvas(workDir, prompt.trim())
+      setCanvas((current) => ({ ...current, task: { task_id, status: 'running', step: 'Preparing Spotify Canvas' } }))
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const busy = starting || running
+  const problem = error || canvas?.task?.error
+  return (
+    <Card span={4} padLg>
+      <span className="label-sm">Spotify Canvas</span>
+      <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>A silent six-second loop for Spotify for Artists.</p>
+      {canvas?.url && <>
+        <video key={canvas.url} src={canvas.url} controls muted loop playsInline preload="metadata"
+          className="mt-16" aria-label="Spotify Canvas preview"
+          style={{ display: 'block', width: '100%', maxWidth: 240, aspectRatio: '9 / 16', borderRadius: 'var(--r-md)', background: '#000' }} />
+        <a className="btn btn--ghost mt-8" href={canvas.download_url} download><Icon name="download" /> Download MP4</a>
+      </>}
+      {canvas && <div className="mt-16">
+        <Field label="Canvas prompt" hint={canvas.url ? 'Describe the new shot and how it should move.' : 'Leave blank for a gentle camera move on a film image.'}>
+          <textarea className="textarea" rows={3} maxLength={1500} value={prompt} disabled={busy}
+            placeholder="Blue light drifts across a dark bedroom as the curtains sway."
+            onChange={(e) => setPrompt(e.target.value)} />
+        </Field>
+        <Button variant="ghost" icon="rotate-right" onClick={generate}
+          disabled={disabled || busy || (!!canvas.url && !prompt.trim())}>
+          {busy ? 'Generating Canvas…' : canvas.url ? 'Regenerate Canvas' : 'Generate Canvas'}
+        </Button>
+        {running && <p className="muted" role="status">{canvas.task.step}</p>}
+      </div>}
+      {problem && <Banner>{problem}</Banner>}
+    </Card>
+  )
+}
 
 function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged, onSwitchToScenes }) {
   const [data, setData] = useState(null)
@@ -1773,6 +1859,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
 
         <WorkingFiles workDir={data.work_dir} busy={anyBusy || approving} onBusyChange={setCleanupBusy}
           onClean={refreshWorkingFileHistories} />
+
+        {data.song && <SpotifyCanvas key={data.work_dir} workDir={data.work_dir} disabled={anyBusy || approving} />}
 
         {!data.working_files_cleaned && <>
         {/* Cover image (same endpoints as the Script Cover tab / Publish) */}

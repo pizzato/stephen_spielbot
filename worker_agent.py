@@ -252,6 +252,7 @@ def _execute_scene_mux(store: DurableStore, task: TaskRecord) -> None:
 
 def _execute_final(store: DurableStore, task: TaskRecord) -> None:
     from app import load_config, video_provenance_settings
+    from pipeline.spotify_canvas import finish_music_video
 
     p = task.payload
     work_dir = Path(p["work_dir"]).expanduser()
@@ -260,6 +261,7 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
         raise RetryLater("final assembly needs scene_count")
     final_path = Path(p["final_path"]).expanduser()
     if store.skip_task_if_artifact_exists(task.id, final_path, artifact_kind="final_video", min_size=10_000):
+        finish_music_video(work_dir, final_path)
         return
 
     scene_finals = [work_dir / f"scene_{i:02d}_final.mp4" for i in range(1, scene_count + 1)]
@@ -268,18 +270,29 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
     # Continued shots (continues_previous) butt-join instead of fading — the
     # same joins resume_generation makes. Best-effort: on any hiccup every
     # boundary just keeps its fade.
+    rows = store.scene_rows(task.job_id)
+    jc: dict = {}
     try:
         import json as _json
 
         from pipeline import continuity as _continuity
 
-        rows = store.scene_rows(task.job_id)
         jc_path = work_dir / "job_config.json"
         jc = _json.loads(jc_path.read_text()) if jc_path.exists() else {}
         hard = (_continuity.hard_boundaries(rows, _continuity.continuation_plan(rows, jc))
                 if len(rows) == len(scene_finals) else set())
     except Exception:
         hard = set()
+    from pipeline import face_repair
+
+    cfg = load_config()
+    if any(face_repair.scene_mode(row, jc.get("face_repair_mode", "off")) != "off" for row in rows):
+        from pipeline.worker_pool import WorkerPool, alive_workers
+
+        urls = alive_workers(cfg.get("comfy_workers") or [])
+        pool = WorkerPool(urls) if urls else None
+        for row in rows:
+            face_repair.auto_repair_take(work_dir, row, {**cfg, **jc}, pool)
     concatenate_scenes(scene_finals, combined, hard_boundaries=hard)
     mix_background_music(
         combined,
@@ -289,10 +302,11 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
         voice_volume=float(p.get("voice_vol", 1.0)),
         ambient_path=Path(p["ambient_path"]).expanduser() if p.get("ambient_path") else None,
         ambient_volume=float(p.get("ambient_vol", 0.0)),
-        metadata_enabled=video_provenance_settings(load_config(), work_dir).get("video_metadata_enabled", True),
+        metadata_enabled=video_provenance_settings(cfg, work_dir).get("video_metadata_enabled", True),
     )
     if p.get("vid_width") and p.get("vid_height"):
         ensure_video_resolution(final_path, int(p["vid_width"]), int(p["vid_height"]))
+    finish_music_video(work_dir, final_path)
     store.record_artifact(task.job_id, task.id, "final_video", final_path, duration_seconds=_get_duration(final_path))
     store.complete_task(task.id, result={"path": str(final_path)}, message="final video ready")
 

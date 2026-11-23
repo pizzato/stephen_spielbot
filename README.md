@@ -27,7 +27,7 @@ An AI video generator that turns a topic into a fully produced short film — co
 4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [docs/tts_licensing.md](docs/tts_licensing.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
 5. **Dialogue** — scenes can instead be [acted or silent](docs/performance_films.md): the characters speak on screen, with MiniMax H3 Ref2VA generating picture and voice together from their portraits
 6. **Music** — [MiniMax Music 3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) generates automatic background music from the LLM's mood description during rendering, under its community license, and the score is mixed in at the very end (switch it off per style or per film). The Song tab’s normal **Generate** action also uses MiniMax; **Generate on Suno** offers a connected Suno account for that request. The [**Music video** format](docs/performance_films.md#singing-films-the-music-video-format) goes further: the LLM writes the story as tagged lyrics, the music model **sings** them (a lead singer is cast from the style's character catalogue and the vocalist is described by sex, age and background; MiniMax expands short Sound briefs into detailed genre and arrangement instructions), and the cast performs the song on camera — or you upload a song you already have and the film is built around that instead. Re-voice either kind of song with a library voice using **SoulX-Singer SVC** (default) or **Seed-VC**, selected per style; both are installed by `make install`
-7. **Assembly** — FFmpeg mixes everything into a single video with synced audio. Films aimed at QHD/4K (or upscaled later from the film editor) go through [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) video super-resolution by default — see [upscaler modes](docs/models.md#upscaler-modes)
+7. **Assembly** — Optional [H3 face repair](docs/manual/edit-film.md#h3-face-repair) redraws a tracked face from its character reference. Enable it by style or scene, or add a repaired take to an existing scene. FFmpeg mixes everything into a single video with synced audio. Films aimed at QHD/4K (or upscaled later from the film editor) go through [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) video super-resolution by default — see [upscaler modes](docs/models.md#upscaler-modes)
 
 **Suno** is also available through its official MCP connection: sign in under
 [Settings → Infrastructure → Music models](docs/manual/settings.md#music-models),
@@ -41,6 +41,8 @@ and download entitlements, with usage rights subject to Suno's terms and your pl
 
 Finished music videos can [**Realign lyrics to song**](docs/manual/edit-film.md#realign-lyrics-to-song)
 to correct scene lyric assignments and caption timings while keeping the existing cuts.
+Each new music video also gets a downloadable [**Spotify Canvas**](docs/manual/edit-film.md#spotify-canvas).
+Preview it or generate a new shot from a prompt on the Film tab, even after working-file cleanup.
 
 A film's **format** decides how the story is staged: narrated throughout, entirely
 [**acted**](docs/performance_films.md) — the characters speaking on screen, no narrator and

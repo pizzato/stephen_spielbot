@@ -259,7 +259,7 @@ at most once successfully. Turning the setting off cancels pending cleanup.
 
 Cleanup permanently removes working scene videos, duplicate renders, old visual
 versions and caches. It preserves the final video, scripts, closed captions,
-music, narration and reusable current/reference images. Editing the video after
+music, narration, Spotify Canvas and reusable current/reference images. Editing the video after
 cleanup requires rendering a new copy. See **[Clean up working files](edit-film.md#clean-up-working-files)**
 for the exact scope and the per-video manual action, preview and deletion record.
 
@@ -463,6 +463,14 @@ length. *Reset to natural pace* clears the target.
 
 **Resolution**, **first-pass steps**, **second-pass steps**. Higher is slower and more
 detailed.
+
+**H3 face repair** sets this style’s default for new video renders and scene
+re-shoots. **Off** leaves the shot as rendered. **Automatic (small faces)** runs
+repair when the detected face is small for the frame. **On** checks each eligible
+shot and fades the repair as the face fills the frame. Child styles inherit the
+default, and individual scenes can override it. Each repaired scene adds a GPU
+pass. See [H3 face repair](edit-film.md#h3-face-repair) for requirements and take
+selection.
 
 The resolution picker includes the **QHD** and **4K** finishing targets: the engines
 cannot render at those sizes, so a film aimed at one renders at FHD (same orientation)

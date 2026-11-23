@@ -32,7 +32,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Make the repo root importable so `import app` and `import pipeline.*` resolve
 # the same way they do when app.py runs directly.
@@ -70,6 +70,7 @@ from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
 from pipeline import music_history  # noqa: E402
 from pipeline import final_video_history  # noqa: E402
+from pipeline import spotify_canvas  # noqa: E402
 from pipeline import working_files  # noqa: E402
 from pipeline import scene_context  # noqa: E402
 from pipeline.cover import (  # noqa: E402
@@ -258,6 +259,7 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         # The user said this scene takes no first frame: the renderer paints
         # none and any image on disk stays out of the take's references.
         "no_first_frame": bool(meta.get("no_first_frame")),
+        "face_repair_mode": meta.get("face_repair_mode", "inherit"),
         "cast": meta.get("cast", []),
         # Normalized (a prose string becomes one whole-take beat): the editor
         # maps over these, and the renderer normalizes identically.
@@ -676,6 +678,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
         name = f"Continuing scene {scene_id}"
     elif scene_id > 0 and component == "scene":
         name = f"Recreating scene {scene_id}"
+    elif scene_id > 0 and component == "face_repair":
+        name = f"Repairing face in scene {scene_id}"
     elif scene_id > 0 and component != "narrator":
         name = f"Re-rendering scene {scene_id}"
     elif component == "final_upscale" or task_id.startswith("final_upscale_"):
@@ -684,6 +688,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
         name = "Re-voicing the song"
     elif component == "song_realign":
         name = "Realigning song lyrics"
+    elif component == "spotify_canvas":
+        name = "Generating Spotify Canvas"
     elif component == "music" or task_id.startswith("music_regen_"):
         name = "Regenerating music"
     elif component == "narrator" or task_id.startswith("narrator_regen_"):
@@ -5947,6 +5953,7 @@ class SceneUpdate(BaseModel):
     # reference. True is stored; False clears the key, so a frame is the
     # default wherever the renderer would paint one.
     no_first_frame: bool | None = None
+    face_repair_mode: Literal["inherit", "off", "auto", "on"] | None = None
     # Singing scenes only: the lyric lines this beat mouths, one per line, and
     # when each is heard in the clip's own seconds ([start, end] per line, in
     # order). Editing the times also rewrites ``vocal_ranges`` (their merged
@@ -6080,6 +6087,11 @@ def _update_scene(job_id: str, scene_id: int, body: SceneUpdate, *,
                 meta["continues_previous"] = True
             else:
                 meta.pop("continues_previous", None)
+        if body.face_repair_mode is not None:
+            if body.face_repair_mode == "inherit":
+                meta.pop("face_repair_mode", None)
+            else:
+                meta["face_repair_mode"] = body.face_repair_mode
         if body.cast is not None:
             meta["cast"] = [str(n).strip() for n in body.cast if str(n).strip()]
         if body.beats is not None:
@@ -7793,6 +7805,7 @@ def start_generation(body: GenerateBody) -> dict:
         # resume_generation.py reads them like every other render key.
         "finish_resolution": finish_resolution,
         "finish_upscale_mode": ss.get("finish_upscale_mode") or "flashvsr_2x",
+        "face_repair_mode": ss.get("face_repair_mode") or "off",
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         # 0 = natural; >0 robotizes at that strength (the on/off toggle was
         # folded into the level).
@@ -15738,6 +15751,8 @@ def _shared_edit_render_pool():
     except Exception as exc:
         gapp.logger.warning("Re-render worker probe failed: %s", exc)
         return None
+    if not urls:
+        return None
     key = tuple(sorted(urls))
     with _edit_render_pool_lock:
         if _edit_render_pool is None or _edit_render_pool_key != key:
@@ -15789,13 +15804,15 @@ def _finish_film_task_error(task_id: str, e: Exception) -> None:
                                 "finished_at": time.time()}
 
 
-def _clear_finished_film_tasks(work_dir: str, scene_id: int) -> None:
+def _clear_finished_film_tasks(work_dir: str, scene_id: int, *, component: str = "") -> None:
     """Drop terminal (error/cancelled/done) re-render records for a scene. Called
     when a fresh re-render starts so it supersedes any earlier failed attempt on
     that scene (clears the stale 'failed' badge) and terminal records don't pile
     up in the in-memory task stores."""
     for tid, meta in list(_film_task_meta.items()):
         if meta.get("work_dir") != work_dir or meta.get("scene_id") != scene_id:
+            continue
+        if component and meta.get("component") != component:
             continue
         if (_film_tasks.get(tid) or {}).get("status") == "running":
             continue
@@ -16969,6 +16986,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         mux_video_audio(scene_video, narration_path, staged_final)
         staged_final.replace(final_path)
         video_history.record(wd, sid, final_path)
+        _repair_rendered_scene(task_id, wd, row, jc, cfg, pool)
         # The fresh single clip + final supersede any legacy multi-clip artifacts.
         for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_02.mp4"):
             (wd / legacy).unlink(missing_ok=True)
@@ -17052,6 +17070,7 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         if staged:
             staged_path.replace(final_path)
         video_history.record(wd, sid, final_path)
+        _repair_rendered_scene(task_id, wd, row, jc, cfg, pool)
         # The fresh final supersedes any legacy narration-style artifacts.
         for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
                        f"scene_{sid:02d}_clip_02.mp4"):
@@ -17064,6 +17083,36 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         if staged_started:
             scene_context.path(wd, sid).unlink(missing_ok=True)
         _finish_film_task_error(task_id, e)
+
+
+def _repair_rendered_scene(task_id: str, wd: Path, row: dict, jc: dict, cfg: dict, pool,
+                           *, manual: bool = False) -> None:
+    from pipeline import face_repair
+
+    resolved = {**cfg, **jc}
+    resolved["face_repair_mode"] = gapp.style_settings(
+        cfg, jc.get("style_name") or "").get("face_repair_mode", "off")
+    if not manual and face_repair.scene_mode(row, resolved["face_repair_mode"]) == "off":
+        return
+    _film_tasks[task_id]["step"] = "face repair"
+    options = {
+        "acquire": lambda allowed: _acquire_render_worker(pool, task_id, allowed=allowed),
+        "checkpoint": lambda: _film_checkpoint(task_id),
+    }
+    if manual:
+        face_repair.repair_take(wd, row, resolved, pool, mode="on", select=False, **options)
+    else:
+        face_repair.auto_repair_take(wd, row, resolved, pool, **options)
+
+
+def _run_face_repair(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                     instruction: str = "") -> None:
+    try:
+        _repair_rendered_scene(task_id, wd, row, jc, gapp.load_config(),
+                               _shared_edit_render_pool(), manual=True)
+        _film_tasks[task_id] = {"status": "done"}
+    except Exception as exc:
+        _finish_film_task_error(task_id, exc)
 
 
 def _run_scene_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
@@ -17145,14 +17194,14 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
         _film_cancelled_tids.discard(tid)
         end = time.time()
         status = (_film_tasks.get(tid) or {}).get("status")
-        operation = "Recreation" if component == "scene" else "Re-render"
+        operation = {"scene": "Recreation", "face_repair": "Face repair"}.get(component, "Re-render")
         if status == "error":
             name, st = f"{operation} failed — scene {sid}", "error"
         elif status == "cancelled":
             name, st = f"{operation} cancelled — scene {sid}", "cancelled"
         else:
-            name, st = (f"Recreated scene {sid}" if component == "scene"
-                        else f"Re-rendered scene {sid}"), "done"
+            verb = {"scene": "Recreated", "face_repair": "Repaired face in"}.get(component, "Re-rendered")
+            name, st = f"{verb} scene {sid}", "done"
             # Learn this op's duration so the next re-render predicts its ETA.
             # Acted scenes render as one H3 generation and take far longer
             # than an LTX clip — keep their timings out of the "video" average.
@@ -17176,10 +17225,10 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
     errors."""
     if working_files.is_cleaned(wd):
         raise ValueError("Working video files were cleaned up. Render a new copy from the saved script.")
-    if component not in ("narration", "image", "video", "scene"):
+    if component not in ("narration", "image", "video", "scene", "face_repair"):
         raise ValueError(f"Unknown component: {component!r}")
     if any(info.get("work_dir") == str(wd) and info.get("scene_id") == sid
-           and (component == "scene" or info.get("component") == "scene")
+           and (component in ("scene", "face_repair") or info.get("component") in ("scene", "face_repair"))
            and (_film_tasks.get(tid) or {}).get("status") == "running"
            for tid, info in list(_film_task_meta.items())):
         raise ValueError("This scene is rendering right now — wait for it to finish first.")
@@ -17193,8 +17242,16 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         store.close()
 
     row = next((r for r in rows if int(r.get("id") or r.get("scene_id") or 0) == sid), None)
+    if not row and component == "face_repair":
+        # Older films may only have their script snapshot on disk.
+        row = next((r for r in gapp._load_scenes_for_work_dir(wd) or [] if int(r.get("id") or 0) == sid), None)
     if not row:
         raise LookupError(f"Scene {sid} not found.")
+    if component == "face_repair":
+        if _work_dir_render_active(wd):
+            raise ValueError("Wait for the film render to finish before repairing a face.")
+        if not (wd / f"scene_{sid:02d}_final.mp4").is_file():
+            raise ValueError("Render this scene before repairing its face.")
 
     scene_meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     scene_mode = str((scene_meta or {}).get("mode") or "narration")
@@ -17255,6 +17312,8 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         target = _run_image_rerender
     elif component == "scene":
         target = _run_scene_rerender
+    elif component == "face_repair":
+        target = _run_face_repair
     elif performance_mode.renders_acted({"metadata": scene_meta},
                                         _acted_silent_cfg(jc)):
         # Acted scenes re-render whole: one H3 generation carrying its own
@@ -17784,6 +17843,116 @@ def film_tasks_for_work_dir(work_dir: str = Query(...)) -> dict:
                 "error": task.get("error", "Re-render failed"),
             })
     return {"ok": True, "tasks": out}
+
+
+class SpotifyCanvasBody(BaseModel):
+    work_dir: str
+    prompt: str = Field(default="", max_length=1500)
+
+
+def _spotify_canvas_film(work_dir: str) -> tuple[Path, Path]:
+    wd = _working_files_dir(work_dir)
+    if not _is_music_video(wd):
+        raise HTTPException(404, "Spotify Canvas is available for music videos.")
+    output = wd / spotify_canvas.FILENAME
+    if output.is_symlink():
+        raise HTTPException(400, "Spotify Canvas cannot be a symbolic link.")
+    return wd, output
+
+
+@api.get("/api/films/spotify-canvas")
+def film_spotify_canvas(work_dir: str = Query(...)) -> dict:
+    wd, output = _spotify_canvas_film(work_dir)
+    task = next((task for task in film_tasks_for_work_dir(str(wd))["tasks"]
+                 if task["component"] == "spotify_canvas"), None)
+    url = ""
+    if output.is_file():
+        query = urllib.parse.urlencode({"work_dir": str(wd), "v": output.stat().st_mtime_ns})
+        url = f"/api/films/spotify-canvas/file?{query}"
+    return {"url": url, "download_url": f"{url}&download=true" if url else "", "task": task}
+
+
+@api.get("/api/films/spotify-canvas/file")
+def film_spotify_canvas_file(work_dir: str = Query(...), download: bool = False) -> FileResponse:
+    wd, output = _spotify_canvas_film(work_dir)
+    if not output.is_file():
+        raise HTTPException(404, "Generate a Spotify Canvas first.")
+    return FileResponse(output, media_type="video/mp4",
+                        filename=f"{wd.name}-spotify-canvas.mp4" if download else None)
+
+
+def _run_spotify_canvas(task_id: str, wd: Path, final: Path, prompt: str) -> None:
+    from pipeline import comfyui
+
+    try:
+        _film_checkpoint(task_id)
+        if not prompt:
+            spotify_canvas.generate_default(wd, final)
+        else:
+            cfg, jc = gapp.load_config(), _film_job_config(wd)
+            image_engine = gapp.scene_frame_engine(cfg, jc.get("style_name", ""))
+            video_engine = _resolve_video_for_job(cfg, jc)
+            pool = _shared_edit_render_pool()
+            if pool is None:
+                raise RuntimeError("No ComfyUI workers reachable.")
+            allowed = comfyui.compatible_video_workers(pool.urls, video_engine)
+            reference = spotify_canvas.reference_frame(wd)
+            art_direction = (
+                "A single cinematic Spotify Canvas shot, with the main subject near the center. "
+                "No lyrics, text, logos, singing, talking, cuts or flashing. "
+                f"Music video look: {jc.get('style') or 'match the reference when provided'}. "
+                f"Creative direction: {prompt}"
+            )
+            with tempfile.TemporaryDirectory(prefix=".spotify-canvas-", dir=wd) as temp:
+                frame = Path(temp) / "frame.png"
+                clip = Path(temp) / "clip.mp4"
+                staged = Path(temp) / spotify_canvas.FILENAME
+                width, height = spotify_canvas.WIDTH, spotify_canvas.HEIGHT
+                url = _acquire_render_worker(pool, task_id, allowed=allowed)
+                try:
+                    _film_checkpoint(task_id)
+                    _film_tasks[task_id]["step"] = "Canvas image"
+                    comfyui.generate_with_engine(
+                        image_engine, art_direction, frame, width=width, height=height,
+                        reference_images=[reference] if reference else None, comfy_url=url,
+                    )
+                    _film_checkpoint(task_id)
+                    _film_tasks[task_id]["step"] = "Canvas motion"
+                    comfyui.generate_video_with_engine(
+                        video_engine, f"{art_direction} Gentle motion suitable for playing in reverse.",
+                        "singing, talking, text, letters, logos, cuts, flashing", frame, clip,
+                        width=width, height=height, duration_seconds=3, comfy_url=url,
+                    )
+                finally:
+                    pool.release(url)
+                _film_checkpoint(task_id)
+                _film_tasks[task_id]["step"] = "Encoding Canvas loop"
+                spotify_canvas.render_loop(clip, staged)
+                _film_checkpoint(task_id)
+                staged.replace(wd / spotify_canvas.FILENAME)
+        _film_tasks[task_id] = {"status": "done"}
+    except Exception as exc:
+        _finish_film_task_error(task_id, exc)
+
+
+@api.post("/api/films/spotify-canvas")
+def generate_film_spotify_canvas(body: SpotifyCanvasBody) -> dict:
+    wd, output = _spotify_canvas_film(body.work_dir)
+    prompt = body.prompt.strip()
+    if output.is_file() and not prompt:
+        raise HTTPException(400, "Enter a prompt to regenerate the Canvas.")
+    final = _working_files_final(wd)
+    if not gapp._has_finished_video(wd) or not final.is_file() or not _safe_under(final, gapp.OUTPUT_DIR):
+        raise HTTPException(409, "Finish rendering the music video first.")
+    with _reassemble_lock(wd):
+        if _film_edit_busy(wd):
+            raise HTTPException(409, "Wait for this film's current edit or upload to finish.")
+        _clear_finished_film_tasks(str(wd), 0, component="spotify_canvas")
+        tid = uuid.uuid4().hex
+        _film_tasks[tid] = {"status": "running", "step": "Preparing Spotify Canvas"}
+        _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": 0, "component": "spotify_canvas"}
+        threading.Thread(target=_run_spotify_canvas, args=(tid, wd, final, prompt), daemon=True).start()
+    return {"task_id": tid}
 
 
 @api.post("/api/films/delete")

@@ -509,6 +509,8 @@ export const api = {
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
   filmTasksForWorkDir: (workDir) => req('GET', `/films/tasks?work_dir=${encodeURIComponent(workDir || '')}`),
+  spotifyCanvas: (workDir) => req('GET', `/films/spotify-canvas?work_dir=${encodeURIComponent(workDir)}`),
+  generateSpotifyCanvas: (workDir, prompt) => req('POST', '/films/spotify-canvas', { work_dir: workDir, prompt }),
 
   // engagement prediction (issue #50); per-channel models (issue #22)
   engagementStatus: (channel) => req('GET', '/engagement/status' + (channel ? `?channel=${encodeURIComponent(channel)}` : '')),

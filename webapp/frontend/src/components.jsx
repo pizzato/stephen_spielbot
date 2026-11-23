@@ -1049,7 +1049,7 @@ export function VideoVersionStrip({ versions, selected, onSelect, onDelete, aspe
                   background: 'rgba(0,0,0,.55)', padding: '1px 5px', borderRadius: 3,
                   letterSpacing: '.04em',
                 }}>
-                  <Icon name="film" />{v.lang ? ` ${v.lang.toUpperCase()}` : ''}
+                  <Icon name="film" />{v.label === 'H3 face repair' ? ' Repair' : v.lang ? ` ${v.lang.toUpperCase()}` : ''}
                 </span>
                 {isSel && (
                   <span style={{

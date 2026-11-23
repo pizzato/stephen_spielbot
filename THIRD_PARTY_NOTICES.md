@@ -82,6 +82,18 @@ licence; the video-model terms below do not substitute for it.
 > (`assets/default_narrator.mp3`) provenance is still pending a public-domain
 > replacement (tracked TODO).
 
+## Optional face repair controller tools
+
+- [Ultralytics](https://github.com/ultralytics/ultralytics/blob/main/LICENSE)
+  provides the YOLO detector runtime (AGPL-3.0, with a separate commercial licence
+  available from its authors). It is installed separately with `make install-face-repair`.
+- [Bingsu/adetailer face_yolov8n](https://huggingface.co/Bingsu/adetailer/tree/53cc19de382014514d9d4038601d261a7faa9b7b)
+  provides the face detector checkpoint (model repository lists Apache-2.0).
+  The pinned checkpoint is downloaded and checksum-verified on first use.
+- The mask, size fade, and H3 crop redraw were informed by
+  [PixelAI Labs’ H3 Face Fix workflow](https://github.com/Pixelailabs/ComfyUI-H3-FaceFix-PixelAILabs)
+  (MIT). The pass uses the existing H3 Ref2VA Turbo model bundle listed above.
+
 ## Runtime tools
 
 - **MCP Python SDK** (`mcp`, 1.x) —

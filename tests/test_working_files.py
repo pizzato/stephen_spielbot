@@ -49,6 +49,7 @@ def add_cache(wd):
 
 def test_preview_and_cleanup_preserve_current_assets_and_metadata(film):
     wd, final = film
+    canvas = put(wd / "spotify_canvas.mp4", b"canvas")
     lyrics = "[Verse]\nOlá\n\n[Chorus]\nMundo\n"
     put(wd / "song.json", json.dumps({"lyrics": lyrics}).encode("utf-8"))
     put(wd / "lyrics.txt", lyrics.encode("utf-8"))
@@ -70,6 +71,8 @@ def test_preview_and_cleanup_preserve_current_assets_and_metadata(film):
     kept_scripts = next(group for group in preview["kept"]["groups"]
                         if group["label"] == "Scripts and metadata")
     assert {"song.json", "lyrics.txt"} <= {item["name"] for item in kept_scripts["items"]}
+    kept_canvas = next(group for group in preview["kept"]["groups"] if group["label"] == "Spotify Canvas")
+    assert kept_canvas["items"][0]["path"] == str(canvas)
     result = working_files.clean(wd, final)
     assert result["files"] == 13
     assert result["bytes"] == preview["bytes"]
@@ -77,6 +80,7 @@ def test_preview_and_cleanup_preserve_current_assets_and_metadata(film):
     assert {f["name"] for f in result["removed"]} == {
         f["name"] for group in preview["groups"] for f in group["items"]}
     assert final.read_bytes() == b"final" * 4000
+    assert canvas.read_bytes() == b"canvas"
     expendable = {"combined.mp4", "scene_01_final.mp4", "scene_01_video.mp4", "scene_01_clip_01.mp4"}
     assert all(p.read_bytes() == content for p, content in original.items() if p.name not in expendable)
     assert all(not (wd / name).exists() for name in expendable)

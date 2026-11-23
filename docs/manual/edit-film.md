@@ -50,6 +50,7 @@ It keeps:
   current scene video is extracted to a separate `scene_NN_original_audio.wav`
   before deleting that clip; an extraction failure stops cleanup.
 - **Closed captions (SRT)**, saved with the final cut's timing before removing clips.
+- The **[Spotify Canvas](#spotify-canvas)** for a music video.
 - Current images, cover artwork, character/original reference assets and metadata.
 
 Unknown files and symbolic links are left alone. The finished film remains in
@@ -66,6 +67,24 @@ filenames cannot be recovered. Empty folders and retained WAVs are expected.
 Automatic cleanup belongs to **[Settings → Styles](settings.md#automatic-working-file-cleanup)**,
 not individual videos. There is no per-video automatic-cleanup control, and
 legacy per-video preferences are ignored. Manual cleanup remains available here.
+
+### Spotify Canvas
+
+Each new music video gets a Canvas after final assembly. The default adds a gentle
+camera push to a scene image and then reverses it. If the automatic export fails,
+you can retry from the Film tab. For an older music video, open
+**Film → Spotify Canvas → Generate Canvas**. Leave the prompt blank for the same
+automatic treatment.
+
+Enter a **Canvas prompt** to generate a new shot with the film's image and video
+engines. Describe both the image and a small motion that will look natural in
+reverse, such as curtains swaying in blue light. **Regenerate Canvas** replaces
+the current download after the new render succeeds. The Film tab previews the
+loop and offers **Download MP4**. Both actions remain available after cleanup.
+
+The file is a silent six-second 576 × 1024 MP4 with matching first and last frames.
+Upload it yourself under **Spotify for Artists → Music → select the track → Add Canvas**.
+See [Spotify's Canvas guidelines](https://support.spotify.com/us/artists/article/canvas-guidelines/).
 
 ### Cover image
 
@@ -584,6 +603,30 @@ Continue is offered only where it can actually work, so the button is absent whe
 
 **Reassemble film** (top of the list) re-cuts the published final from the scene parts —
 after re-shoots, take picks, or reorders — re-mixing music only where the film has it.
+
+### H3 face repair
+
+Use **Repair face** on an existing scene to create an alternate take. It tracks the
+main face, redraws its crop with MiniMax H3 using the character’s portrait, and blends
+the crop into the scene at the original dimensions and frame rate. The source audio
+is copied. Choose the **Repair** take in **Video takes** to use it, then select
+**Reassemble film** or run the film upscale again. Review the eyes and mouth in
+motion, since the redraw may change an expression.
+
+The **H3 face repair** selector under each scene overrides its style’s setting on the
+next video render. **Style default** follows Settings → Styles → Render quality.
+**Automatic** checks whether the median tracked face height is up to 150 pixels at
+1080p, scaled to the clip’s height. **On** checks every eligible shot. Both modes
+apply full repair at and below 110 px, fade through 180 px and keep larger faces.
+Automatic renders select a successful repaired take and retain the original in
+history. Scenes without a single matched character reference or a reliable track
+keep their original take.
+
+On the controller, run `make install-face-repair` once. The first run downloads
+the small face detector. A ComfyUI worker needs the MiniMax H3 Ref2VA Turbo
+(LightX2V) bundle, the INT8 H3 video VAE used by pi-H3, and VideoHelperSuite. The
+pass accepts constant 24, 25 or 30 fps scenes up to 360 frames. Start from an
+original take for another repair or to continue the original H3 motion.
 
 ### Version history
 
