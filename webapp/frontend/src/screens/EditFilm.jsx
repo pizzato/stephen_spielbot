@@ -106,6 +106,7 @@ function SceneCard({
     singing: !!scene.singing, no_wardrobe: !!scene.no_wardrobe,
     continues_previous: !!scene.continues_previous,
     no_first_frame: !!scene.no_first_frame,
+    face_repair_mode: scene.face_repair_mode || 'inherit',
   })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
@@ -143,6 +144,7 @@ function SceneCard({
       no_wardrobe: !!s.no_wardrobe,
       continues_previous: !!s.continues_previous,
       no_first_frame: !!s.no_first_frame,
+      face_repair_mode: s.face_repair_mode || 'inherit',
       cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
       singing: !!s.singing,
     })
@@ -166,6 +168,7 @@ function SceneCard({
         no_wardrobe: !!st.no_wardrobe,
         continues_previous: !!st.continues_previous,
         no_first_frame: !!st.no_first_frame,
+        face_repair_mode: st.face_repair_mode || 'inherit',
       })
       return true
     } catch (e) {
@@ -370,7 +373,7 @@ function SceneCard({
   }
 
   const rerender = async (component, instruction = '') => {
-    await persist()
+    if (!await persist()) return
     setBusy(component)
     setError('')
     onRerenderStart(component)
@@ -806,6 +809,21 @@ function SceneCard({
 
             <VersionStrip versions={history?.versions} selected={history?.selected}
               onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={selecting || isRendering} />
+
+            <div className="row center gap-10 mt-16 row--wrap">
+              <label className="label-sm" htmlFor={`face-repair-${scene.id}`}>H3 face repair</label>
+              <select id={`face-repair-${scene.id}`} className="select" style={{ width: 'auto' }}
+                value={sceneType.face_repair_mode} disabled={isRendering}
+                onChange={(e) => changeType({ face_repair_mode: e.target.value }, true)}>
+                <option value="inherit">Style default</option>
+                <option value="off">Off</option>
+                <option value="auto">Automatic (small faces)</option>
+                <option value="on">On</option>
+              </select>
+              <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !scene.has_final}
+                title="Create an alternate take from the current video"
+                onClick={() => rerender('face_repair')}>{busy === 'face_repair' ? 'Repairing…' : 'Repair face'}</Button>
+            </div>
 
             <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
               onSelect={selectVideoVersion} onDelete={deleteVideoVersion} aspect={aspect} busy={selecting || isRendering} />

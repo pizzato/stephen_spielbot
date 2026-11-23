@@ -211,6 +211,7 @@ DEFAULT_CFG = {
     # says only THAT a finishing pass runs. "ic_lora" and "h3_latent" land on
     # the target itself. See pipeline/assembler.temporal_ai_upscale_video.
     "default_finish_upscale_mode": "flashvsr_2x",
+    "default_face_repair_mode": "off",
     "max_clip_secs": 0,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;
@@ -601,6 +602,7 @@ STYLE_FIELD_TO_FLAT = {
     "resolution":           "resolution",
     # Finishing upscaler for upscale-only targets (QHD/4K)
     "finish_upscale_mode":  "default_finish_upscale_mode",
+    "face_repair_mode":      "default_face_repair_mode",
     # Small/Medium/Large size presets (scenes + resolution per bucket)
     "size_presets":         "default_size_presets",
     "lora_strength":        "lora_strength",
@@ -1279,6 +1281,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "video_engine", _norm_video_engine)
         _coerce(row, "video_steps", _norm_video_steps)
+        _coerce(row, "face_repair_mode", lambda v: v if v in ("off", "auto", "on") else "off")
         _coerce(row, "h3_chain_scenes", _norm_h3_chain_scenes)
         _coerce(row, "h3_silent_scenes", _norm_h3_silent_scenes)
         _coerce(row, "h3_first_frames", _norm_h3_first_frames)

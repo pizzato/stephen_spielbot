@@ -258,6 +258,7 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         # The user said this scene takes no first frame: the renderer paints
         # none and any image on disk stays out of the take's references.
         "no_first_frame": bool(meta.get("no_first_frame")),
+        "face_repair_mode": meta.get("face_repair_mode", "inherit"),
         "cast": meta.get("cast", []),
         # Normalized (a prose string becomes one whole-take beat): the editor
         # maps over these, and the renderer normalizes identically.
@@ -676,6 +677,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
         name = f"Continuing scene {scene_id}"
     elif scene_id > 0 and component == "scene":
         name = f"Recreating scene {scene_id}"
+    elif scene_id > 0 and component == "face_repair":
+        name = f"Repairing face in scene {scene_id}"
     elif scene_id > 0 and component != "narrator":
         name = f"Re-rendering scene {scene_id}"
     elif component == "final_upscale" or task_id.startswith("final_upscale_"):
@@ -5947,6 +5950,7 @@ class SceneUpdate(BaseModel):
     # reference. True is stored; False clears the key, so a frame is the
     # default wherever the renderer would paint one.
     no_first_frame: bool | None = None
+    face_repair_mode: Literal["inherit", "off", "auto", "on"] | None = None
     # Singing scenes only: the lyric lines this beat mouths, one per line, and
     # when each is heard in the clip's own seconds ([start, end] per line, in
     # order). Editing the times also rewrites ``vocal_ranges`` (their merged
@@ -6080,6 +6084,11 @@ def _update_scene(job_id: str, scene_id: int, body: SceneUpdate, *,
                 meta["continues_previous"] = True
             else:
                 meta.pop("continues_previous", None)
+        if body.face_repair_mode is not None:
+            if body.face_repair_mode == "inherit":
+                meta.pop("face_repair_mode", None)
+            else:
+                meta["face_repair_mode"] = body.face_repair_mode
         if body.cast is not None:
             meta["cast"] = [str(n).strip() for n in body.cast if str(n).strip()]
         if body.beats is not None:
@@ -7793,6 +7802,7 @@ def start_generation(body: GenerateBody) -> dict:
         # resume_generation.py reads them like every other render key.
         "finish_resolution": finish_resolution,
         "finish_upscale_mode": ss.get("finish_upscale_mode") or "flashvsr_2x",
+        "face_repair_mode": ss.get("face_repair_mode") or "off",
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         # 0 = natural; >0 robotizes at that strength (the on/off toggle was
         # folded into the level).
@@ -15738,6 +15748,8 @@ def _shared_edit_render_pool():
     except Exception as exc:
         gapp.logger.warning("Re-render worker probe failed: %s", exc)
         return None
+    if not urls:
+        return None
     key = tuple(sorted(urls))
     with _edit_render_pool_lock:
         if _edit_render_pool is None or _edit_render_pool_key != key:
@@ -16969,6 +16981,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         mux_video_audio(scene_video, narration_path, staged_final)
         staged_final.replace(final_path)
         video_history.record(wd, sid, final_path)
+        _repair_rendered_scene(task_id, wd, row, jc, cfg, pool)
         # The fresh single clip + final supersede any legacy multi-clip artifacts.
         for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_02.mp4"):
             (wd / legacy).unlink(missing_ok=True)
@@ -17052,6 +17065,7 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         if staged:
             staged_path.replace(final_path)
         video_history.record(wd, sid, final_path)
+        _repair_rendered_scene(task_id, wd, row, jc, cfg, pool)
         # The fresh final supersedes any legacy narration-style artifacts.
         for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
                        f"scene_{sid:02d}_clip_02.mp4"):
@@ -17064,6 +17078,36 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         if staged_started:
             scene_context.path(wd, sid).unlink(missing_ok=True)
         _finish_film_task_error(task_id, e)
+
+
+def _repair_rendered_scene(task_id: str, wd: Path, row: dict, jc: dict, cfg: dict, pool,
+                           *, manual: bool = False) -> None:
+    from pipeline import face_repair
+
+    resolved = {**cfg, **jc}
+    resolved["face_repair_mode"] = gapp.style_settings(
+        cfg, jc.get("style_name") or "").get("face_repair_mode", "off")
+    if not manual and face_repair.scene_mode(row, resolved["face_repair_mode"]) == "off":
+        return
+    _film_tasks[task_id]["step"] = "face repair"
+    options = {
+        "acquire": lambda allowed: _acquire_render_worker(pool, task_id, allowed=allowed),
+        "checkpoint": lambda: _film_checkpoint(task_id),
+    }
+    if manual:
+        face_repair.repair_take(wd, row, resolved, pool, mode="on", select=False, **options)
+    else:
+        face_repair.auto_repair_take(wd, row, resolved, pool, **options)
+
+
+def _run_face_repair(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                     instruction: str = "") -> None:
+    try:
+        _repair_rendered_scene(task_id, wd, row, jc, gapp.load_config(),
+                               _shared_edit_render_pool(), manual=True)
+        _film_tasks[task_id] = {"status": "done"}
+    except Exception as exc:
+        _finish_film_task_error(task_id, exc)
 
 
 def _run_scene_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
@@ -17145,14 +17189,14 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
         _film_cancelled_tids.discard(tid)
         end = time.time()
         status = (_film_tasks.get(tid) or {}).get("status")
-        operation = "Recreation" if component == "scene" else "Re-render"
+        operation = {"scene": "Recreation", "face_repair": "Face repair"}.get(component, "Re-render")
         if status == "error":
             name, st = f"{operation} failed — scene {sid}", "error"
         elif status == "cancelled":
             name, st = f"{operation} cancelled — scene {sid}", "cancelled"
         else:
-            name, st = (f"Recreated scene {sid}" if component == "scene"
-                        else f"Re-rendered scene {sid}"), "done"
+            verb = {"scene": "Recreated", "face_repair": "Repaired face in"}.get(component, "Re-rendered")
+            name, st = f"{verb} scene {sid}", "done"
             # Learn this op's duration so the next re-render predicts its ETA.
             # Acted scenes render as one H3 generation and take far longer
             # than an LTX clip — keep their timings out of the "video" average.
@@ -17176,10 +17220,10 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
     errors."""
     if working_files.is_cleaned(wd):
         raise ValueError("Working video files were cleaned up. Render a new copy from the saved script.")
-    if component not in ("narration", "image", "video", "scene"):
+    if component not in ("narration", "image", "video", "scene", "face_repair"):
         raise ValueError(f"Unknown component: {component!r}")
     if any(info.get("work_dir") == str(wd) and info.get("scene_id") == sid
-           and (component == "scene" or info.get("component") == "scene")
+           and (component in ("scene", "face_repair") or info.get("component") in ("scene", "face_repair"))
            and (_film_tasks.get(tid) or {}).get("status") == "running"
            for tid, info in list(_film_task_meta.items())):
         raise ValueError("This scene is rendering right now — wait for it to finish first.")
@@ -17193,8 +17237,16 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         store.close()
 
     row = next((r for r in rows if int(r.get("id") or r.get("scene_id") or 0) == sid), None)
+    if not row and component == "face_repair":
+        # Older films may only have their script snapshot on disk.
+        row = next((r for r in gapp._load_scenes_for_work_dir(wd) or [] if int(r.get("id") or 0) == sid), None)
     if not row:
         raise LookupError(f"Scene {sid} not found.")
+    if component == "face_repair":
+        if _work_dir_render_active(wd):
+            raise ValueError("Wait for the film render to finish before repairing a face.")
+        if not (wd / f"scene_{sid:02d}_final.mp4").is_file():
+            raise ValueError("Render this scene before repairing its face.")
 
     scene_meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     scene_mode = str((scene_meta or {}).get("mode") or "narration")
@@ -17255,6 +17307,8 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         target = _run_image_rerender
     elif component == "scene":
         target = _run_scene_rerender
+    elif component == "face_repair":
+        target = _run_face_repair
     elif performance_mode.renders_acted({"metadata": scene_meta},
                                         _acted_silent_cfg(jc)):
         # Acted scenes re-render whole: one H3 generation carrying its own

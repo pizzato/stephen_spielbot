@@ -1,0 +1,2 @@
+# Optional controller-side face tracking. The H3 renderer stays on ComfyUI.
+ultralytics==8.4.216

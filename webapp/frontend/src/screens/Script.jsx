@@ -962,6 +962,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         no_wardrobe: !!s.no_wardrobe,
         continues_previous: !!s.continues_previous,
         no_first_frame: !!s.no_first_frame,
+        face_repair_mode: s.face_repair_mode || 'inherit',
         // Singing scenes: the sung lines and their in-clip times, edited in
         // the staging panel below the soundtrack slice.
         sings: s.sings ?? null, line_times: s.line_times ?? null,
@@ -1236,6 +1237,19 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   refreshPerf()
                 } catch (e) { setError(e.message) }
               }} />
+
+            <Field label="H3 face repair">
+              <select className="select" value={s.face_repair_mode || 'inherit'} onChange={(e) => {
+                const face_repair_mode = e.target.value
+                setField(i, 'face_repair_mode', face_repair_mode)
+                persist(i, { ...s, face_repair_mode })
+              }}>
+                <option value="inherit">Style default</option>
+                <option value="off">Off</option>
+                <option value="auto">Automatic (small faces)</option>
+                <option value="on">On</option>
+              </select>
+            </Field>
 
             {(s.mode || 'narration') === 'narration' && (
               <Field label={fieldLabel(i, 'Narration', 'narration', 'microphone-lines')}>

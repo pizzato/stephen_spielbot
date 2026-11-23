@@ -51,10 +51,11 @@ def preserve_scene_audio(work_dir: Path) -> None:
 
 
 @contextmanager
-def _history_locks():
+def _history_locks(work_dir: Path):
     with ExitStack() as stack:
         for module in (image_history, video_history, music_history, final_video_history):
-            stack.enter_context(module._LOCK)
+            lock = video_history._locked(work_dir) if module is video_history else module._LOCK
+            stack.enter_context(lock)
         yield
 
 
@@ -142,7 +143,7 @@ def _summary(work_dir: Path, candidates: dict) -> dict:
 
 
 def preview(work_dir: Path, final: Path) -> dict:
-    with _history_locks():
+    with _history_locks(work_dir):
         candidates, _ = _plan(work_dir, final)
         kept = {path: "Other retained files" for path in work_dir.rglob("*")
                 if _local_file(work_dir, path) and path not in candidates}
@@ -162,7 +163,7 @@ def preview(work_dir: Path, final: Path) -> dict:
 
 def clean(work_dir: Path, final: Path) -> dict:
     """Rescan under the history writers' locks; only unlink explicit candidates."""
-    with _history_locks():
+    with _history_locks(work_dir):
         candidates, manifests = _plan(work_dir, final)
         deleted, errors, freed, removed = set(), [], 0, []
         for path, group in candidates.items():

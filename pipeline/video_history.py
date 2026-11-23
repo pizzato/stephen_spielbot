@@ -15,17 +15,17 @@ Video takes are large (~5–20 MB each), so only the most recent ``_MAX_VERSIONS
 takes per scene are kept; older take files are pruned on each new record. The
 currently-selected take is never pruned.
 
-All manifest writes happen in the single web-backend process, so a module-level
-lock around the read-modify-write is enough; ``_save`` writes atomically so
-readers never see a half-written file.
+Render workers and the editor serialize writes per film. ``_save`` writes atomically
+so readers never see a half-written file.
 """
 from __future__ import annotations
 
 import filecmp
+import fcntl
 import json
 import os
 import shutil
-import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 _MANIFEST = "video_history.json"
@@ -34,7 +34,17 @@ _SUBDIR = "video_history"
 # kept" has to actually mean it. Still capped so a re-roll marathon can't eat
 # the disk; the selected take is always kept regardless.
 _MAX_VERSIONS = 10
-_LOCK = threading.Lock()
+
+
+@contextmanager
+def _locked(work_dir: Path):
+    # A full render may save repairs in a subprocess while the editor keeps takes.
+    fd = os.open(work_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def _manifest_path(work_dir: Path) -> Path:
@@ -90,8 +100,9 @@ def _prune(work_dir: Path, entry: dict) -> None:
     entry["versions"] = kept
 
 
-def _add_version(work_dir: Path, scene_id: int, video: Path, entry: dict) -> dict:
-    """Copy *video* into the history dir as a new take and select it.
+def _add_version(work_dir: Path, scene_id: int, video: Path, entry: dict, *,
+                 label: str = "", select: bool = True) -> dict:
+    """Copy *video* into the history dir, optionally selecting it.
 
     Mutates and returns *entry*; the caller is responsible for saving the manifest."""
     hist = _hist_dir(work_dir)
@@ -99,8 +110,12 @@ def _add_version(work_dir: Path, scene_id: int, video: Path, entry: dict) -> dic
     vid = int(entry.get("next_id", 1))
     fname = f"scene_{int(scene_id):02d}_v{vid}.mp4"
     shutil.copy2(video, hist / fname)
-    entry.setdefault("versions", []).append({"id": vid, "file": fname})
-    entry["selected"] = vid
+    version = {"id": vid, "file": fname}
+    if label:
+        version["label"] = label
+    entry.setdefault("versions", []).append(version)
+    if select:
+        entry["selected"] = vid
     entry["next_id"] = vid + 1
     _prune(work_dir, entry)
     return entry
@@ -136,7 +151,7 @@ def capture_current(work_dir: Path, scene_id: int, current: Path) -> None:
     current = Path(current)
     if not current.exists():
         return
-    with _LOCK:
+    with _locked(work_dir):
         data = _load(work_dir)
         entry = _entry(data, scene_id)
         if _already_kept(work_dir, entry, current):
@@ -150,12 +165,50 @@ def record(work_dir: Path, scene_id: int, video: Path) -> dict:
     """Add *video* (the just-rendered canonical final) as a new take and make it the
     selected one. Returns the history dict (see ``history``)."""
     work_dir = Path(work_dir)
-    with _LOCK:
+    with _locked(work_dir):
         data = _load(work_dir)
         entry = _entry(data, scene_id)
         _add_version(work_dir, scene_id, Path(video), entry)
         data[str(int(scene_id))] = entry
         _save(work_dir, data)
+    return history(work_dir, scene_id)
+
+
+_FACE_REPAIR_LABEL = "H3 face repair"
+
+
+def file_identity(path: Path) -> tuple[int, int, int]:
+    stat = path.stat()
+    return stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def current_is_face_repair(work_dir: Path, scene_id: int, source: Path) -> bool:
+    with _locked(work_dir):
+        entry = _entry(_load(work_dir), scene_id)
+        repaired = any(v["id"] == entry.get("selected") and v.get("label") == _FACE_REPAIR_LABEL
+                       for v in entry.get("versions", []))
+        return repaired and _already_kept(work_dir, entry, source)
+
+
+def record_face_repair(work_dir: Path, scene_id: int, source: Path, repaired: Path,
+                       expected: tuple[int, int, int], *, select: bool) -> dict:
+    """Publish a repaired take only if the source is still the clip we tracked."""
+    with _locked(work_dir):
+        if file_identity(source) != expected:
+            raise RuntimeError("The selected take changed during face repair. Run face repair again.")
+        data = _load(work_dir)
+        entry = _entry(data, scene_id)
+        if not _already_kept(work_dir, entry, source):
+            _add_version(work_dir, scene_id, source, entry)
+        _add_version(work_dir, scene_id, repaired, entry, label=_FACE_REPAIR_LABEL, select=False)
+        data[str(int(scene_id))] = entry
+        # Persist both takes before replacing the canonical clip so an interruption
+        # never leaves the original unavailable in history.
+        _save(work_dir, data)
+        if select:
+            repaired.replace(source)
+            entry["selected"] = entry["versions"][-1]["id"]
+            _save(work_dir, data)
     return history(work_dir, scene_id)
 
 
@@ -165,7 +218,7 @@ def select(work_dir: Path, scene_id: int, version_id: int) -> Path:
     take is unknown or missing."""
     work_dir = Path(work_dir)
     version_id = int(version_id)
-    with _LOCK:
+    with _locked(work_dir):
         data = _load(work_dir)
         entry = _entry(data, scene_id)
         match = next((v for v in entry.get("versions", []) if int(v["id"]) == version_id), None)
@@ -190,7 +243,7 @@ def delete(work_dir: Path, scene_id: int, version_id: int) -> dict:
     ValueError if the take is unknown or currently in use."""
     work_dir = Path(work_dir)
     version_id = int(version_id)
-    with _LOCK:
+    with _locked(work_dir):
         data = _load(work_dir)
         entry = _entry(data, scene_id)
         versions = entry.get("versions", [])
@@ -223,7 +276,8 @@ def history(work_dir: Path, scene_id: int) -> dict:
     for v in entry.get("versions", []):
         f = hist / v["file"]
         if f.exists():
-            versions.append({"id": int(v["id"]), "path": str(f), "t": int(f.stat().st_mtime)})
+            versions.append({"id": int(v["id"]), "path": str(f), "t": int(f.stat().st_mtime),
+                             **({"label": v["label"]} if v.get("label") else {})})
     selected = entry.get("selected")
     valid = {v["id"] for v in versions}
     if selected not in valid:
@@ -239,7 +293,7 @@ def remap_scene_ids(work_dir: Path, id_map: dict) -> None:
     touched so cache-busted URLs change with the content. Scene entries not in
     *id_map* are orphans of scenes that no longer exist and are dropped."""
     work_dir = Path(work_dir)
-    with _LOCK:
+    with _locked(work_dir):
         data = _load(work_dir)
         if not data:
             return

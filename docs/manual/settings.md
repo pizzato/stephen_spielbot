@@ -463,6 +463,14 @@ length. *Reset to natural pace* clears the target.
 **Resolution**, **first-pass steps**, **second-pass steps**. Higher is slower and more
 detailed.
 
+**H3 face repair** sets this style’s default for new video renders and scene
+re-shoots. **Off** leaves the shot as rendered. **Automatic (small faces)** runs
+repair when the detected face is small for the frame. **On** checks each eligible
+shot and fades the repair as the face fills the frame. Child styles inherit the
+default, and individual scenes can override it. Each repaired scene adds a GPU
+pass. See [H3 face repair](edit-film.md#h3-face-repair) for requirements and take
+selection.
+
 The resolution picker includes the **QHD** and **4K** finishing targets: the engines
 cannot render at those sizes, so a film aimed at one renders at FHD (same orientation)
 and is lifted to the target by a finishing upscale before the final is assembled. When
