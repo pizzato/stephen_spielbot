@@ -39,9 +39,12 @@ _MAX_VERSIONS = 10
 @contextmanager
 def _locked(work_dir: Path):
     # A full render may save repairs in a subprocess while the editor keeps takes.
-    with (Path(work_dir) / ".video_history.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    fd = os.open(work_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
         yield
+    finally:
+        os.close(fd)
 
 
 def _manifest_path(work_dir: Path) -> Path:
