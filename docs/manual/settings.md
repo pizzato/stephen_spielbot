@@ -258,7 +258,7 @@ at most once successfully. Turning the setting off cancels pending cleanup.
 
 Cleanup permanently removes working scene videos, duplicate renders, old visual
 versions and caches. It preserves the final video, scripts, closed captions,
-music, narration and reusable current/reference images. Editing the video after
+music, narration, Spotify Canvas and reusable current/reference images. Editing the video after
 cleanup requires rendering a new copy. See **[Clean up working files](edit-film.md#clean-up-working-files)**
 for the exact scope and the per-video manual action, preview and deletion record.
 

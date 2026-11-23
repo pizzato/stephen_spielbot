@@ -41,6 +41,8 @@ and download entitlements, with usage rights subject to Suno's terms and your pl
 
 Finished music videos can [**Realign lyrics to song**](docs/manual/edit-film.md#realign-lyrics-to-song)
 to correct scene lyric assignments and caption timings while keeping the existing cuts.
+Each new music video also gets a downloadable [**Spotify Canvas**](docs/manual/edit-film.md#spotify-canvas).
+Preview it or generate a new shot from a prompt on the Film tab, even after working-file cleanup.
 
 A film's **format** decides how the story is staged: narrated throughout, entirely
 [**acted**](docs/performance_films.md) — the characters speaking on screen, no narrator and

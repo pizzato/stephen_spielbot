@@ -2567,6 +2567,11 @@ def main(work_dir: Path) -> None:
         )
         final_run.complete({"path": str(final_path), "combined": str(combined)}, "final video ready")
 
+    if (work_dir / "song.json").is_file():
+        from pipeline.spotify_canvas import finish_music_video
+        write_progress(status_file, 98, "Preparing Spotify Canvas…")
+        finish_music_video(work_dir, final_path)
+
     size_mb = final_path.stat().st_size / 1024 / 1024
     logger.info("DONE — %s (%.1f MB)", final_path.name, size_mb)
     write_progress(status_file, 100, f"✅ Done — {final_path.name} ({size_mb:.1f} MB)")

@@ -58,6 +58,9 @@ its own: the **whole song** above the tiles (it exists before the first take doe
 under each singing tile that take's slice (`♪ song 12.0s–22.0s`), for hearing the window
 by itself.
 
+After final assembly, each music video gets a [Spotify Canvas](edit-film.md#spotify-canvas).
+The silent loop is available from the Film tab once the render finishes.
+
 ### Time estimate
 
 The remaining time, the full-render estimate, and the worker mix behind it
