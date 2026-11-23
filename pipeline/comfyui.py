@@ -1041,6 +1041,37 @@ def _h3_submit(workflow: dict, output_path: Path, *, gen_w: int, gen_h: int,
     return _download_output(item, output_path, comfy_url=comfy_url)
 
 
+_FACE_REPAIR_VAE = "minimax_h3_video_vae_int8_convrot.safetensors"
+
+
+def h3_face_repair_workers(urls: list[str]) -> list[str]:
+    engine = _engines.VIDEO_ENGINES["minimax-h3-ref-turbo-lx2v"]
+    probes = [engine["probe"], ("CLIPLoader", "clip_name", engine["clip"]),
+              ("VAELoader", "vae_name", _FACE_REPAIR_VAE),
+              ("VAELoader", "vae_name", engine["audio_vae"]),
+              ("MiniMaxH3TurboLoRA", "lora_name", engine["lora"])]
+    ready = [url for url in urls
+             if comfy_node_exists(url, "VHS_LoadVideo") and comfy_node_exists(url, "MiniMaxH3TurboSampler")
+             and all(engine_model_present(url, probe) for probe in probes)]
+    if not ready:
+        raise RuntimeError("No worker has the H3 Ref2VA Turbo (LightX2V) bundle and INT8 video VAE for face repair.")
+    return ready
+
+
+def repair_h3_face(crop: Path, mask: Path, audio: Path, reference: Path, output: Path,
+                   length: int, prompt: str, *, comfy_url: str) -> Path:
+    engine = _engines.VIDEO_ENGINES["minimax-h3-ref-turbo-lx2v"]
+    workflow = _fill_template(_load_workflow("h3_face_repair.json"), {
+        "CROP": _upload_video(crop, comfy_url), "MASK": _upload_video(mask, comfy_url),
+        "AUDIO": _upload_audio(audio, comfy_url), "REFERENCE": _upload_image(reference, comfy_url),
+        "UNET": engine["unet"], "CLIP": engine["clip"], "VIDEO_VAE": _FACE_REPAIR_VAE,
+        "AUDIO_VAE": engine["audio_vae"], "LORA": engine["lora"], "LENGTH": length,
+        "PROMPT": prompt, "SEED": 18283121,
+    })
+    return _h3_submit(workflow, output, gen_w=768, gen_h=768, length=length,
+                      what="H3 face repair", comfy_url=comfy_url)
+
+
 def comfyui_version(comfy_url: str = COMFYUI_URL) -> tuple:
     """The worker's ComfyUI version as a tuple, or () if it won't say."""
     try:

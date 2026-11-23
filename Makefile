@@ -4,7 +4,7 @@ SCRIPTS := scripts
 # containers. Examples:  make stop W=s2   make restart W=s3   make status W=s1
 W ?=
 
-.PHONY: install uninstall download-models download-voices download-flux download-flux-cluster svc-install \
+.PHONY: install install-face-repair uninstall download-models download-voices download-flux download-flux-cluster svc-install \
         start stop restart restart-server status logs worker-agent ui-worker help \
         web-install web-build web web-dev tailscale channels \
         docs docs-serve ensure-mkdocs \
@@ -22,6 +22,10 @@ W ?=
 ## Add INSTALL_PIH3=1 to download pi-H3 two-step DWD (MiniMax H3 licence).
 install:
 	@WORKERS="$(WORKERS)" INSTALL_SERVICE="$(INSTALL_SERVICE)" GPU_MODE="$(GPU_MODE)" INSTALL_FLUX3="$(INSTALL_FLUX3)" INSTALL_QWEN_TURBO="$(INSTALL_QWEN_TURBO)" INSTALL_PIH3="$(INSTALL_PIH3)" bash $(SCRIPTS)/install.sh
+
+## Install optional controller-side tracking dependencies for H3 face repair.
+install-face-repair:
+	@.venv/bin/python -m pip install -r requirements-face-repair.txt
 
 ## Uninstall: stop everything, remove the service + worker container stacks.
 ## Keeps config, models, and rendered videos — purge flags via:

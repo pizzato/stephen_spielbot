@@ -2397,6 +2397,25 @@ def main(work_dir: Path) -> None:
 
     scene_ambient_wavs = [scene_ambient_map[s.id] for s in scenes if scene_ambient_map.get(s.id)]
 
+    from pipeline import face_repair
+
+    repair_rows = [
+        {"id": scene.id, "image_prompt": scene.image_prompt,
+         "video_prompt": scene.video_prompt, "metadata": scene.metadata}
+        for scene in scenes
+    ]
+    repair_rows = [row for row in repair_rows
+                   if face_repair.scene_mode(row, cfg.get("face_repair_mode", "off")) != "off"]
+    if repair_rows:
+        write_progress(status_file, 88, f"H3 face repair: checking {len(repair_rows)} scenes")
+        workers = min(len(repair_rows), len(worker_pool.urls))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(face_repair.auto_repair_take, work_dir, row, cfg, worker_pool)
+                       for row in repair_rows]
+            for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                future.result()
+                write_progress(status_file, 88, f"H3 face repair: {done}/{len(repair_rows)} scenes checked")
+
     # ── Finishing upscale (upscale-only targets: QHD/4K) ─────────────────────
     # The scene clips are lifted to the target size BEFORE assembly, so the
     # concat/crossfade, audio mix and cover burn below all run once at the

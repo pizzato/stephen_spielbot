@@ -408,6 +408,11 @@ saved identity information, not face recognition: add the cast yourself for an a
 uploaded image without that information. Artist names in the visual style do not add
 characters to a scene.
 
+**H3 face repair** controls the face pass on this scene’s next render. Leave it
+on **Style default** or choose **Off**, **Automatic (small faces)**, or **On**.
+Attach the intended character or name them in the visual prompt so the renderer
+has their portrait. See [H3 face repair](edit-film.md#h3-face-repair).
+
 ### Acted staging
 
 A scene that renders as an acted take carries its full staging on the same card, below

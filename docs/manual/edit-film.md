@@ -585,6 +585,30 @@ Continue is offered only where it can actually work, so the button is absent whe
 **Reassemble film** (top of the list) re-cuts the published final from the scene parts —
 after re-shoots, take picks, or reorders — re-mixing music only where the film has it.
 
+### H3 face repair
+
+Use **Repair face** on an existing scene to create an alternate take. It tracks the
+main face, redraws its crop with MiniMax H3 using the character’s portrait, and blends
+the crop into the scene at the original dimensions and frame rate. The source audio
+is copied. Choose the **Repair** take in **Video takes** to use it, then select
+**Reassemble film** or run the film upscale again. Review the eyes and mouth in
+motion, since the redraw may change an expression.
+
+The **H3 face repair** selector under each scene overrides its style’s setting on the
+next video render. **Style default** follows Settings → Styles → Render quality.
+**Automatic** checks whether the median tracked face height is up to 150 pixels at
+1080p, scaled to the clip’s height. **On** checks every eligible shot. Both modes
+apply full repair at and below 110 px, fade through 180 px and keep larger faces.
+Automatic renders select a successful repaired take and retain the original in
+history. Scenes without a single matched character reference or a reliable track
+keep their original take.
+
+On the controller, run `make install-face-repair` once. The first run downloads
+the small face detector. A ComfyUI worker needs the MiniMax H3 Ref2VA Turbo
+(LightX2V) bundle, the INT8 H3 video VAE used by pi-H3, and VideoHelperSuite. The
+pass accepts constant 24, 25 or 30 fps scenes up to 360 frames. Start from an
+original take for another repair or to continue the original H3 motion.
+
 ### Version history
 
 Two strips under each scene: **image takes** and **video takes**. Click one to select it,

@@ -2998,6 +2998,15 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={6} className="reveal reveal-d3">
             <span className="label-sm">Render quality</span>
             <div className="stack gap-22 mt-16">
+              <Field label="H3 face repair" hint="Redraws the main face using its character reference. Automatic checks for small faces. Each repaired shot adds a GPU pass.">
+                <select className="select" value={eff.face_repair_mode || 'off'}
+                  onChange={(e) => setStyleField('face_repair_mode', e.target.value)}>
+                  <option value="off">Off</option>
+                  <option value="auto">Automatic (small faces)</option>
+                  <option value="on">On</option>
+                </select>
+                <ParentVal k="face_repair_mode" />
+              </Field>
               <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
                 <ResolutionPicker value={eff.resolution || ''} onChange={(r) => setStyleField('resolution', r)} meta={meta} />
                 <ParentVal k="resolution" />
