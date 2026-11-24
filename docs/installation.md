@@ -139,7 +139,8 @@ Then choose **Generate on Suno** in the Song tab or film editor to configure the
 request, including a saved Suno Voice. Optional model and voice defaults are under
 **Styles → Narrator & audio**. See
 [Music models](manual/settings.md#music-models) for credits and take handling.
-Suno requires explicit generation and **Use this take** to import a song. Automatic
+Suno requires explicit generation and **Use this take** to download and like the
+chosen song. New takes are filed in **Stephen Spielbot** and the Style playlist. Automatic
 music generation, including scoring during rendering, always uses MiniMax Music 3,
 which must be available on a GPU worker even when you use Suno for manual songs.
 An already imported soundtrack is reused.

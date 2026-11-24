@@ -42,7 +42,7 @@ at the top is the documented key set.
 | `story.py` | Script generation — draft the story, critique it, then divide it into scenes; for a music video it also writes and critiques the song, and the divide places the lyrics on the track's timeline |
 | `engines.py` | The engine registries — image (FLUX.2 Klein, FLUX.1 schnell, opt-in Qwen-Image 2.1 and FLUX 3 Klein NVFP4, plus scene-only MiniMax H3 Image), video (LTX 2.5, pi-H3 two-step DWD and the MiniMax H3 family), and music (ACE-Step, MiniMax Music 3, Suno) |
 | `comfyui.py`, `scene_video.py` | ComfyUI workflow submission, per-scene video rendering, and music generation |
-| `suno.py` | Official Suno MCP client, Spielbot-owned OAuth connection, account and voice lookup, generation and audio downloads; cloud music bypasses the ComfyUI worker path |
+| `suno.py`, `suno_music.py` | Official Suno MCP client and Spielbot-owned OAuth connection, account and voice lookup, generation, workspace and playlist filing, and selected-take download and thumbs-up. Suno bypasses the ComfyUI worker path |
 | `tts_engines.py`, `openf5.py`, `chatterbox.py`, `tts_text.py` | Narration: engine choice, weights, and spoken-text handling |
 | `performance.py`, `shot_gate.py` | Acted scenes and performance films: the acted script shape, the H3 Ref2VA prompt, and the speech gate |
 | `song_timing.py`, `lyric_align.py` | Music videos: measure the sung track's vocal stem, whisper-align the lyric sheet, cut scenes between sung lines |

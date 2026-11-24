@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -13,6 +14,10 @@ import requests
 
 from pipeline import music_history, suno
 from pipeline.assembler import _get_duration, transcode_to_wav
+
+
+_WORKSPACE_NAME = 'Stephen Spielbot'
+_collection_lock = threading.Lock()
 
 
 def _save(path: Path, value: dict) -> None:
@@ -25,6 +30,53 @@ def _check(result: dict) -> dict:
     if result.get('error') or result.get('status') in {'error', 'failed', 'refused'}:
         raise RuntimeError(f"Suno: {result.get('error') or result.get('reason') or result.get('message') or result['status']}")
     return result
+
+
+def _items(tool: str, key: str, **args):
+    while True:
+        page = _check(suno.call_tool(tool, args))
+        yield from page[key]
+        cursor = page.get('next_cursor')
+        if not cursor:
+            return
+        args['cursor'] = cursor
+
+
+def _collection_id(kind: str, name: str) -> str:
+    # Keep concurrent generations from creating duplicate named collections.
+    with _collection_lock:
+        for item in _items(f'{kind}-list', kind, query=name):
+            if item['name'].casefold() == name.casefold():
+                return item['id']
+        return _check(suno.call_tool(f'{kind}-create', {'name': name}))['id']
+
+
+def _add_to_playlist(state: dict, path: Path) -> None:
+    playlist_id = state.get('playlist_id')
+    if not playlist_id or state.get('playlist_complete'):
+        return
+    missing = set(state['clip_ids'])
+    if state.get('playlist_attempted'):
+        # An interrupted or partial add may already have added some takes.
+        for item in _items('playlists-list-clips', 'items', id=playlist_id):
+            missing.discard(item['id'])
+            if not missing:
+                break
+    else:
+        state['playlist_attempted'] = True
+        _save(path, state)
+    if missing:
+        retry_message = ('Suno could not add every take to the style playlist. '
+                         'Retry generation with the same settings to finish filing these takes.')
+        try:
+            result = _check(suno.call_tool('playlists-add-clips', {
+                'id': playlist_id, 'clip_ids': [cid for cid in state['clip_ids'] if cid in missing]}))
+        except RuntimeError as exc:
+            raise RuntimeError(retry_message) from exc
+        if result.get('failed'):
+            raise RuntimeError(retry_message)
+    state['playlist_complete'] = True
+    _save(path, state)
 
 
 def _wait(ids: list[str], deadline: float) -> list[dict]:
@@ -88,6 +140,7 @@ def _download(clip_id: str, target: Path, state: dict, state_path: Path,
 
 def generate_suno_takes(title: str, duration: float | None, *, work_dir: Path,
                         caption: str | None = None, lyrics: str | None = None,
+                        style_name: str | None = None,
                         model: str = '', voice_id: str = '',
                         vocal_gender: str | None = None, max_mode: bool = False,
                         negative_style: str = '', controls: dict | None = None,
@@ -98,6 +151,7 @@ def generate_suno_takes(title: str, duration: float | None, *, work_dir: Path,
     Each deliberate new generation uses a fresh ID.
     """
     operation_id = operation_id or str(uuid.uuid4())
+    style_name = (style_name or '').strip()
     key = str(uuid.uuid5(uuid.NAMESPACE_URL, 'spielbot:suno:' + operation_id))
     folder = Path(work_dir) / 'suno_requests' / key
     state_path = folder / 'request.json'
@@ -124,14 +178,16 @@ def generate_suno_takes(title: str, duration: float | None, *, work_dir: Path,
         controls.pop('audio_influence', None)
     if controls:
         request['controls'] = controls
-    # A manual retry after losing audio-create's response must recover the
-    # original key, even though the UI's new background task has a new ID.
+    # A manual retry gets a new task ID. Reuse the original request after
+    # an ambiguous audio-create or an interrupted playlist update.
     if not state_path.exists():
         params = {k: v for k, v in request.items() if k != 'idempotency_key'}
         for pending_path in (Path(work_dir) / 'suno_requests').glob('*/request.json'):
             pending = json.loads(pending_path.read_text())
             original = {k: v for k, v in pending['request'].items() if k != 'idempotency_key'}
-            if not pending.get('clip_ids') and original == params:
+            needs_playlist = pending.get('playlist_id') and not pending.get('playlist_complete')
+            if ((not pending.get('clip_ids') or needs_playlist) and original == params
+                    and pending.get('style_name', style_name) == style_name):
                 folder, state_path = pending_path.parent, pending_path
                 request = pending['request']
                 break
@@ -140,11 +196,14 @@ def generate_suno_takes(title: str, duration: float | None, *, work_dir: Path,
     with (folder / 'request.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = json.loads(state_path.read_text()) if state_path.exists() else {}
-        if state and state.get('fingerprint') != fingerprint:
+        if state and (state.get('fingerprint') != fingerprint
+                      or state.get('style_name', style_name) != style_name):
             raise ValueError('This Suno request already exists with different settings. Start a new generation.')
         if not state:
             usage = suno.account_usage()
             state = {'request': request, 'fingerprint': fingerprint, 'submitted_at': time.time(),
+                     'style_name': style_name, 'workspace_id': _collection_id('workspaces', _WORKSPACE_NAME),
+                     'playlist_id': _collection_id('playlists', style_name) if style_name else '',
                      'plan_at_generation': (usage.get('suno_account') or {}).get('plan')}
             _save(state_path, state)
         if not state.get('clip_ids'):
@@ -152,12 +211,17 @@ def generate_suno_takes(title: str, duration: float | None, *, work_dir: Path,
             # ambiguous older submission needs reconciliation, not a new charge.
             if time.time() - state['submitted_at'] > 23 * 3600:
                 raise RuntimeError('This Suno submission is over 23 hours old without saved song IDs. Check the Suno library before starting another generation.')
-            created = _check(suno.call_tool('audio-create', state['request']))
+            create_args = dict(state['request'])
+            # Requests saved before workspace filing still replay their original payload.
+            if state.get('workspace_id'):
+                create_args['workspace_id'] = state['workspace_id']
+            created = _check(suno.call_tool('audio-create', create_args))
             ids = created.get('clip_ids') or ([created['id']] if created.get('id') else [])
             if not ids:
                 raise RuntimeError('Suno did not return the expected song IDs. Retry to resume this request.')
             state['clip_ids'] = ids
             _save(state_path, state)
+        _add_to_playlist(state, state_path)
         deadline = time.monotonic() + 20 * 60
         if not state.get('clips') or any(c.get('status') != 'complete' for c in state['clips']):
             state['clips'] = _wait(state['clip_ids'], deadline)
@@ -216,6 +280,14 @@ def download_suno_take(work_dir: Path, clip_id: str) -> dict:
             target = path.parent / f'take_{state["clip_ids"].index(clip_id) + 1}.wav'
             if not target.exists():
                 _download(clip_id, target, state, path, time.monotonic() + 20 * 60)
+            liked = state.setdefault('liked_clip_ids', [])
+            if clip_id not in liked:
+                try:
+                    _check(suno.call_tool('audio-like', {'id': clip_id}))
+                except RuntimeError as exc:
+                    raise RuntimeError('The take downloaded, but Suno could not give it a thumbs-up. Retry Use this take to finish the import.') from exc
+                liked.append(clip_id)
+                _save(path, state)
             clip = next(c for c in state['clips'] if c['id'] == clip_id)
             take = {'path': str(target), 'remote_id': clip_id,
                     'model': (clip.get('metadata') or {}).get('model') or state['request'].get('model', ''),

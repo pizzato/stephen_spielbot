@@ -581,10 +581,12 @@ Suno notes:
   the account's default model and the model's own vocalist. The voice picker lists
   voices already available in Suno; create or clone voices in Suno itself.
 - **Generate on Suno** opens the [generation settings](manual/script.md#song).
-  **Generate two takes** creates two songs and shows both as previews;
-  open **Play on Suno** to listen before downloading. Choose
-  **Use this take** to download and select that song. Only imported takes join the
-  normal version strip. Unchosen takes remain in Suno.
+  **Generate two takes** creates two songs in the **Stephen Spielbot** workspace
+  and adds both to a playlist named after the film's Spielbot Style. Spielbot
+  reuses matching names and creates missing playlists as private. A film without
+  a Style uses the workspace only. Open **Play on Suno** to audition each take.
+  **Use this take** downloads the chosen song, gives it a thumbs-up in Suno,
+  and makes it the selected version.
   Suno's MCP service provides song links rather than an embedded audio stream.
 - Generation credits and download entitlements are separate. Imports can spend
   one download credit per chosen take when Suno requires it; manual previews do

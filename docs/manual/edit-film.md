@@ -347,10 +347,11 @@ To change the style of a script that has *not* rendered yet, use **Restyle** on 
 Edit the music prompt and **Regenerate music** to use **MiniMax Music 3** on a GPU
 worker and re-mux with your current levels. Every generated track is kept in a
 version strip. **Generate on Suno** opens a dialog with the current music prompt,
-duration and style model. Review the settings and choose **Generate two takes**.
+duration and style model. **Generate two takes** files both songs in the
+**Stephen Spielbot** workspace and the film's Style playlist in Suno.
 Open **Play on Suno** to listen there before choosing.
-**Use this take** downloads only the chosen song, adds it to the version strip and
-re-muxes the film. The import may spend one download credit, separately from the
+**Use this take** downloads the chosen song, gives it a thumbs-up in Suno,
+adds it to the version strip and re-muxes the film. The import may spend one download credit, separately from the
 generation charge. Already imported takes reuse their local file.
 If the request times out while Suno is still working, the saved links appear as
 **Still generating**. **Use this take** waits for that song before importing it;
@@ -396,7 +397,8 @@ need a listening check; see the [Song tab](script.md#song).
 **Generate on Suno** opens the same [Suno settings](script.md#song) as the Song tab,
 with the film's current Sound and lyrics and the style's model and voice defaults.
 Choose a saved Suno Voice and adjust the generation controls before creating two
-previews. **Use this take** imports your choice and updates the film. **Sing it as**
+previews. Both are filed as described under [Background music](#background-music).
+**Use this take** downloads and likes your choice in Suno and updates the film. **Sing it as**
 converts the existing take to a Spielbot library voice.
 
 *Sing it as* uses the style's **Singing voice conversion** engine: **SoulX-Singer SVC**

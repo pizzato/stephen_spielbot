@@ -281,8 +281,9 @@ restart audible, so keep song films short.
 → Music models** without music weights or a GPU worker. Choose **Generate on Suno**
 in the Song tab or film editor to choose a voice and configure that request.
 Optional per-style model and voice defaults prefill the dialog. **Generate two takes**
-shows both songs for preview; **Play on Suno** opens each song to listen, then **Use this take**
-to import only your choice. Unchosen songs remain in Suno. Automatic music generation,
+files both songs in Suno's **Stephen Spielbot** workspace and the film's Style playlist.
+**Play on Suno** opens each song to listen. **Use this take** downloads and gives
+your chosen song a thumbs-up in Suno. Automatic music generation,
 including scoring during rendering, always uses MiniMax Music 3; it reuses an
 already imported song. Suno creates two songs per request. Generation credits and download
 entitlements are separate: importing a chosen take may spend one download credit.
