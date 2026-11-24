@@ -204,14 +204,15 @@ longer* continues the take in use: MiniMax Music 3 re-runs the same seed at the 
 length so the extra seconds finish the words it cut off, and the take you heard is
 kept as it is (not sung again). A take with no saved seed falls back to a fresh longer
 take — the Song tab says which happened. Both keep the previous track as a version.
-Suno chooses its generated track's length, which becomes the film's song duration.
+Suno can choose the length automatically or use a custom duration of 15–360 seconds.
+The imported track's actual length becomes the film's song duration.
 Suno continuation is not available in Spielbot; **Extend the ending** still works on
 the downloaded take.
 
 **Whose voice sings?** The library **Singing voice** selection *describes* the vocalist
-at generation time (below). Suno also supports a separate **Suno singing voice**
-picker under **Settings → Styles → Narrator & audio**, using voices already available
-in your connected Suno account. Create or clone Suno voices in Suno itself. The
+at generation time (below). The **Generate on Suno** dialog has a **Suno singing voice**
+picker for your own and liked voices in the connected Suno account. Create voices
+in Suno itself. The
 song panel's **"Sing this as [voice]"** step clones the voice's timbre into the existing
 performance. **SoulX-Singer SVC** is the default; choose **Seed-VC** under
 [Settings → Styles → Narrator & audio → Singing voice conversion](manual/settings.md#narrator-audio)
@@ -278,9 +279,9 @@ restart audible, so keep song films short.
 
 **Suno** is the account-based alternative, connected under **Settings → Infrastructure
 → Music models** without music weights or a GPU worker. Choose **Generate on Suno**
-in the Song tab or film editor for that request, without changing a default provider.
-Optional Suno model and singing-voice preferences are saved per style. The action
-shows both songs for preview without downloading them; **Play on Suno** opens each song to listen, then **Use this take**
+in the Song tab or film editor to choose a voice and configure that request.
+Optional per-style model and voice defaults prefill the dialog. **Generate two takes**
+shows both songs for preview; **Play on Suno** opens each song to listen, then **Use this take**
 to import only your choice. Unchosen songs remain in Suno. Automatic music generation,
 including scoring during rendering, always uses MiniMax Music 3; it reuses an
 already imported song. Suno creates two songs per request. Generation credits and download

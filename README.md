@@ -31,10 +31,10 @@ An AI video generator that turns a topic into a fully produced short film — co
 
 **Suno** is also available through its official MCP connection: sign in under
 [Settings → Infrastructure → Music models](docs/manual/settings.md#music-models),
-then choose **Generate on Suno** in the Song tab or film editor. No default provider
-needs to be selected: normal generation uses MiniMax Music 3. Optional Suno model
-and singing-voice preferences live under **Styles → Narrator & audio**. Suno
-generation previews both takes before you choose one to import. Automatic music
+then choose **Generate on Suno** in the Song tab or film editor to review the song,
+pick a saved Suno Voice, and set duration, Max Mode and other generation controls.
+The dialog starts with your song and any model or voice defaults from **Styles →
+Narrator & audio**. Suno previews both takes before you choose one to import. Automatic music
 generation, including scoring during rendering, always uses MiniMax Music 3; imported
 soundtracks are reused. Suno uses account generation
 and download entitlements, with usage rights subject to Suno's terms and your plan.

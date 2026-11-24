@@ -184,8 +184,9 @@ sign Spielbot in.
 The callback returns to the controller's localhost: use a browser on the controller,
 or forward the callback port to it when signing in from another machine.
 
-**Generate on Suno** in the Song tab or film editor creates two songs for preview;
-**Use this take** downloads only the chosen song. Suno generation is manual only;
+**Generate on Suno** in the Song tab or film editor opens a settings dialog where
+you can select a Suno Voice and configure the generation. **Generate two takes**
+creates the previews. **Use this take** downloads only the chosen song. Suno generation is manual only;
 automatic music generation, including scoring during rendering, always uses MiniMax
 Music 3. An already imported soundtrack is reused.
 When Suno charges for downloads, importing a take can use one download credit,
@@ -422,9 +423,9 @@ scoring during rendering. An already imported soundtrack is reused. Suno require
 short Sound descriptions into a detailed structured caption before generating a
 fresh take. It caps a track at 6 minutes and carries its own community licence.
 
-**Suno model** and **Suno singing voice** are optional preferences, both inherited by
-child styles. They are available without selecting a default provider and apply
-only when you click **Generate on Suno**. The model list follows the connected
+**Suno model** and **Suno singing voice** are optional defaults, both inherited by
+child styles. The **Generate on Suno** dialog starts with these values and lets you
+override them for that request. The model list follows the connected
 account; **Account default** lets
 Suno choose. The voice list contains voices already available in that Suno account,
 subject to its plan and entitlements; leave it on **The model’s own vocalist** to

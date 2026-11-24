@@ -4,6 +4,7 @@ import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
 import SunoTakes from './SunoTakes.jsx'
+import SunoGeneration from './SunoGeneration.jsx'
 import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines, ActedTakes } from '../acted.jsx'
 import { styleLineage, resolveStyle } from '../styleUtils.js'
 
@@ -249,7 +250,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // the song stays the same and only the new tail is generated; otherwise
   // it falls back to a fresh longer take. Either way the current one stays
   // in the version list.
-  const generateSongTrack = async (addSeconds = 0, musicEngine = 'minimax-music3') => {
+  const generateSongTrack = async (addSeconds = 0, musicEngine = 'minimax-music3', sunoOptions) => {
     setBusy(musicEngine === 'suno' ? 'song-gen-suno' : addSeconds ? 'song-gen-longer' : 'song-gen'); setError(''); setSongMsg('')
     try {
       const cur = songDraft ?? song
@@ -257,7 +258,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                                          lyrics: cur.lyrics, voice: songVoiceSel,
                                          vocalist: cur.vocalist ?? null,
                                          singer: cur.singer ?? null,
-                                         add_seconds: addSeconds, music_engine: musicEngine })
+                                         add_seconds: addSeconds, music_engine: musicEngine,
+                                         suno_options: sunoOptions })
       setSongDraft(null); await refreshSong()
       setSongMsg(!addSeconds
         ? musicEngine === 'suno' ? 'Suno takes ready — preview them below, then use the take you want to download.'
@@ -268,6 +270,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) {
       setError(e.message)
       if (musicEngine === 'suno') await api.getSong(job.job_id).then(setSong).catch(() => {})
+      return false
     } finally { setBusy('') }
   }
   const importSunoTake = async (clipId) => {
@@ -1734,11 +1737,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   onClick={() => generateSongTrack()}>
                   {busy === 'song-gen' ? 'Singing with MiniMax…' : song.song_url ? 'Generate again' : '1. Generate the song'}
                 </Button>
-                <Button variant="ghost" icon="music"
+                <SunoGeneration key={job.work_dir} defaults={song.suno_defaults}
+                  caption={(songDraft ?? song).caption || ''} lyrics={(songDraft ?? song).lyrics || ''}
+                  busy={busy === 'song-gen-suno'}
                   disabled={!!busy || !(songDraft ?? song).lyrics?.trim()}
-                  onClick={() => generateSongTrack(0, 'suno')}>
-                  {busy === 'song-gen-suno' ? 'Generating on Suno…' : 'Generate on Suno'}
-                </Button>
+                  onGenerate={(options) => generateSongTrack(0, 'suno', options)} />
                 {song.song_url && !!songVoiceSel && (
                   <Button variant="ghost" icon="microphone-lines" disabled={!!busy || !song.svc_available}
                     onClick={convertSongVoice}>
@@ -1748,7 +1751,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 {song.sung_as && <span className="muted" style={{ fontSize: 12.5 }}>♪ currently sung as <strong>{song.sung_as}</strong></span>}
               </div>
               <p className="muted" style={{ fontSize: 12.5 }}>
-                Generate uses <strong>MiniMax Music 3</strong>, as does automatic generation. Generate on Suno creates two takes using Suno generation credits. Play on Suno before choosing which to download; Use this take imports only that song and may spend one download credit. Connect your account in Settings → Infrastructure; optional Suno model and singing-voice preferences are in Styles → Narrator &amp; audio.
+                Generate uses <strong>MiniMax Music 3</strong>. Choose <strong>Generate on Suno</strong> to pick a Suno voice and configure the request before creating two takes.
               </p>
               <SunoTakes takes={song.suno_takes} busy={!!busy}
                 importing={busy.startsWith('song-suno-import:') ? busy.slice('song-suno-import:'.length) : ''}

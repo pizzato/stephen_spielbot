@@ -269,6 +269,37 @@ body {
 .check { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink-2); cursor: pointer; }
 .check input { width: 17px; height: 17px; accent-color: var(--accent); }
 
+.suno-settings {
+  width: min(600px, calc(100% - 24px)); max-height: calc(100dvh - 24px);
+  padding: 0; overflow: hidden; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+}
+.suno-settings::backdrop { background: rgb(24 24 28 / 52%); }
+.suno-settings form { display: flex; flex-direction: column; max-height: calc(100dvh - 26px); }
+.suno-settings__header, .suno-settings__footer {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+  gap: 8px 16px; padding: 14px 20px;
+}
+.suno-settings__header { border-bottom: 1px solid var(--line); }
+.suno-settings__header h2 { font-size: 1.25rem; margin: 0; }
+.suno-settings__body { overflow-y: auto; padding: 16px 20px; }
+.suno-settings__pair { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr)); }
+.suno-settings summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.suno-settings__text { margin-top: 12px; }
+.suno-settings__advanced { min-width: 0; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: var(--r-md); }
+.suno-settings__advanced legend { padding: 0 5px; font-size: 13px; font-weight: 600; }
+.suno-settings__choices .seg__opt { padding: 7px 10px; }
+.suno-settings__choices .seg__opt:disabled { cursor: default; }
+.suno-settings__seconds { width: 80px; padding: 6px 8px; font-size: 14px; }
+.suno-settings__row {
+  display: grid; align-items: center; column-gap: 8px;
+  grid-template-columns: minmax(84px, 115px) minmax(0, 1fr) 3.25em; font-size: 13px;
+}
+.suno-settings__row input { width: 100%; margin: 0; accent-color: var(--accent); }
+.suno-settings__row output { text-align: right; font-variant-numeric: tabular-nums; }
+.suno-settings__footer { border-top: 1px solid var(--line); }
+.suno-settings__footer > div { margin-left: auto; }
+
 /* ============================================================
    Metrics + mini chart
    ============================================================ */

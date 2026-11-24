@@ -3607,9 +3607,34 @@ def song_import(body: SongImportBody) -> dict:
             "song_voice": song.get("voice") or "", "seconds": result["duration"]}
 
 
+class SunoControls(BaseModel):
+    weirdness: float | None = Field(None, ge=0, le=1)
+    style_influence: float | None = Field(None, ge=0, le=1)
+    audio_influence: float | None = Field(None, ge=0, le=1)
+    variety: int | None = Field(None, ge=0, le=4)
+
+
+class SunoGenerationOptions(BaseModel):
+    title: str = Field("", max_length=256)
+    caption: str = Field("", max_length=1000)
+    lyrics: str = Field("", max_length=5000)
+    model: str = ""
+    voice_id: str = ""
+    duration: int | None = Field(None, ge=15, le=360)
+    vocal_gender: Literal["male", "female"] | None = None
+    max_mode: bool = False
+    negative_style: str = Field("", max_length=1000)
+    controls: SunoControls = Field(default_factory=SunoControls)
+
+
+def _suno_style_options(style: dict) -> dict:
+    return {"model": style.get("suno_model") or "", "voice_id": style.get("suno_voice_id") or ""}
+
+
 class SongGenerateBody(BaseModel):
     work_dir: str
     music_engine: Literal["minimax-music3", "suno"] = "minimax-music3"
+    suno_options: SunoGenerationOptions | None = None
     caption: str = ""
     lyrics: str = ""
     voice: str = ""
@@ -3649,7 +3674,7 @@ def _selected_music_engine(wd: Path, hist: dict | None = None) -> str:
 
 def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
                       automatic: bool = False, operation_id: str | None = None,
-                      engine_override: str = "") -> dict:
+                      engine_override: str = "", suno_options: SunoGenerationOptions | None = None) -> dict:
     """Render the song itself (song.json → background_music.wav) on a worker.
 
     The finished track IS the film's final soundtrack: the render's music step
@@ -3691,14 +3716,17 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
         if add_seconds:
             raise ValueError("Suno continuation is not available here; generate a new pair of takes instead.")
         from pipeline.suno_music import generate_suno_takes
-        caption = song_caption(sound, vocal, engine)
+        options = {"title": str(data.get("title") or wd.name), "duration": secs,
+                   "caption": sound, "lyrics": data.get("lyrics") or "", **_suno_style_options(ss)}
+        if suno_options is not None:
+            options.update(suno_options.model_dump(exclude_unset=True))
+        if suno_options is None or not options["voice_id"]:
+            options["caption"] = song_caption(options["caption"], vocal, engine)
+        if suno_options is not None and len(options["caption"]) > 1000:
+            raise ValueError("Suno Sound is limited to 1,000 characters, including the vocalist description.")
         with _track_op("Singing the song", f"{int(secs)}s · Suno",
                        work_dir=str(wd), title=str(data.get("title") or wd.name), category="film"):
-            result = generate_suno_takes(
-                str(data.get("title") or wd.name), secs, work_dir=wd,
-                caption=caption, lyrics=data.get("lyrics") or None,
-                model=ss.get("suno_model") or "", voice_id=ss.get("suno_voice_id") or "",
-                operation_id=operation_id)
+            result = generate_suno_takes(work_dir=wd, operation_id=operation_id, **options)
         return {"ok": True, "imported_count": 0, "suno_takes": result["suno_takes"]}
     urls = gapp._preview_worker_urls()
     if not urls:
@@ -3784,11 +3812,13 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
 
 
 def _run_song_generate_task(task_id: str, wd: Path, add_seconds: float = 0.0,
-                            music_engine: str = "minimax-music3") -> None:
+                            music_engine: str = "minimax-music3",
+                            suno_options: SunoGenerationOptions | None = None) -> None:
     try:
         _script_tasks[task_id] = {"status": "done",
                                   "result": _do_song_generate(wd, add_seconds, operation_id=task_id,
-                                                               engine_override=music_engine)}
+                                                               engine_override=music_engine,
+                                                               suno_options=suno_options)}
     except Exception as e:
         _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
 
@@ -3822,6 +3852,9 @@ def song_generate(body: SongGenerateBody) -> dict:
         raise HTTPException(400, f"Extend by between 0.5 and {int(_MAX_SONG_EXTEND)} seconds.")
     if not (data.get("lyrics") or "").strip():
         raise HTTPException(400, "The song has no lyrics.")
+    if (body.music_engine == "suno" and body.suno_options is not None
+            and "lyrics" in body.suno_options.model_fields_set and not body.suno_options.lyrics.strip()):
+        raise HTTPException(400, "Enter lyrics for the song.")
     data["updated_at"] = time.time()
     _write_song(wd, data)
     task_id = uuid.uuid4().hex[:12]
@@ -3829,6 +3862,7 @@ def song_generate(body: SongGenerateBody) -> dict:
     # The length arithmetic happens in _do_song_generate, measured off the take
     # in use — not off song.json, which describes the last generation.
     threading.Thread(target=_run_song_generate_task, args=(task_id, wd, add, body.music_engine),
+                     kwargs={"suno_options": body.suno_options},
                      daemon=True).start()
     return {"task_id": task_id}
 
@@ -4091,6 +4125,9 @@ def get_job_song(job_id: str) -> dict:
                 if not any(gapp._characters_refer_to_same(c, n) for n in news_cast)]
     return {"caption": str(data.get("caption") or ""),
             "music_engine": _selected_music_engine(wd, hist),
+            "suno_defaults": {"title": str(data.get("title") or wd.name),
+                              "duration": float(data.get("seconds") or 60),
+                              **_suno_style_options(gapp.style_settings(cfg, data.get("style_name") or ""))},
             "lyrics": str(data.get("lyrics") or ""),
             # The film's direction — editable in the studio because a song is
             # often steered long after Create, and a re-write needs it.
@@ -6728,6 +6765,7 @@ def suno_status() -> dict:
         return {"connected": True, "plan": plan.get("name", "") if isinstance(plan, dict) else plan,
                 "credits_remaining": account.get("credits_remaining"),
                 "download_credits_remaining": account.get("download_credits_remaining"),
+                "advanced_controls": "controls.advanced" in (usage.get("features") or []),
                 "allowed_models": usage.get("allowed_models") or []}
     except Exception as exc:
         return {"connected": False, "allowed_models": [], "error": str(exc)}
@@ -8634,6 +8672,13 @@ def remix_load(work_dir: str = Query("")) -> dict:
         meta = {}
     _title = _video_title_for(wd)
     mix_vols = _mix_volumes(wd, jc, cfg)
+    song = _remix_song_info(wd)
+    suno_duration = None
+    if can_remix:
+        try:
+            suno_duration = _remix_music_duration(wd)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
     return {
         "work_dir": str(wd),
         "final_url": _busted_file_url(final_vid),
@@ -8652,11 +8697,17 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
         "suno_takes": list_suno_takes(wd),
+        "suno_defaults": {
+            "title": (jc.get("video_title") or jc.get("title") or wd.name).strip(),
+            "duration": suno_duration,
+            "lyrics": (jc.get("music_lyrics") or "").strip() or (song or {}).get("lyrics", ""),
+            **_suno_style_options(gapp.style_settings(cfg, jc.get("style_name") or "")),
+        },
         "music_engine": _selected_music_engine(wd),
         "video_history": final_video_history.history(wd),
         # A song film's song, so the finished film still shows WHAT is being
         # sung (lyrics, current voice) and can re-sing / re-voice from here.
-        "song": _remix_song_info(wd),
+        "song": song,
         # Short text on the cover image + first-frame burn: saved override,
         # else derived from the title (edit it from the cover card).
         "cover_phrase": cover_phrase_for(wd, _title, _cover_typography_for(wd)["accent"]),
@@ -9751,17 +9802,25 @@ class MusicRegenBody(BaseModel):
     work_dir: str
     music_desc: str = ""
     music_engine: Literal["minimax-music3", "suno"] = "minimax-music3"
+    suno_options: SunoGenerationOptions | None = None
+
+
+def _remix_music_duration(wd: Path) -> float:
+    from pipeline.assembler import _get_duration
+
+    combined = wd / "combined.mp4"
+    return _get_duration(combined if combined.exists() else wd / "background_music.wav")
 
 
 def _run_music_regen(task_id: str, wd: Path, music_desc: str,
-                     music_engine: str = "minimax-music3") -> None:
+                     music_engine: str = "minimax-music3",
+                     suno_options: SunoGenerationOptions | None = None) -> None:
     """Background thread: regenerate the background music, then re-mux the film.
 
     Music is a film-level asset (one background_music.wav), so this mirrors the
     scene re-render workers: it generates to a staging file, swaps it in
     atomically, then re-muxes the final with the film's saved volumes. Progress
     is tracked in _film_tasks so the Remix screen can poll /api/films/task."""
-    from pipeline.assembler import _get_duration
     from pipeline.comfyui import generate_music
     from pipeline.music_prompt import song_caption, sections
     from pipeline.worker_pool import WorkerPool
@@ -9774,9 +9833,13 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str,
         _film_checkpoint(task_id)
         jc = _film_job_config(wd)
         title = (jc.get("video_title") or jc.get("title") or wd.name).strip()
+        use_suno = gapp._norm_music_engine(music_engine) == "suno"
         # Duration of the narration video the music plays under; fall back to the
         # existing music length if combined.mp4 is missing.
-        music_dur = _get_duration(combined) if combined.exists() else _get_duration(music_path)
+        if use_suno and suno_options is not None and "duration" in suno_options.model_fields_set:
+            music_dur = suno_options.duration
+        else:
+            music_dur = _remix_music_duration(wd)
         # Like the Song tab, the clicked action chooses this generation's provider.
         cfg = gapp.load_config()
         # A song film re-sings its lyrics (stamped into job_config at render
@@ -9787,15 +9850,15 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str,
         except Exception:
             song = {}
         lyrics = lyrics or str(song.get("lyrics") or "")
-        if gapp._norm_music_engine(music_engine) == "suno":
+        if use_suno:
             from pipeline.suno_music import generate_suno_takes, list_suno_takes
             ss = gapp.style_settings(cfg, jc.get("style_name") or "")
+            options = {"title": title, "duration": music_dur, "caption": music_desc,
+                       "lyrics": lyrics, **_suno_style_options(ss)}
+            if suno_options is not None:
+                options.update(suno_options.model_dump(exclude_unset=True))
             _film_tasks[task_id] = {"status": "running", "step": "music"}
-            generate_suno_takes(
-                title, music_dur, work_dir=wd, caption=music_desc or None,
-                lyrics=lyrics or None, model=ss.get("suno_model") or "",
-                voice_id=ss.get("suno_voice_id") or "",
-                operation_id=task_id)
+            generate_suno_takes(work_dir=wd, operation_id=task_id, **options)
             _film_tasks[task_id] = {"status": "done", "imported_count": 0,
                                     "suno_takes": list_suno_takes(wd),
                                     "music_history": music_history.history(wd)}
@@ -9902,7 +9965,8 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
         "started_at": time.time(),
     }
     threading.Thread(
-        target=_run_music_regen, args=(tid, wd, body.music_desc or "", body.music_engine), daemon=True,
+        target=_run_music_regen, args=(tid, wd, body.music_desc or "", body.music_engine),
+        kwargs={"suno_options": body.suno_options}, daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
 
