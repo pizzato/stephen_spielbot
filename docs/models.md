@@ -577,10 +577,11 @@ Suno notes:
   from a Suno MCP connection in Codex; Spielbot keeps its own authorization.
 - Optional **Suno model** and **Suno singing voice** preferences are available per
   style under **Narrator & audio**, without selecting a default music provider.
-  They apply only to **Generate on Suno**. Blank selections use
+  They prefill the **Generate on Suno** dialog and can be overridden for each request. Blank selections use
   the account's default model and the model's own vocalist. The voice picker lists
   voices already available in Suno; create or clone voices in Suno itself.
-- **Generate on Suno** creates two songs and shows both as previews;
+- **Generate on Suno** opens the [generation settings](manual/script.md#song).
+  **Generate two takes** creates two songs and shows both as previews;
   open **Play on Suno** to listen before downloading. Choose
   **Use this take** to download and select that song. Only imported takes join the
   normal version strip. Unchosen takes remain in Suno.

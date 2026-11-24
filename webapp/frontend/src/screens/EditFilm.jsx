@@ -7,6 +7,7 @@ import {
 import { api, fileUrl } from '../api.js'
 import ScriptVisuals from './ScriptVisuals.jsx'
 import SunoTakes from './SunoTakes.jsx'
+import SunoGeneration from './SunoGeneration.jsx'
 import WorkingFiles from './WorkingFiles.jsx'
 import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines } from '../acted.jsx'
 
@@ -1284,10 +1285,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
   }
 
-  const regenMusic = async (musicEngine = 'minimax-music3') => {
+  const regenMusic = async (musicEngine = 'minimax-music3', sunoOptions) => {
     setMusicBusy(true); setMusicGenerationEngine(musicEngine); setError(''); setStatus('')
     try {
-      const { task_id } = await api.regenMusic({ work_dir: data.work_dir, music_desc: musicDesc, music_engine: musicEngine })
+      const { task_id } = await api.regenMusic({ work_dir: data.work_dir, music_desc: musicDesc,
+        music_engine: musicEngine, suno_options: sunoOptions })
       await new Promise((resolve, reject) => {
         const poll = setInterval(async () => {
           try {
@@ -1312,6 +1314,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
       if (musicEngine === 'suno') {
         await api.loadRemix(workDir).then((fresh) => setData((d) => ({ ...d, suno_takes: fresh.suno_takes }))).catch(() => {})
       }
+      return false
     } finally { setMusicBusy(false); setMusicGenerationEngine('') }
   }
 
@@ -1322,6 +1325,12 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
       if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
       if (t.music_history) setMusicHistory(t.music_history)
       if (t.suno_takes) setData((d) => ({ ...d, suno_takes: t.suno_takes }))
+      if (data.song) {
+        await api.loadRemix(workDir).then((fresh) => {
+          setData((d) => ({ ...d, song: fresh.song, suno_defaults: fresh.suno_defaults }))
+          setMusicDesc(fresh.music_desc)
+        }).catch(() => {})
+      }
       setStatus('Chosen Suno take imported and the film re-muxed with it.')
     } catch (e) { setError(e.message) }
     finally { setMusicBusy(false); setSunoImportId('') }
@@ -2473,9 +2482,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
           </div>
           <div className="mt-24 row center gap-10 row--wrap">
             <Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={() => regenMusic()}>{musicGenerationEngine === 'minimax-music3' ? 'Generating with MiniMax…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button>
-            <Button variant="ghost" icon="music" disabled={anyBusy} onClick={() => regenMusic('suno')}>
-              {musicGenerationEngine === 'suno' ? 'Generating on Suno…' : 'Generate on Suno'}
-            </Button>
+            <SunoGeneration key={workDir} defaults={data.suno_defaults} caption={musicDesc}
+              busy={musicGenerationEngine === 'suno'} disabled={anyBusy}
+              onGenerate={(options) => regenMusic('suno', options)} />
             {data?.song && (
               <>
                 <select className="select" style={{ maxWidth: 240 }} value={songVoice}
@@ -2491,7 +2500,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange, onScenesChanged,
             )}
           </div>
           <p className="muted" style={{ fontSize: 12.5 }}>
-            {data?.song ? 'Sing it again' : 'Regenerate music'} uses <strong>MiniMax Music 3</strong>, as does automatic generation. Generate on Suno creates two takes to preview; Use this take downloads only your chosen song and may spend one download credit, then updates the film with it.
+            {data?.song ? 'Sing it again' : 'Regenerate music'} uses <strong>MiniMax Music 3</strong>. Choose <strong>Generate on Suno</strong> to configure the request before creating two takes.
           </p>
           <SunoTakes takes={data.suno_takes} busy={anyBusy} importing={sunoImportId} onUse={importSunoTake} />
           {data?.song && (

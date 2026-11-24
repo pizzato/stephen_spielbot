@@ -346,9 +346,9 @@ To change the style of a script that has *not* rendered yet, use **Restyle** on 
 
 Edit the music prompt and **Regenerate music** to use **MiniMax Music 3** on a GPU
 worker and re-mux with your current levels. Every generated track is kept in a
-version strip. Choose the separate **Generate on Suno** action for two Suno previews
-without downloading or changing the film. You do not need to select a default
-provider in Settings. Open **Play on Suno** to listen there before choosing.
+version strip. **Generate on Suno** opens a dialog with the current music prompt,
+duration and style model. Review the settings and choose **Generate two takes**.
+Open **Play on Suno** to listen there before choosing.
 **Use this take** downloads only the chosen song, adds it to the version strip and
 re-muxes the film. The import may spend one download credit, separately from the
 generation charge. Already imported takes reuse their local file.
@@ -393,11 +393,11 @@ detailed Global Metadata and Arrangement sections and supplies the saved vocalis
 The expanded caption is kept for later takes. Voice and accent instructions still
 need a listening check; see the [Song tab](script.md#song).
 
-**Generate on Suno** shows both generated takes for preview; **Use this take**
-imports only your choice and updates the film. The
-style's optional **Suno model** and **Suno singing voice** preferences control that
-request. The voice picker selects voices already available in your Suno account; **Sing it as**
-below remains the separate library voice conversion operation.
+**Generate on Suno** opens the same [Suno settings](script.md#song) as the Song tab,
+with the film's current Sound and lyrics and the style's model and voice defaults.
+Choose a saved Suno Voice and adjust the generation controls before creating two
+previews. **Use this take** imports your choice and updates the film. **Sing it as**
+converts the existing take to a Spielbot library voice.
 
 *Sing it as* uses the style's **Singing voice conversion** engine: **SoulX-Singer SVC**
 by default, or **Seed-VC** selected under [Settings → Styles → Narrator & audio](settings.md#narrator-audio).

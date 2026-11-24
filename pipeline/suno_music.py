@@ -86,9 +86,11 @@ def _download(clip_id: str, target: Path, state: dict, state_path: Path,
     raise TimeoutError('Suno export is still processing. Retry to resume the existing songs.')
 
 
-def generate_suno_takes(title: str, duration: float, *, work_dir: Path,
+def generate_suno_takes(title: str, duration: float | None, *, work_dir: Path,
                         caption: str | None = None, lyrics: str | None = None,
                         model: str = '', voice_id: str = '',
+                        vocal_gender: str | None = None, max_mode: bool = False,
+                        negative_style: str = '', controls: dict | None = None,
                         operation_id: str | None = None) -> dict:
     """Generate two remote previews, without exporting either audio file.
 
@@ -99,16 +101,29 @@ def generate_suno_takes(title: str, duration: float, *, work_dir: Path,
     key = str(uuid.uuid5(uuid.NAMESPACE_URL, 'spielbot:suno:' + operation_id))
     folder = Path(work_dir) / 'suno_requests' / key
     state_path = folder / 'request.json'
+    has_lyrics = bool(lyrics and lyrics.strip())
     request = {'title': title, 'style': caption or 'cinematic instrumental',
-               'duration': float(duration), 'duration_guidance': True,
-               'instrumental': not bool(lyrics and lyrics.strip()),
+               'instrumental': not has_lyrics,
                'idempotency_key': key}
-    if lyrics and lyrics.strip():
+    if duration is not None and 15 <= round(duration) <= 360:
+        request.update(duration=round(duration), duration_guidance=True)
+    if has_lyrics:
         request['lyrics'] = lyrics
         if voice_id:
             request['voice_id'] = voice_id
+        elif vocal_gender:
+            request['vocal_gender'] = vocal_gender
     if model:
         request['model'] = model
+    if max_mode:
+        request['max_mode'] = True
+    if negative_style:
+        request['negative_style'] = negative_style
+    controls = {name: value for name, value in (controls or {}).items() if value is not None}
+    if not request.get('voice_id'):
+        controls.pop('audio_influence', None)
+    if controls:
+        request['controls'] = controls
     # A manual retry after losing audio-create's response must recover the
     # original key, even though the UI's new background task has a new ID.
     if not state_path.exists():

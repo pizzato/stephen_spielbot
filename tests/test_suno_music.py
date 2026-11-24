@@ -54,6 +54,30 @@ class SunoMusicTests(unittest.TestCase):
         self.assertEqual(self.calls[0][1]["voice_id"], "singing-voice")
         self.assertFalse((self.wd / "background_music.wav").exists())
 
+    def test_auto_duration_and_selected_suno_voice_send_only_applicable_options(self):
+        suno_music.generate_suno_takes(
+            'Test', None, work_dir=self.wd, lyrics='hello', caption='folk', voice_id='saved-voice',
+            vocal_gender='female', max_mode=True, negative_style='polka',
+            controls={'weirdness': 0, 'style_influence': 0.75, 'variety': 0, 'audio_influence': 0.9})
+        request = self.calls[0][1]
+        self.assertNotIn('duration', request)
+        self.assertNotIn('duration_guidance', request)
+        self.assertNotIn('vocal_gender', request)
+        self.assertTrue(request['max_mode'])
+        self.assertEqual(request['voice_id'], 'saved-voice')
+        self.assertEqual(request['negative_style'], 'polka')
+        self.assertEqual(request['controls'], {
+            'weirdness': 0, 'style_influence': 0.75, 'variety': 0, 'audio_influence': 0.9})
+
+    def test_custom_duration_and_vocal_gender_work_without_a_suno_voice(self):
+        self.generate(vocal_gender='female', controls={'audio_influence': 0.9})
+        request = self.calls[0][1]
+        self.assertIs(type(request['duration']), int)
+        self.assertEqual(request['duration'], 30)
+        self.assertEqual(request['vocal_gender'], 'female')
+        self.assertNotIn('max_mode', request)
+        self.assertNotIn('controls', request)
+
     def test_preview_works_with_zero_download_credits(self):
         suno_music.suno.account_usage.return_value = {"suno_account": {"download_credits_remaining": 0}}
         self.generate()

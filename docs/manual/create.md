@@ -163,8 +163,8 @@ Music videos only. Where the film's song comes from:
 
 - **Write it for me** — the default. The AI writes the song from the brief above and the
   [Song tab](script.md#song) offers **Generate** with MiniMax Music 3 or **Generate on
-  Suno** for that request. You audition the song before anything else is built; no
-  default music provider needs to be selected first.
+  Suno** to review the song, choose a Suno Voice and configure generation before
+  creating two takes. You audition the song before anything else is built.
 - **I have the song** — a **Song file** picker appears, and the song you upload becomes
   the film's soundtrack exactly as it is. Nothing is written and nothing is generated: no
   LLM, no music model. Use it for your own recording, or for a track this app generated
@@ -177,8 +177,8 @@ Music videos only. Where the film's song comes from:
 
 Music videos only. Who sings the film: the vocalist is described to the music model from
 this voice's gender, age and tone. This library selection describes the vocalist;
-Suno's separate **Suno singing voice** setting selects a voice available in your Suno
-account under **Settings → Styles → Narrator & audio**.
+the **Generate on Suno** dialog in the [Song tab](script.md#song) lets you choose a
+voice from your Suno account when generating.
 Left on **Automatically choose the singer**, news videos
 prefer their main available news character; other videos use the style's cast or let
 the songwriter define a vocalist when no cast is available. You

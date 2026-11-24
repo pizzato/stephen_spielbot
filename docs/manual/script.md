@@ -106,8 +106,8 @@ the format does to the render.
   everything is saved, unsaved edits included.
 - **Singing voice** — a library voice whose casting metadata (gender, age, tone)
   *replaces* the Vocalist description at generation. This library selection describes
-  the vocalist; Suno's separate **Suno singing voice** setting selects an available
-  voice in your Suno account. The library voice is also the target of the
+  the vocalist. **Generate on Suno** has its own picker for voices available in
+  your Suno account. The library voice is also the target of the
   re-voicing below, which is an actual clone. The story is drafted for the voice the track
   in use was sung as: the re-voicing when there is one, else this voice, else the Vocalist.
 - **Save edits** keeps your typing (**Discard edits** throws it away). The normal
@@ -125,16 +125,24 @@ the format does to the render.
   and they travel with the film
   so either side of a re-voicing can be
   [put back after the render](edit-film.md#a-song-films-song) too.
-- **Suno previews** — **Generate on Suno** shows both songs Suno creates without
-  downloading them. Choose **Play on Suno** to audition each take in Suno; the MCP
+- **Suno settings** — **Generate on Suno** opens a dialog with the title, current
+  Sound and lyrics, requested duration, and the style's model and voice defaults.
+  Choose from your own and liked Suno Voices. The dialog also offers Vocal gender,
+  Auto or Custom duration (15–360 seconds), Max Mode, Weirdness, Style influence,
+  Variety and Exclude styles. A selected Suno Voice supplies its own vocal gender
+  and unlocks Audio influence on eligible plans. Max Mode uses extra credits.
+  Dialog edits apply to that request. Choosing a take brings its lyrics and Sound
+  into the song.
+- **Suno previews** — **Generate two takes** spends generation credits and shows
+  both songs Suno creates. Choose **Play on Suno** to audition each take in Suno; the MCP
   service does not provide an embedded audio stream. **Use this take** imports only that song and
   selects it for the film; it then appears in the saved version strip. Importing
   can spend one download credit, separately from generation credits. Using an
   already imported take reuses its local file. Automatic music generation, including
   scoring during rendering, always uses MiniMax Music 3; it reuses a song you have
   already imported.
-  Sign in and check the balances under **Settings → Infrastructure → Music models**;
-  select the Suno model and singing voice under **Styles → Narrator & audio**.
+  Sign in and check the balances under **Settings → Infrastructure → Music models**.
+  Set reusable model and voice defaults under **Styles → Narrator & audio**.
   If generation takes longer than the app can wait, its saved song links still
   appear as **Still generating**. Open them on Suno to check progress. **Use this
   take** waits for the selected song to finish before importing it; you do not

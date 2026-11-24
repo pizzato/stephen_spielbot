@@ -76,9 +76,23 @@ class SunoBackendTests(unittest.TestCase):
             self.assertEqual(args[-1], requested.get('music_engine', 'minimax-music3'))
 
     def test_generation_worker_uses_action_choice(self):
+        options = backend.SunoGenerationOptions(model='v6-wild', duration=None, voice_id='voice-two')
         with mock.patch.object(backend, '_do_song_generate', return_value={'ok': True}) as generate:
-            backend._run_song_generate_task('explicit-suno', self.wd, music_engine='suno')
-        generate.assert_called_once_with(self.wd, 0.0, operation_id='explicit-suno', engine_override='suno')
+            backend._run_song_generate_task('explicit-suno', self.wd, music_engine='suno', suno_options=options)
+        generate.assert_called_once_with(self.wd, 0.0, operation_id='explicit-suno', engine_override='suno',
+                                         suno_options=options)
+
+    def test_song_request_options_override_style_defaults_for_this_request(self):
+        options = backend.SunoGenerationOptions(
+            title='New title', caption='rock', lyrics='Different words', voice_id='', model='', duration=None,
+            vocal_gender='female', max_mode=True, controls={'weirdness': 0.75, 'variety': 0})
+        with mock.patch.object(suno_music, 'generate_suno_takes', return_value={'suno_takes': []}) as generate:
+            backend._do_song_generate(self.wd, engine_override='suno', suno_options=options)
+        self.assertEqual(generate.call_args.kwargs, {
+            'title': 'New title', 'caption': 'rock', 'lyrics': 'Different words', 'voice_id': '', 'model': '',
+            'duration': None, 'vocal_gender': 'female', 'max_mode': True, 'controls': {'weirdness': 0.75, 'variety': 0},
+            'work_dir': self.wd, 'operation_id': None})
+        self.assertEqual(json.loads((self.wd / 'song.json').read_text())['caption'], 'folk')
 
     def test_invalid_provider_is_rejected_by_both_actions(self):
         from pydantic import ValidationError
@@ -150,12 +164,13 @@ class SunoBackendTests(unittest.TestCase):
     def test_status_exposes_balances_without_credentials(self):
         with mock.patch.object(suno, 'is_connected', return_value=True), \
              mock.patch.object(suno, 'account_usage', return_value={
-                 'allowed_models': ['v6-mini'], 'suno_account': {
+                 'allowed_models': ['v6-mini'], 'features': ['controls.advanced'], 'suno_account': {
                      'plan': {'name': 'Free'}, 'credits_remaining': 735,
                      'download_credits_remaining': 5}}):
             result = backend.suno_status()
         self.assertEqual(result['download_credits_remaining'], 5)
         self.assertEqual(result['allowed_models'], ['v6-mini'])
+        self.assertTrue(result['advanced_controls'])
         self.assertTrue(result['connected'])
 
     def test_voice_list_paginates_both_collections_and_deduplicates(self):
@@ -171,6 +186,7 @@ class SunoBackendTests(unittest.TestCase):
 
     def test_postrender_suno_regen_previews_without_remux_or_worker(self):
         (self.wd / 'combined.mp4').write_bytes(b'video')
+        options = backend.SunoGenerationOptions(voice_id='voice-two', duration=45, controls={'style_influence': 0})
         with mock.patch.object(backend, '_film_job_config', return_value=self.cfg), \
              mock.patch.object(backend, '_film_checkpoint'), \
              mock.patch.object(backend, '_record_film_task_activity'), \
@@ -179,9 +195,12 @@ class SunoBackendTests(unittest.TestCase):
              mock.patch.object(suno_music, 'list_suno_takes', return_value=[{'id': 'a'}]), \
              mock.patch.object(backend.gapp, '_preview_worker_urls', side_effect=AssertionError('No GPU')), \
              mock.patch.object(backend.gapp, 'on_remix', side_effect=AssertionError('No remux')):
-            backend._run_music_regen('suno-preview-test', self.wd, 'folk', music_engine='suno')
+            backend._run_music_regen('suno-preview-test', self.wd, 'folk', music_engine='suno', suno_options=options)
         self.assertEqual(backend._film_tasks['suno-preview-test']['status'], 'done')
         self.assertNotIn('take_count', generate.call_args.kwargs)
+        self.assertEqual(generate.call_args.kwargs['voice_id'], 'voice-two')
+        self.assertEqual(generate.call_args.kwargs['duration'], 45)
+        self.assertEqual(generate.call_args.kwargs['controls'], {'style_influence': 0})
         self.assertFalse((self.wd / 'background_music.wav').exists())
 
     def test_normal_remix_ignores_old_suno_job_config(self):

@@ -3225,7 +3225,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <div className="field__hint">Fixed for automatic songs and scoring during rendering. An already imported soundtrack is reused.</div>
               </div>
               <div className="field__hint">Generate uses MiniMax Music 3. Choose Generate on Suno in the Song tab or film editor when you want Suno; no default music model needs to be set.</div>
-              <Field label="Suno model (optional)" hint="Used only when you click Generate on Suno. Account default follows the models available to your connected Suno plan.">
+              <Field label="Suno model (optional)" hint="Prefills the Generate on Suno dialog. Account default follows the models available to your connected Suno plan.">
                 <select className="select" value={eff.suno_model || ''} onChange={(e) => setStyleField('suno_model', e.target.value)}>
                   <option value="">Account default</option>
                   {eff.suno_model && !(sunoAccount?.allowed_models || []).includes(eff.suno_model) && (
@@ -3236,7 +3236,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <ParentVal k="suno_model" />
                 {!sunoAccount?.connected && <div className="field__hint">Sign in to Suno under Infrastructure → Music models before generating.</div>}
               </Field>
-              <Field label="Suno singing voice (optional)" hint="Used only when you click Generate on Suno. Available voices depend on your account and plan. Library voice conversion is selected separately below.">
+              <Field label="Suno singing voice (optional)" hint="Prefills the voice picker in the Generate on Suno dialog. Library voice conversion is selected separately below.">
                 <select className="select" value={eff.suno_voice_id || ''} onChange={(e) => setStyleField('suno_voice_id', e.target.value)}>
                   <option value="">The model’s own vocalist</option>
                   {eff.suno_voice_id && !(sunoVoices?.voices || []).some((voice) => voice.id === eff.suno_voice_id) && (
