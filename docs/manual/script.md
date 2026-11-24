@@ -127,6 +127,9 @@ the format does to the render.
   [put back after the render](edit-film.md#a-song-films-song) too.
 - **Suno settings** — **Generate on Suno** opens a dialog with the title, current
   Sound and lyrics, requested duration, and the style's model and voice defaults.
+  If Sound exceeds 1,000 characters, the dialog prefills a shorter, editable
+  version. With the model's own vocalist, the Song tab includes the vocalist
+  description when space allows.
   Choose from your own and liked Suno Voices. The dialog also offers Vocal gender,
   Auto or Custom duration (15–360 seconds), Max Mode, Weirdness, Style influence,
   Variety and Exclude styles. A selected Suno Voice supplies its own vocal gender
@@ -136,7 +139,9 @@ the format does to the render.
 - **Suno previews** — **Generate two takes** spends generation credits and shows
   both songs. In Suno, Spielbot files them in the **Stephen Spielbot** workspace and
   the playlist named after the film's Style. Choose **Play on Suno** to audition each take; the MCP
-  service does not provide an embedded audio stream. **Use this take** imports only that song and
+  service does not provide an embedded audio stream. Open **Generate on Suno** again
+  after a completed batch to add another pair and keep the earlier previews.
+  **Use this take** imports only that song and
   selects it for the film. Downloading the chosen song also gives it a thumbs-up in Suno.
   The song then appears in the saved version strip. Importing
   can spend one download credit, separately from generation credits. Using an

@@ -3,6 +3,18 @@ import { api } from '../api.js'
 import { Button } from '../components.jsx'
 
 const VARIETY = ['Off', 'Normal', 'High', 'Extra', 'Max']
+const SOUND_LIMIT = 1000
+
+function sunoSound(caption) {
+  const sound = caption.trim()
+  if (sound.length <= SOUND_LIMIT) return sound
+
+  const summary = sound.match(/^(?:#{1,6}[ \t]+)?Global Metadata:?[ \t]*\r?\n([^\r\n]+)/i)?.[1].trim()
+  if (summary && summary.length <= SOUND_LIMIT) return summary
+
+  const prefix = (summary || sound).slice(0, SOUND_LIMIT)
+  return (prefix.replace(/\s+\S*$/, '') || prefix).replace(/[\uD800-\uDBFF]$/, '').trimEnd()
+}
 
 function Choice({ label, value, options, onChange, disabled }) {
   return (
@@ -35,8 +47,9 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
   const ref = useRef(null)
   const headingId = useId()
   const suggestedDuration = Math.round(defaults.duration)
+  const shortenedSound = caption.trim().length > SOUND_LIMIT
   const [form, setForm] = useState(() => previous || ({
-    ...defaults, caption, lyrics,
+    ...defaults, caption: sunoSound(caption), lyrics,
     durationMode: suggestedDuration >= 15 && suggestedDuration <= 360 ? 'custom' : 'auto',
     duration: suggestedDuration >= 15 && suggestedDuration <= 360 ? suggestedDuration : 60,
     max_mode: false, vocal_gender: '', negative_style: '',
@@ -74,7 +87,7 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
   const advanced = !!account?.advanced_controls
   const custom = form.durationMode === 'custom'
   const validDuration = !custom || (Number.isInteger(Number(form.duration)) && form.duration >= 15 && form.duration <= 360)
-  const validText = form.title.trim() && form.title.length <= 256 && form.caption.length <= 1000
+  const validText = form.title.trim() && form.title.length <= 256 && form.caption.length <= SOUND_LIMIT
     && (!hasVocals || (form.lyrics.trim() && form.lyrics.length <= 5000))
   const canGenerate = account?.connected && !unknownModel && (!hasVocals || (voiceList && !unknownVoice))
     && validDuration && validText
@@ -142,13 +155,13 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
             </label>}
           </div>
 
-          <details open={form.caption.length > 1000 || form.lyrics.length > 5000 || undefined}>
+          <details open={shortenedSound || form.lyrics.length > 5000 || undefined}>
             <summary>{hasVocals ? 'Sound and lyrics' : 'Sound'}</summary>
             <div className="suno-settings__text stack gap-12">
               <label className="field">
                 <span className="field__label">Sound</span>
-                <textarea className="textarea" rows={3} maxLength={1000} value={form.caption} onChange={change('caption')} />
-                {form.caption.length > 1000 && <span className="field__hint">Shorten the sound to 1,000 characters for Suno.</span>}
+                <textarea className="textarea" rows={3} maxLength={SOUND_LIMIT} value={form.caption} onChange={change('caption')} />
+                {shortenedSound && <span className="field__hint">Sound was shortened to fit Suno’s 1,000-character limit. You can edit it here.</span>}
               </label>
               {hasVocals && <label className="field">
                 <span className="field__label">Lyrics</span>

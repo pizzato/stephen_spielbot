@@ -73,6 +73,24 @@ class SunoMusicTests(unittest.TestCase):
         self.assertEqual(self._create_args()["voice_id"], "singing-voice")
         self.assertFalse((self.wd / "background_music.wav").exists())
 
+    def test_new_generation_with_same_settings_adds_a_second_pair(self):
+        self.generate()
+        self.clips = [{**clip, "id": clip["id"] + "-again"} for clip in self.clips]
+
+        def second_pair(name, args):
+            if name == "audio-create":
+                self.calls.append((name, args.copy()))
+                return {"clip_ids": [clip["id"] for clip in self.clips]}
+            return self._call(name, args)
+
+        self.call.side_effect = second_pair
+        suno_music.generate_suno_takes("Test", 30, work_dir=self.wd, caption="folk",
+                                      lyrics="[Verse]\nhello", operation_id="new-operation")
+        keys = [args["idempotency_key"] for name, args in self.calls if name == "audio-create"]
+        self.assertEqual(len(set(keys)), 2)
+        self.assertCountEqual([take["id"] for take in suno_music.list_suno_takes(self.wd)],
+                              ["one", "two", "one-again", "two-again"])
+
     def test_workspaces_and_style_playlists_are_created_when_missing(self):
         def missing_workspace(name, args):
             if name == "workspaces-list":
