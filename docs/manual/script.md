@@ -134,9 +134,11 @@ the format does to the render.
   Dialog edits apply to that request. Choosing a take brings its lyrics and Sound
   into the song.
 - **Suno previews** — **Generate two takes** spends generation credits and shows
-  both songs Suno creates. Choose **Play on Suno** to audition each take in Suno; the MCP
+  both songs. In Suno, Spielbot files them in the **Stephen Spielbot** workspace and
+  the playlist named after the film's Style. Choose **Play on Suno** to audition each take; the MCP
   service does not provide an embedded audio stream. **Use this take** imports only that song and
-  selects it for the film; it then appears in the saved version strip. Importing
+  selects it for the film. Downloading the chosen song also gives it a thumbs-up in Suno.
+  The song then appears in the saved version strip. Importing
   can spend one download credit, separately from generation credits. Using an
   already imported take reuses its local file. Automatic music generation, including
   scoring during rendering, always uses MiniMax Music 3; it reuses a song you have

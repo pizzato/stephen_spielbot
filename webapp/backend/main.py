@@ -3706,7 +3706,6 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
     vocal = (gapp.voice_descriptor(voices.get((data.get("voice") or "").strip()))
              or (data.get("vocalist") or "").strip())
     sound = (data.get("caption") or "").strip()
-    ss = gapp.style_settings(cfg, data.get("style_name") or "")
     # The action chooses the provider. Saved style defaults never send an
     # ordinary Generate click (or automation) to a credit-spending service.
     engine = "minimax-music3" if automatic else (engine_override or "minimax-music3")
@@ -3716,6 +3715,7 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
         if add_seconds:
             raise ValueError("Suno continuation is not available here; generate a new pair of takes instead.")
         from pipeline.suno_music import generate_suno_takes
+        ss = gapp.style_settings(cfg, data.get("style_name") or _read_create_brief(wd).get("style_name") or "")
         options = {"title": str(data.get("title") or wd.name), "duration": secs,
                    "caption": sound, "lyrics": data.get("lyrics") or "", **_suno_style_options(ss)}
         if suno_options is not None:
@@ -3726,7 +3726,10 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
             raise ValueError("Suno Sound is limited to 1,000 characters, including the vocalist description.")
         with _track_op("Singing the song", f"{int(secs)}s · Suno",
                        work_dir=str(wd), title=str(data.get("title") or wd.name), category="film"):
-            result = generate_suno_takes(work_dir=wd, operation_id=operation_id, **options)
+            style_name = ss.get("name")
+            result = generate_suno_takes(work_dir=wd, operation_id=operation_id,
+                                         style_name=None if style_name == gapp.NO_STYLE else style_name,
+                                         **options)
         return {"ok": True, "imported_count": 0, "suno_takes": result["suno_takes"]}
     urls = gapp._preview_worker_urls()
     if not urls:
@@ -9852,13 +9855,16 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str,
         lyrics = lyrics or str(song.get("lyrics") or "")
         if use_suno:
             from pipeline.suno_music import generate_suno_takes, list_suno_takes
-            ss = gapp.style_settings(cfg, jc.get("style_name") or "")
+            ss = gapp.style_settings(cfg, jc.get("style_name") or song.get("style_name") or "")
             options = {"title": title, "duration": music_dur, "caption": music_desc,
                        "lyrics": lyrics, **_suno_style_options(ss)}
             if suno_options is not None:
                 options.update(suno_options.model_dump(exclude_unset=True))
             _film_tasks[task_id] = {"status": "running", "step": "music"}
-            generate_suno_takes(work_dir=wd, operation_id=task_id, **options)
+            style_name = ss.get("name")
+            generate_suno_takes(work_dir=wd, operation_id=task_id,
+                                style_name=None if style_name == gapp.NO_STYLE else style_name,
+                                **options)
             _film_tasks[task_id] = {"status": "done", "imported_count": 0,
                                     "suno_takes": list_suno_takes(wd),
                                     "music_history": music_history.history(wd)}

@@ -186,7 +186,8 @@ or forward the callback port to it when signing in from another machine.
 
 **Generate on Suno** in the Song tab or film editor opens a settings dialog where
 you can select a Suno Voice and configure the generation. **Generate two takes**
-creates the previews. **Use this take** downloads only the chosen song. Suno generation is manual only;
+files both previews in the **Stephen Spielbot** workspace and the film's Style
+playlist in Suno. **Use this take** downloads and likes the chosen song. Suno generation is manual only;
 automatic music generation, including scoring during rendering, always uses MiniMax
 Music 3. An already imported soundtrack is reused.
 When Suno charges for downloads, importing a take can use one download credit,

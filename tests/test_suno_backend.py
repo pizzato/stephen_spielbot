@@ -14,7 +14,7 @@ class SunoBackendTests(unittest.TestCase):
         self.wd = Path(self.enterContext(tempfile.TemporaryDirectory()))
         (self.wd / 'song.json').write_text(json.dumps({
             'title': 'Test', 'seconds': 40, 'lyrics': '[Verse]\nhello', 'caption': 'folk'}))
-        self.cfg = {'music_engine': 'suno', 'suno_model': 'v6', 'suno_voice_id': 'voice-one'}
+        self.cfg = {'name': 'Folk Films', 'music_engine': 'suno', 'suno_model': 'v6', 'suno_voice_id': 'voice-one'}
         self.enterContext(mock.patch.object(backend.gapp, 'load_config', return_value=self.cfg))
         self.enterContext(mock.patch.object(backend.gapp, 'style_settings', return_value=self.cfg))
         self.enterContext(mock.patch.object(backend, '_persist_activity_log_locked'))
@@ -91,7 +91,7 @@ class SunoBackendTests(unittest.TestCase):
         self.assertEqual(generate.call_args.kwargs, {
             'title': 'New title', 'caption': 'rock', 'lyrics': 'Different words', 'voice_id': '', 'model': '',
             'duration': None, 'vocal_gender': 'female', 'max_mode': True, 'controls': {'weirdness': 0.75, 'variety': 0},
-            'work_dir': self.wd, 'operation_id': None})
+            'work_dir': self.wd, 'operation_id': None, 'style_name': 'Folk Films'})
         self.assertEqual(json.loads((self.wd / 'song.json').read_text())['caption'], 'folk')
 
     def test_invalid_provider_is_rejected_by_both_actions(self):
@@ -201,6 +201,7 @@ class SunoBackendTests(unittest.TestCase):
         self.assertEqual(generate.call_args.kwargs['voice_id'], 'voice-two')
         self.assertEqual(generate.call_args.kwargs['duration'], 45)
         self.assertEqual(generate.call_args.kwargs['controls'], {'style_influence': 0})
+        self.assertEqual(generate.call_args.kwargs['style_name'], 'Folk Films')
         self.assertFalse((self.wd / 'background_music.wav').exists())
 
     def test_normal_remix_ignores_old_suno_job_config(self):

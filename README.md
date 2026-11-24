@@ -34,7 +34,8 @@ An AI video generator that turns a topic into a fully produced short film — co
 then choose **Generate on Suno** in the Song tab or film editor to review the song,
 pick a saved Suno Voice, and set duration, Max Mode and other generation controls.
 The dialog starts with your song and any model or voice defaults from **Styles →
-Narrator & audio**. Suno previews both takes before you choose one to import. Automatic music
+Narrator & audio**. Spielbot files both takes in Suno's **Stephen Spielbot** workspace
+and the film's Style playlist. Importing a new take gives that song a thumbs-up in Suno. Automatic music
 generation, including scoring during rendering, always uses MiniMax Music 3; imported
 soundtracks are reused. Suno uses account generation
 and download entitlements, with usage rights subject to Suno's terms and your plan.
