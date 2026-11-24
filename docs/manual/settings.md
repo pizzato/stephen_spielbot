@@ -185,7 +185,9 @@ The callback returns to the controller's localhost: use a browser on the control
 or forward the callback port to it when signing in from another machine.
 
 **Generate on Suno** in the Song tab or film editor opens a settings dialog where
-you can select a Suno Voice and configure the generation. **Generate two takes**
+you can select a Suno Voice and configure the generation. Sound is prefilled with
+a shorter, editable version when the music prompt exceeds 1,000 characters.
+**Generate two takes**
 files both previews in the **Stephen Spielbot** workspace and the film's Style
 playlist in Suno. **Use this take** downloads and likes the chosen song. Suno generation is manual only;
 automatic music generation, including scoring during rendering, always uses MiniMax

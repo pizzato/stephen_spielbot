@@ -3721,9 +3721,11 @@ def _do_song_generate(wd: Path, add_seconds: float = 0.0, *,
         if suno_options is not None:
             options.update(suno_options.model_dump(exclude_unset=True))
         if suno_options is None or not options["voice_id"]:
-            options["caption"] = song_caption(options["caption"], vocal, engine)
+            with_vocal = song_caption(options["caption"], vocal, engine)
+            if suno_options is None or len(with_vocal) <= 1000:
+                options["caption"] = with_vocal
         if suno_options is not None and len(options["caption"]) > 1000:
-            raise ValueError("Suno Sound is limited to 1,000 characters, including the vocalist description.")
+            raise ValueError("Suno Sound is limited to 1,000 characters.")
         with _track_op("Singing the song", f"{int(secs)}s · Suno",
                        work_dir=str(wd), title=str(data.get("title") or wd.name), category="film"):
             style_name = ss.get("name")

@@ -94,6 +94,17 @@ class SunoBackendTests(unittest.TestCase):
             'work_dir': self.wd, 'operation_id': None, 'style_name': 'Folk Films'})
         self.assertEqual(json.loads((self.wd / 'song.json').read_text())['caption'], 'folk')
 
+    def test_suno_sound_at_limit_keeps_explicit_text_when_vocalist_wont_fit(self):
+        path = self.wd / 'song.json'
+        data = json.loads(path.read_text())
+        data['vocalist'] = 'A warm alto'
+        path.write_text(json.dumps(data))
+        caption = 'x' * 1000
+        options = backend.SunoGenerationOptions(caption=caption, voice_id='')
+        with mock.patch.object(suno_music, 'generate_suno_takes', return_value={'suno_takes': []}) as generate:
+            backend._do_song_generate(self.wd, engine_override='suno', suno_options=options)
+        self.assertEqual(generate.call_args.kwargs['caption'], caption)
+
     def test_invalid_provider_is_rejected_by_both_actions(self):
         from pydantic import ValidationError
         for body_type in (backend.SongGenerateBody, backend.MusicRegenBody):

@@ -280,8 +280,10 @@ restart audible, so keep song films short.
 **Suno** is the account-based alternative, connected under **Settings → Infrastructure
 → Music models** without music weights or a GPU worker. Choose **Generate on Suno**
 in the Song tab or film editor to choose a voice and configure that request.
+The dialog prefills a shorter, editable Sound for prompts over 1,000 characters.
 Optional per-style model and voice defaults prefill the dialog. **Generate two takes**
 files both songs in Suno's **Stephen Spielbot** workspace and the film's Style playlist.
+Repeat after a batch completes to add two more previews.
 **Play on Suno** opens each song to listen. **Use this take** downloads and gives
 your chosen song a thumbs-up in Suno. Automatic music generation,
 including scoring during rendering, always uses MiniMax Music 3; it reuses an
