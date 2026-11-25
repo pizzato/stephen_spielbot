@@ -10,6 +10,7 @@ import tempfile
 import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -105,10 +106,10 @@ def _detections(source: Path, count: int, detect, checkpoint: Callable) -> Itera
             yield result.boxes.xyxy.cpu().numpy()
 
 
-def _finish_track(boxes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _finish_track(boxes: np.ndarray, offscreen_frames: int = 0) -> tuple[np.ndarray, np.ndarray]:
     found = np.isfinite(boxes[:, 0])
     # Gaps are only used to smooth the crop. The composite never repairs a lost face.
-    if found.mean() < .85:
+    if found.sum() < .85 * (len(boxes) - offscreen_frames):
         raise Skipped("A face could not be tracked reliably through this scene.")
     frames = np.arange(len(boxes))
     for col in range(4):
@@ -140,11 +141,70 @@ def _track(detections: Iterator[np.ndarray], width: int, count: int) -> tuple[np
     return _finish_track(boxes)
 
 
+def _edge_distances(box: np.ndarray, width: int, height: int) -> np.ndarray:
+    return np.array([box[0], box[1], width - box[2], height - box[3]])
+
+
+def _return_edge(before: np.ndarray, after: np.ndarray, width: int, height: int) -> int | None:
+    # Coordinates within two pixels of a boundary include rounded detector boxes.
+    left = np.flatnonzero(_edge_distances(before, width, height) <= 2)
+    right = np.flatnonzero(_edge_distances(after, width, height) <= 2)
+    if len(left) != 1 or not np.array_equal(left, right):
+        return None
+    edge = int(left[0])
+    along = 1 - edge % 2
+    spans = np.array([b[along + 2] - b[along] for b in (before, after)])
+    centers = [(b[along + 2] + b[along]) / 2 for b in (before, after)]
+    if spans.min() < .75 * spans.max() or abs(centers[0] - centers[1]) > .25 * spans.min():
+        return None
+    return edge
+
+
+def _full_face(track: np.ndarray, frames: range, width: int, height: int) -> int | None:
+    for i in frames:
+        if not np.isfinite(track[i, 0]):
+            break
+        if np.all(_edge_distances(track[i], width, height) > 2):
+            return i
+    return None
+
+
+def _similar_faces(before: np.ndarray, after: np.ndarray) -> bool:
+    # Require both matching colour and spatial detail in the fully visible faces.
+    a, b = before.astype(float), after.astype(float)
+    if np.abs(a - b).mean() > 20:
+        return False
+    a -= a.mean(axis=(0, 1))
+    b -= b.mean(axis=(0, 1))
+    if min(a.std(), b.std()) < 8:
+        return False
+    return bool(np.sum(a * b) >= .90 * np.linalg.norm(a) * np.linalg.norm(b))
+
+
+def _match_face_frames(source: Path, before: int, first_box: np.ndarray, after: int, last_box: np.ndarray) -> bool:
+    import cv2
+
+    patches = []
+    with _capture(source) as capture:
+        for i, box in ((before, first_box), (after, last_box)):
+            if not capture.set(cv2.CAP_PROP_POS_FRAMES, i):
+                return False
+            frame = _read(capture)
+            x0, y0, x1, y1 = np.rint(box).astype(int)
+            crop = frame[y0:y1, x0:x1]
+            if not crop.size:
+                return False
+            patches.append(cv2.resize(crop, (24, 24), interpolation=cv2.INTER_AREA))
+    return _similar_faces(*patches)
+
+
 def _track_targets(
     detections: Iterator[np.ndarray], points: np.ndarray, width: int, count: int,
+    *, height: int | None = None, match_faces: Callable | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Follow each opening-frame point in image pixels, in assignment order."""
     boxes = np.full((len(points), count, 4), np.nan)
+    edge_gaps: list[list[tuple[int, int, int]]] = [[] for _ in points]
     last_seen = np.zeros(len(points), dtype=int)
     bystanders = np.empty((0, 4))
     for i, candidates in enumerate(detections):
@@ -162,11 +222,11 @@ def _track_targets(
                     continue
                 prior = boxes[t, last_seen[t]]
                 center = (prior[:2] + prior[2:]) / 2
-                height = prior[3] - prior[1]
+                face_height = prior[3] - prior[1]
                 distances = np.linalg.norm(centers - center, axis=1)
-                cost = distances + .25 * abs(sizes[:, 1] - height)
+                cost = distances + .25 * abs(sizes[:, 1] - face_height)
                 choice = int(np.argmin(cost))
-                if distances[choice] > min(max(width * .025, .55 * height), .9 * height):
+                if distances[choice] > min(max(width * .025, .55 * face_height), .9 * face_height):
                     continue
                 # A nearby face that belonged to a bystander on the previous frame
                 # must not take over a temporarily missing character's track.
@@ -175,7 +235,11 @@ def _track_targets(
                     if np.linalg.norm(other_centers - centers[choice], axis=1).min() <= distances[choice]:
                         continue
                 if i - last_seen[t] > 4:
-                    raise Skipped("A selected face disappeared for too long to identify it again reliably.")
+                    edge = _return_edge(prior, candidates[choice], width, height) if height is not None else None
+                    if edge is None or match_faces is None:
+                        raise Skipped("A selected face disappeared for too long to identify it again reliably.")
+                    # Provisional until the complete face becomes visible for an appearance check.
+                    edge_gaps[t].append((last_seen[t], i, edge))
             if choice in choices:
                 raise Skipped("Each character needs a different face that can be tracked separately.")
             # The feathered masks extend just beyond each box. Fail on a crossing
@@ -187,7 +251,23 @@ def _track_targets(
             boxes[t, i] = candidates[choice]
             last_seen[t] = i
         bystanders = candidates[[j for j in range(len(candidates)) if j not in choices]]
-    return [_finish_track(track) for track in boxes]
+    tracks = []
+    for track, gaps in zip(boxes, edge_gaps):
+        offscreen_frames = 0
+        for left, right, edge in gaps:
+            before = _full_face(track, range(left - 1, -1, -1), width, height)
+            after = _full_face(track, range(right + 1, count), width, height)
+            if before is None or after is None:
+                raise Skipped("The returning face was not fully visible on both sides of the gap.")
+            axis = edge % 2
+            extent = track[:, axis + 2] - track[:, axis]
+            # At departure and return the box must actually be clipped by that edge.
+            if (extent[left] > .80 * extent[before] or extent[right] > .80 * extent[after]
+                    or not match_faces(before, track[before], after, track[after])):
+                raise Skipped("The returning face could not be matched confidently to the selected character.")
+            offscreen_frames += right - left - 1
+        tracks.append(_finish_track(track, offscreen_frames))
+    return tracks
 
 
 def _smooth(values: np.ndarray, sigma: float) -> np.ndarray:
@@ -238,7 +318,7 @@ def _encoder(path: Path, width: int, height: int, pixel: str = "bgr24", crf: int
 
 
 def _prepare(source: Path, temp: Path, boxes: np.ndarray, crops: np.ndarray, length: int,
-             checkpoint: Callable) -> tuple[Path, Path]:
+             checkpoint: Callable, *, found: np.ndarray) -> tuple[Path, Path]:
     import cv2
 
     crop_file, mask_file = temp / "crop.mp4", temp / "mask.mp4"
@@ -257,6 +337,8 @@ def _prepare(source: Path, temp: Path, boxes: np.ndarray, crops: np.ndarray, len
             radius = np.hypot((xs - cx) / (fw * .57), (ys - cy - fh * .018) / (fh * .55))
             opacity = np.clip((1.12 - radius) / .34, 0, 1)
             mask = np.uint8(np.rint(opacity**2 * (3 - 2 * opacity) * 255))
+            if not found[i]:
+                mask.fill(0)
             crop_out.write(crop.tobytes())
             mask_out.write(mask.tobytes())
         # H3 accepts a restricted length grid. Hold the final image over model padding.
@@ -381,12 +463,13 @@ def repair_take(work_dir: Path, scene: dict, cfg: dict, pool, *, mode: str, sele
         if targets is None:
             tracks = [_track(detections, width, count)]
         else:
-            tracks = _track_targets(detections, points * [width, height], width, count)
+            tracks = _track_targets(detections, points * [width, height], width, count, height=height,
+                                   match_faces=partial(_match_face_frames, staged_source))
         plans = []
         for (boxes, found), reference in zip(tracks, references):
             crops, face_heights = _geometry(boxes, width, height)
             strengths = _blend_strength(face_heights, height, found, mode)
-            plans.append((reference, boxes, crops, strengths))
+            plans.append((reference, boxes, crops, strengths, found))
         if pool is None:
             raise RuntimeError("No ComfyUI workers are reachable for H3 face repair.")
         allowed = comfyui.h3_face_repair_workers(pool.urls)
@@ -397,10 +480,10 @@ def repair_take(work_dir: Path, scene: dict, cfg: dict, pool, *, mode: str, sele
         prompt = (f"{style[:1200]} Preserve the reference character, original art style, head motion, "
                   "eye direction, expression, and mouth movements.").strip()
         passes = []
-        for index, (reference, boxes, crops, strengths) in enumerate(plans):
+        for index, (reference, boxes, crops, strengths, found) in enumerate(plans):
             folder = temp / str(index)
             folder.mkdir()
-            crop, mask = _prepare(staged_source, folder, boxes, crops, length, checkpoint)
+            crop, mask = _prepare(staged_source, folder, boxes, crops, length, checkpoint, found=found)
             redraw = folder / "redraw.mp4"
             url = acquire(allowed) if acquire else pool.acquire(allowed=allowed)
             try:

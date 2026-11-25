@@ -621,6 +621,11 @@ marker, or choose **Clear marker** to leave their face untouched. Confirm your
 selection to create one take with all the marked faces. Each face uses its own
 character portrait or sheet and adds one H3 pass.
 
+If a marked character leaves the frame and comes back through the same edge,
+the tracker checks their position, size and appearance before resuming the repair.
+The frames while they are out of view keep the original footage for that character.
+If the tracker cannot confirm the returning face, it stops before saving a take.
+
 Face repair blends the tracked crops into the scene at the original dimensions
 and frame rate, and copies the source audio. Choose the **Repair** take in
 **Video takes** to use it, then select

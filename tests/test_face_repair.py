@@ -85,6 +85,127 @@ def test_unselected_bystander_cannot_inherit_a_missing_faces_track():
         face_repair._track_targets(frames, np.array([[45, 35]]), 100, 2)
 
 
+def test_automatic_tracker_still_requires_full_shot_coverage_after_an_edge_exit():
+    visible = np.array([[80, 20, 100, 50]])
+    offscreen = np.empty((0, 4))
+    frames = [visible] * 8 + [offscreen] * 8 + [visible] * 8
+    with pytest.raises(face_repair.Skipped, match="tracked reliably"):
+        face_repair._track(iter(frames), 100, len(frames))
+
+
+def _edge_sequence(exit_edge="right", return_edge="right"):
+    # One face stays visible while the second is clipped, leaves the shot for
+    # 28 frames, and gradually becomes fully visible again on re-entry.
+    foreground = [18, 70, 42, 102]
+    departure = list(range(110, 158, 2))
+    returning = list(reversed(departure))
+    frames = []
+    for edge, positions in ((exit_edge, departure), (None, [None] * 28), (return_edge, returning)):
+        for x in positions:
+            frame = [foreground]
+            if x is not None:
+                left, right = x, min(x + 20, 160)
+                if edge == "left":
+                    left, right = 160 - right, 160 - left
+                elif edge == "interior":
+                    left, right = x - 54, x - 34
+                frame.append([left, 21, right, 49])
+            frames.append(np.array(frame))
+    return frames
+
+
+def test_clicked_face_rejoins_at_same_edge_and_stays_unmasked_while_offscreen():
+    frames = _edge_sequence()
+    points = np.array([[30, 86], [120, 35]])
+    compared = []
+
+    def match(before, before_box, after, after_box):
+        compared.append((before, after))
+        assert before < 24 and after >= 52
+        for box in before_box, after_box:
+            assert box[2] - box[0] == 20
+        return True
+
+    foreground, returning = face_repair._track_targets(
+        iter(frames), points, 160, len(frames), height=128, match_faces=match)
+    assert foreground[1].all()
+    boxes, found = returning
+    assert compared
+    assert found[:24].all() and not found[24:52].any() and found[52:].all()
+    for i in np.flatnonzero(found):
+        np.testing.assert_equal(boxes[i], frames[i][1])
+
+
+@pytest.mark.parametrize(("exit_edge", "return_edge", "same_appearance"), [
+    ("right", "right", False),
+    ("interior", "interior", True),
+    ("right", "left", True),
+])
+def test_clicked_face_never_inherits_an_unverified_return(exit_edge, return_edge, same_appearance):
+    from unittest.mock import Mock
+
+    frames = _edge_sequence(exit_edge, return_edge)
+    point = np.array([[int(np.mean(frames[0][1, [0, 2]])), 35]])
+    match = Mock(return_value=same_appearance)
+    try:
+        [(_, found)] = face_repair._track_targets(
+            iter(frames), point, 160, len(frames), height=128, match_faces=match)
+    except face_repair.Skipped:
+        pass
+    else:
+        assert not found[24:].any()
+    if not same_appearance:
+        match.assert_called()
+
+
+def test_same_edge_bystander_cannot_inherit_returning_faces_track():
+    frames = _edge_sequence()
+    # An unselected face walks in from below the exit and takes up the
+    # missing face's old position, without ever leaving the picture itself.
+    for i, frame in enumerate(frames):
+        y = max(21, 96 - 3 * max(0, i - 35))
+        bystander = np.array([140, y, 160, y + 28])
+        if i >= 52:
+            frame = frame[:1]  # The original target stays offscreen.
+        frames[i] = np.vstack([frame, bystander])
+    try:
+        [(_, found)] = face_repair._track_targets(
+            iter(frames), np.array([[120, 35]]), 160, len(frames), height=128, match_faces=lambda *args: True)
+    except face_repair.Skipped:
+        return
+    assert not found[24:].any()
+
+
+def test_reentry_checks_the_appearance_of_the_face():
+    texture = np.random.default_rng(42).integers(0, 256, size=(24, 24, 3), dtype=np.uint8)
+    assert face_repair._similar_faces(texture, texture.copy())
+    assert not face_repair._similar_faces(texture, 255 - texture)
+
+
+def test_model_receives_blank_masks_for_missing_frames_and_padding(monkeypatch, tmp_path):
+    import sys
+    from contextlib import nullcontext
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    canvas = 16
+    monkeypatch.setattr(face_repair, "CANVAS", canvas)
+    # Encoding and resizing are incidental here. Keep the generated mask bytes.
+    frame = np.zeros((canvas, canvas, 3), dtype=np.uint8)
+    cv2 = SimpleNamespace(resize=lambda *args, **kwargs: frame, INTER_CUBIC=0)
+    monkeypatch.setitem(sys.modules, "cv2", cv2)
+    monkeypatch.setattr(face_repair, "_capture", lambda path: nullcontext(iter([frame] * 4)))
+    monkeypatch.setattr(face_repair, "_read", next)
+    streams = {"crop.mp4": BytesIO(), "mask.mp4": BytesIO()}
+    monkeypatch.setattr(face_repair, "_encoder", lambda path, *args, **kwargs: nullcontext(streams[path.name]))
+    boxes = np.tile([4, 4, 12, 12], (4, 1))
+    crops = np.tile([0, 0, canvas], (4, 1))
+    face_repair._prepare(tmp_path / "source.mp4", tmp_path, boxes, crops, 5, lambda: None,
+                         found=np.array([True, False, True, False]))
+    masks = np.frombuffer(streams["mask.mp4"].getvalue(), dtype=np.uint8).reshape(5, canvas, canvas)
+    assert np.any(masks, axis=(1, 2)).tolist() == [True, False, True, False, False]
+
+
 @pytest.mark.parametrize(("selected", "fail_second"), [
     (["Right"], False), (["Right", "Left"], False), (["Right", "Left"], True),
 ])
@@ -106,7 +227,7 @@ def test_targeted_repair_publishes_only_the_complete_take(tmp_path, monkeypatch,
     monkeypatch.setattr(face_repair.comfyui, "h3_face_repair_workers", lambda urls: urls)
     monkeypatch.setattr(face_repair, "_model_audio", lambda *args: None)
 
-    def prepare(staged, folder, boxes, crops, length, checkpoint):
+    def prepare(staged, folder, boxes, crops, length, checkpoint, *, found):
         assert staged.read_bytes() == b"original"
         (folder / "crop").write_text("Right" if boxes[0, 0] == right[0] else "Left")
         return folder / "crop", folder / "mask"
