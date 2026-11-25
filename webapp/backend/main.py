@@ -27,6 +27,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from contextlib import asynccontextmanager, contextmanager, nullcontext
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -16662,10 +16663,48 @@ def _reassemble_stale_finals() -> None:
             gapp.logger.warning("Auto-reassembly failed for %s: %s", wd.name, exc)
 
 
+class FaceTarget(BaseModel):
+    character: str = Field(min_length=1)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+
 class RerenderSceneBody(BaseModel):
     work_dir: str
-    component: str  # "narration", "image", "video", or "scene" (fresh frame + acted take)
+    component: str  # narration, image, video, scene (fresh frame + acted take), or face_repair
     instruction: str = ""   # optional "tell it how" steering (image/video re-render)
+    face_targets: list[FaceTarget] | None = Field(default=None, min_length=1, max_length=gapp._MAX_SCENE_REFERENCES)
+    source_token: str | None = None
+
+
+@api.get("/api/films/scenes/{scene_id}/face-repair-options")
+def film_face_repair_options(scene_id: int, work_dir: str = Query(...)) -> dict:
+    """Resolve the repair references and show the opening of the selected take."""
+    from pipeline import face_repair
+
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    source = wd / f"scene_{scene_id:02d}_final.mp4"
+    if not source.is_file():
+        raise HTTPException(400, "Render this scene before repairing its face.")
+    row = next((r for r in gapp._load_scenes_for_work_dir(wd)
+                if int(r.get("id") or r.get("scene_id") or 0) == scene_id), None)
+    if not row:
+        raise HTTPException(404, f"Scene {scene_id} not found.")
+    if video_history.current_is_face_repair(wd, scene_id, source):
+        raise HTTPException(400, "Choose an original take before running face repair again.")
+    token = face_repair.source_token(source)
+    cfg = {**gapp.load_config(), **_film_job_config(wd)}
+    characters = [c["name"] for c, _ in face_repair.reference_pairs(wd, row, cfg)]
+    frame_url = ""
+    if len(characters) > 1:
+        with tempfile.TemporaryDirectory(prefix="face-repair-preview-") as temp:
+            frame = _assembler.extract_first_frame(source, Path(temp) / "frame.jpg")
+            frame_url = "data:image/jpeg;base64," + base64.b64encode(frame.read_bytes()).decode("ascii")
+        if face_repair.source_token(source) != token:
+            raise HTTPException(409, "The selected take changed. Open Repair face again.")
+    return {"characters": characters, "source_token": token, "frame_url": frame_url}
 
 
 def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
@@ -17158,30 +17197,30 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
 
 def _repair_rendered_scene(task_id: str, wd: Path, row: dict, jc: dict, cfg: dict, pool,
-                           *, manual: bool = False) -> None:
+                           *, manual_options: dict | None = None) -> None:
     from pipeline import face_repair
 
     resolved = {**cfg, **jc}
     resolved["face_repair_mode"] = gapp.style_settings(
         cfg, jc.get("style_name") or "").get("face_repair_mode", "off")
-    if not manual and face_repair.scene_mode(row, resolved["face_repair_mode"]) == "off":
+    if manual_options is None and face_repair.scene_mode(row, resolved["face_repair_mode"]) == "off":
         return
     _film_tasks[task_id]["step"] = "face repair"
     options = {
         "acquire": lambda allowed: _acquire_render_worker(pool, task_id, allowed=allowed),
         "checkpoint": lambda: _film_checkpoint(task_id),
     }
-    if manual:
-        face_repair.repair_take(wd, row, resolved, pool, mode="on", select=False, **options)
+    if manual_options is not None:
+        face_repair.repair_take(wd, row, resolved, pool, mode="on", select=False, **options, **manual_options)
     else:
         face_repair.auto_repair_take(wd, row, resolved, pool, **options)
 
 
 def _run_face_repair(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
-                     instruction: str = "") -> None:
+                     instruction: str = "", *, repair: dict) -> None:
     try:
         _repair_rendered_scene(task_id, wd, row, jc, gapp.load_config(),
-                               _shared_edit_render_pool(), manual=True)
+                               _shared_edit_render_pool(), manual_options=repair)
         _film_tasks[task_id] = {"status": "done"}
     except Exception as exc:
         _finish_film_task_error(task_id, exc)
@@ -17232,11 +17271,13 @@ def _save_rerender_journal_locked(entries: list[dict]) -> None:
     tmp.replace(_RERENDER_JOURNAL_PATH)
 
 
-def _journal_rerender_add(tid: str, wd: Path, sid: int, component: str, instruction: str) -> None:
+def _journal_rerender_add(tid: str, wd: Path, sid: int, component: str, instruction: str,
+                          repair: dict | None = None) -> None:
     with _rerender_journal_lock:
         entries = [e for e in _load_rerender_journal() if e.get("task_id") != tid]
         entries.append({"task_id": tid, "work_dir": str(wd), "scene_id": sid,
                         "component": component, "instruction": instruction or "",
+                        **({"repair": repair} if repair else {}),
                         "created_at": time.time()})
         _save_rerender_journal_locked(entries)
 
@@ -17289,7 +17330,8 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
             )
 
 
-def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str = "") -> str:
+def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str = "",
+                          repair: dict | None = None) -> str:
     """Validate and dispatch one scene re-render worker thread; returns the task id.
 
     Shared by the endpoint and the startup requeue of journaled re-renders, so it
@@ -17320,10 +17362,15 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
     if not row:
         raise LookupError(f"Scene {sid} not found.")
     if component == "face_repair":
+        from pipeline import face_repair
+
         if _work_dir_render_active(wd):
             raise ValueError("Wait for the film render to finish before repairing a face.")
-        if not (wd / f"scene_{sid:02d}_final.mp4").is_file():
+        source = wd / f"scene_{sid:02d}_final.mp4"
+        if not source.is_file():
             raise ValueError("Render this scene before repairing its face.")
+        if repair and repair["source_token"] != face_repair.source_token(source):
+            raise ValueError("The selected take changed. Open Repair face again.")
 
     scene_meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     scene_mode = str((scene_meta or {}).get("mode") or "narration")
@@ -17385,7 +17432,7 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
     elif component == "scene":
         target = _run_scene_rerender
     elif component == "face_repair":
-        target = _run_face_repair
+        target = partial(_run_face_repair, repair=repair or {})
     elif performance_mode.renders_acted({"metadata": scene_meta},
                                         _acted_silent_cfg(jc)):
         # Acted scenes re-render whole: one H3 generation carrying its own
@@ -17397,7 +17444,7 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         target = _run_video_rerender
     # Persist the intent before the thread starts, so a restart in any window
     # of the render requeues it (_run_rerender_logged clears it when terminal).
-    _journal_rerender_add(tid, wd, sid, component, instruction)
+    _journal_rerender_add(tid, wd, sid, component, instruction, repair)
     threading.Thread(
         target=_run_rerender_logged,
         args=(target, tid, wd, sid, component, jc, row, instruction),
@@ -17411,8 +17458,15 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
+    repair = None
+    if body.face_targets is not None or body.source_token is not None:
+        if body.component != "face_repair" or not body.source_token:
+            raise HTTPException(400, "Choose face repair targets on the selected take.")
+        repair = {"source_token": body.source_token}
+        if body.face_targets:
+            repair["targets"] = [t.model_dump() for t in body.face_targets]
     try:
-        tid = _start_scene_rerender(wd, scene_id, body.component, body.instruction)
+        tid = _start_scene_rerender(wd, scene_id, body.component, body.instruction, repair)
     except LookupError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -17441,7 +17495,7 @@ def _resume_interrupted_rerenders() -> None:
             continue
         component = str(e.get("component") or "")
         try:
-            tid = _start_scene_rerender(wd, sid, component, str(e.get("instruction") or ""))
+            tid = _start_scene_rerender(wd, sid, component, str(e.get("instruction") or ""), e.get("repair"))
             gapp.logger.info("Requeued interrupted re-render %s (%s scene %s, %s)",
                              tid, wd.name, sid, component)
         except Exception as exc:

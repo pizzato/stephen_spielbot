@@ -612,10 +612,18 @@ after re-shoots, take picks, or reorders — re-mixing music only where the film
 
 ### H3 face repair
 
-Use **Repair face** on an existing scene to create an alternate take. It tracks the
-main face, redraws its crop with MiniMax H3 using the character’s portrait, and blends
-the crop into the scene at the original dimensions and frame rate. The source audio
-is copied. Choose the **Repair** take in **Video takes** to use it, then select
+Use **Repair face** on an existing scene to create an alternate take. Manual repair
+supports up to two matched character references. With one reference, it tracks
+the main face. With two, choose a character and click the centre of their face
+in the take’s opening frame. Repeat for the second character if you want to
+repair both faces. Click again to move the selected character’s
+marker, or choose **Clear marker** to leave their face untouched. Confirm your
+selection to create one take with all the marked faces. Each face uses its own
+character portrait or sheet and adds one H3 pass.
+
+Face repair blends the tracked crops into the scene at the original dimensions
+and frame rate, and copies the source audio. Choose the **Repair** take in
+**Video takes** to use it, then select
 **Reassemble film** or run the film upscale again. Review the eyes and mouth in
 motion, since the redraw may change an expression.
 
@@ -625,8 +633,9 @@ next video render. **Style default** follows Settings → Styles → Render qual
 1080p, scaled to the clip’s height. **On** checks every eligible shot. Both modes
 apply full repair at and below 110 px, fade through 180 px and keep larger faces.
 Automatic renders select a successful repaired take and retain the original in
-history. Scenes without a single matched character reference or a reliable track
-keep their original take.
+history. Both **Automatic** and **On** skip scenes with multiple matched character
+references. Use **Repair face** in the editor to mark faces in those scenes. Scenes
+with no matched reference or an unreliable track also keep their original take.
 
 On the controller, run `make install-face-repair` once. The first run downloads
 the small face detector. A ComfyUI worker needs the MiniMax H3 Ref2VA Turbo

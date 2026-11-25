@@ -9,6 +9,7 @@ import ScriptVisuals from './ScriptVisuals.jsx'
 import SunoTakes from './SunoTakes.jsx'
 import SunoGeneration from './SunoGeneration.jsx'
 import WorkingFiles from './WorkingFiles.jsx'
+import FaceRepairPicker from './FaceRepairPicker.jsx'
 import { CastMember, RefTile, SoundtrackSlice, StagingWarnings, SungLines } from '../acted.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -124,6 +125,7 @@ function SceneCard({
   const [trimErr, setTrimErr] = useState('')
   const [cont, setCont] = useState(false)
   const [contErr, setContErr] = useState('')
+  const [faceOptions, setFaceOptions] = useState(null)
   const pollRef = useRef(null)
   const resumedRef = useRef(null)
 
@@ -373,13 +375,12 @@ function SceneCard({
     }
   }
 
-  const rerender = async (component, instruction = '') => {
-    if (!await persist()) return
+  const queueRerender = async (component, instruction, repair) => {
     setBusy(component)
     setError('')
     onRerenderStart(component)
     try {
-      const r = await api.rerenderFilmScene(workDir, scene.id, component, instruction)
+      const r = await api.rerenderFilmScene(workDir, scene.id, component, instruction, repair)
       if (r.task_id) {
         startPolling(r.task_id)
       } else {
@@ -390,6 +391,31 @@ function SceneCard({
       setBusy('')
       setError(e.message)
       onRerenderDone()
+    }
+  }
+
+  const rerender = async (component, instruction = '') => {
+    if (await persist()) await queueRerender(component, instruction)
+  }
+
+  const openFaceRepair = async () => {
+    setBusy('face_options')
+    setError('')
+    try {
+      if (editing && !await persist()) { setBusy(''); return }
+      const options = await api.faceRepairOptions(workDir, scene.id)
+      if (!options.characters.length) {
+        throw new Error('Add an on-screen character with a reference portrait or sheet, then try Repair face again.')
+      }
+      if (options.characters.length === 1) {
+        await queueRerender('face_repair', '', { source_token: options.source_token })
+      } else {
+        setFaceOptions(options)
+        setBusy('')
+      }
+    } catch (e) {
+      setError(e.message)
+      setBusy('')
     }
   }
 
@@ -446,6 +472,13 @@ function SceneCard({
 
   return (
     <>
+      {faceOptions && (
+        <FaceRepairPicker options={faceOptions} onClose={() => setFaceOptions(null)}
+          onApply={(targets) => {
+            setFaceOptions(null)
+            queueRerender('face_repair', '', { face_targets: targets, source_token: faceOptions.source_token })
+          }} />
+      )}
       {inpaint && (
         <InpaintModal src={previewUrl} aspect={aspect} busy={busy === 'inpaint'} error={inpaintErr}
           onApply={applyInpaint} onClose={() => setInpaint(false)} />
@@ -821,9 +854,9 @@ function SceneCard({
                 <option value="auto">Automatic (small faces)</option>
                 <option value="on">On</option>
               </select>
-              <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !scene.has_final}
+              <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || selecting || !scene.has_final}
                 title="Create an alternate take from the current video"
-                onClick={() => rerender('face_repair')}>{busy === 'face_repair' ? 'Repairing…' : 'Repair face'}</Button>
+                onClick={openFaceRepair}>{busy === 'face_options' ? 'Checking faces…' : busy === 'face_repair' ? 'Repairing…' : 'Repair face'}</Button>
             </div>
 
             <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
