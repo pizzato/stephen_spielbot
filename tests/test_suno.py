@@ -92,6 +92,15 @@ class SunoTests(unittest.TestCase):
         nested = ExceptionGroup("HTTP secret", [ExceptionGroup("token", [suno.SunoError("Reconnect Suno.")])])
         self.assertEqual(str(suno._public_error(nested)), "Reconnect Suno.")
 
+    @unittest.skipUnless(SDK_AVAILABLE, "official MCP SDK not installed")
+    def test_nested_oauth_error_asks_for_sign_in_while_network_errors_offer_retry(self):
+        from mcp.client.auth.exceptions import OAuthTokenError
+
+        transport = ExceptionGroup("transport", [ConnectionError("private-url")])
+        failure = ExceptionGroup("request", [transport, OAuthTokenError("private-token")])
+        self.assertEqual(str(suno._public_error(failure)), "Suno needs you to sign in again.")
+        self.assertEqual(str(suno._public_error(transport)), "Could not reach Suno. Please try again.")
+
     def test_sdk_oauth_logs_strip_secret_bearing_exception_trace(self):
         record = logging.LogRecord("mcp.client.auth.oauth2", logging.ERROR, "", 0,
                                    "OAuth flow error", (), (RuntimeError, RuntimeError("token-secret"), None))

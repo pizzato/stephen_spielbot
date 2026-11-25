@@ -573,7 +573,8 @@ reused without generating another. Suno requires **Generate on Suno** followed b
 
 Suno notes:
 
-- Sign in inside Spielbot's Infrastructure settings. This is a separate connection
+- Sign in from **Generate on Suno** or under **Settings → Infrastructure →
+  Music models**. This is a separate connection
   from a Suno MCP connection in Codex; Spielbot keeps its own authorization.
 - Optional **Suno model** and **Suno singing voice** preferences are available per
   style under **Narrator & audio**, without selecting a default music provider.

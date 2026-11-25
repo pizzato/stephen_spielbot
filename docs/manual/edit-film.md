@@ -347,7 +347,9 @@ To change the style of a script that has *not* rendered yet, use **Restyle** on 
 Edit the music prompt and **Regenerate music** to use **MiniMax Music 3** on a GPU
 worker and re-mux with your current levels. Every generated track is kept in a
 version strip. **Generate on Suno** opens a dialog with the current music prompt,
-duration and style model. A prompt longer than 1,000 characters opens with a
+duration and style model. If the connection expires, choose **Sign in to Suno** in
+the dialog and complete authorization in your browser. Your edits stay in the dialog.
+A prompt longer than 1,000 characters opens with a
 shorter, editable Sound. **Generate two takes** files both songs in the
 **Stephen Spielbot** workspace and the film's Style playlist in Suno.
 Open **Generate on Suno** again after a completed batch to add another pair.

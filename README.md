@@ -29,10 +29,11 @@ An AI video generator that turns a topic into a fully produced short film — co
 6. **Music** — [MiniMax Music 3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) generates automatic background music from the LLM's mood description during rendering, under its community license, and the score is mixed in at the very end (switch it off per style or per film). The Song tab’s normal **Generate** action also uses MiniMax; **Generate on Suno** offers a connected Suno account for that request. The [**Music video** format](docs/performance_films.md#singing-films-the-music-video-format) goes further: the LLM writes the story as tagged lyrics, the music model **sings** them (a lead singer is cast from the style's character catalogue and the vocalist is described by sex, age and background; MiniMax expands short Sound briefs into detailed genre and arrangement instructions), and the cast performs the song on camera — or you upload a song you already have and the film is built around that instead. Re-voice either kind of song with a library voice using **SoulX-Singer SVC** (default) or **Seed-VC**, selected per style; both are installed by `make install`
 7. **Assembly** — Optional [H3 face repair](docs/manual/edit-film.md#h3-face-repair) redraws a tracked face from its character reference. Enable it by style or scene, or add a repaired take to an existing scene. FFmpeg mixes everything into a single video with synced audio. Films aimed at QHD/4K (or upscaled later from the film editor) go through [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) video super-resolution by default — see [upscaler modes](docs/models.md#upscaler-modes)
 
-**Suno** is also available through its official MCP connection: sign in under
-[Settings → Infrastructure → Music models](docs/manual/settings.md#music-models),
-then choose **Generate on Suno** in the Song tab or film editor to review the song,
-pick a saved Suno Voice, and set duration, Max Mode and other generation controls.
+**Suno** is also available through its official MCP connection. Choose **Generate
+on Suno** in the Song tab or film editor to review the song, pick a saved Suno
+Voice, and set duration, Max Mode and other generation controls. If Suno needs
+you to sign in again, choose **Sign in to Suno** in the dialog to keep your edits.
+You can also manage the connection under [Settings → Infrastructure → Music models](docs/manual/settings.md#music-models).
 The dialog starts with your song and any model or voice defaults from **Styles →
 Narrator & audio**. Spielbot files both takes in Suno's **Stephen Spielbot** workspace
 and the film's Style playlist. Importing a new take gives that song a thumbs-up in Suno. Automatic music

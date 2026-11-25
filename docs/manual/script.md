@@ -127,6 +127,9 @@ the format does to the render.
   [put back after the render](edit-film.md#a-song-films-song) too.
 - **Suno settings** — **Generate on Suno** opens a dialog with the title, current
   Sound and lyrics, requested duration, and the style's model and voice defaults.
+  If the connection expires, choose **Sign in to Suno** in the dialog and finish
+  authorizing in your browser. The dialog keeps your edits and enables **Generate
+  two takes** once you're connected and your settings are valid.
   If Sound exceeds 1,000 characters, the dialog prefills a shorter, editable
   version. With the model's own vocalist, the Song tab includes the vocalist
   description when space allows.
@@ -148,7 +151,7 @@ the format does to the render.
   already imported take reuses its local file. Automatic music generation, including
   scoring during rendering, always uses MiniMax Music 3; it reuses a song you have
   already imported.
-  Sign in and check the balances under **Settings → Infrastructure → Music models**.
+  You can also sign in and check your balances under **Settings → Infrastructure → Music models**.
   Set reusable model and voice defaults under **Styles → Narrator & audio**.
   If generation takes longer than the app can wait, its saved song links still
   appear as **Still generating**. Open them on Suno to check progress. **Use this

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Chip } from '../components.jsx'
 import { api } from '../api.js'
 
-export default function SunoConnection({ account, onChange }) {
+export default function SunoConnection({ account, onChange, inDialog = false }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const pending = account?.status === 'pending'
@@ -49,12 +49,14 @@ export default function SunoConnection({ account, onChange }) {
   }
 
   return (
-    <div className="stack gap-10" style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-      <div className="row center gap-8 row--wrap">
+    <div className="stack gap-10" style={inDialog ? undefined : { borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+      <div className="row center gap-8 row--wrap" role="status">
         <strong>Suno account</strong>
         {account?.connected && <Chip tone="ok" dot>{account.plan || 'Connected'}</Chip>}
         {!account && <span className="muted">Checking connection…</span>}
-        {account && !account.connected && <Chip tone="warn">{pending ? 'waiting for sign-in' : 'not connected'}</Chip>}
+        {account && !account.connected && <Chip tone="warn">
+          {pending ? 'Waiting for sign-in' : account.error ? 'Connection unavailable' : 'Sign-in required'}
+        </Chip>}
       </div>
       {account?.connected && (
         <div className="muted" style={{ fontSize: 12 }}>
@@ -81,9 +83,9 @@ export default function SunoConnection({ account, onChange }) {
         </div>
       )}
       {(error || account?.error) && <div role="alert" style={{ color: 'var(--danger)', fontSize: 12 }}>{error || account.error}</div>}
-      <div className="field__hint">
+      {!inDialog && <div className="field__hint">
         Suno runs in your account. Choose Generate on Suno in the Song tab or film editor to pick a voice and configure the request. Generate two takes uses generation credits. Importing your chosen take may use one download credit.
-      </div>
+      </div>}
     </div>
   )
 }
