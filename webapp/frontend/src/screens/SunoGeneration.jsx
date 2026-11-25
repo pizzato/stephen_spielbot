@@ -1,9 +1,14 @@
 import React, { useEffect, useId, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { Button } from '../components.jsx'
+import SunoConnection from './SunoConnection.jsx'
 
 const VARIETY = ['Off', 'Normal', 'High', 'Extra', 'Max']
 const SOUND_LIMIT = 1000
+
+function checkAccount() {
+  return api.sunoAuthStatus().catch((e) => ({ connected: false, error: e.message }))
+}
 
 function sunoSound(caption) {
   const sound = caption.trim()
@@ -45,6 +50,7 @@ function Slider({ label, value, onChange, disabled, choices }) {
 
 function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }) {
   const ref = useRef(null)
+  const bodyRef = useRef(null)
   const headingId = useId()
   const suggestedDuration = Math.round(defaults.duration)
   const shortenedSound = caption.trim().length > SOUND_LIMIT
@@ -57,6 +63,8 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
   }))
   const [account, setAccount] = useState(null)
   const [voiceList, setVoiceList] = useState(null)
+  const [checking, setChecking] = useState(false)
+  const connected = !!account?.connected
   const hasVocals = !!lyrics.trim()
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }))
   const change = (key) => (e) => set(key, e.target.value)
@@ -65,20 +73,27 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
     const dialog = ref.current
     dialog.showModal()
     let active = true
-    api.sunoStatus().then(async (result) => {
-      if (!active) return
-      setAccount(result)
-      if (result.connected && hasVocals) {
-        const voices = await api.sunoVoices()
-        if (active) setVoiceList(voices)
-      }
-    }).catch((e) => {
-      if (!active) return
-      setAccount((a) => a || { connected: false, error: e.message })
-      setVoiceList({ error: e.message })
-    })
+    checkAccount().then((result) => { if (active) setAccount(result) })
     return () => { active = false; dialog.close() }
-  }, [hasVocals])
+  }, [])
+
+  useEffect(() => {
+    setVoiceList(null)
+    if (!connected || !hasVocals) return
+    let active = true
+    async function loadVoices() {
+      const result = await api.sunoVoices().catch((e) => ({ available: false, voices: [], error: e.message }))
+      if (!active) return
+      if (result.available === false) {
+        const current = await checkAccount()
+        if (!active) return
+        if (!current.connected) setAccount(current)
+      }
+      setVoiceList(result)
+    }
+    loadVoices()
+    return () => { active = false }
+  }, [connected, hasVocals])
 
   const models = account?.allowed_models || []
   const voices = voiceList?.voices || []
@@ -92,9 +107,19 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
   const canGenerate = account?.connected && !unknownModel && (!hasVocals || (voiceList && !unknownVoice))
     && validDuration && validText
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault()
-    if (!canGenerate) return
+    if (!canGenerate || checking) return
+    setChecking(true)
+    const current = await checkAccount()
+    if (!ref.current?.open) return
+    setChecking(false)
+    setAccount(current)
+    if (!current.connected || (form.model && !current.allowed_models?.includes(form.model))
+        || advanced !== !!current.advanced_controls) {
+      bodyRef.current.scrollTop = 0
+      return
+    }
     const controls = { variety: form.variety }
     if (advanced) {
       controls.weirdness = form.weirdness / 100
@@ -120,11 +145,9 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
           <h2 id={headingId}>Generate on Suno</h2>
           {account?.connected && <span className="muted">{account.plan}</span>}
         </header>
-        <div className="suno-settings__body stack gap-12">
+        <div ref={bodyRef} className="suno-settings__body stack gap-12" inert={checking ? '' : undefined}>
           {!account && <div className="field__hint" role="status">Checking Suno account…</div>}
-          {account && !account.connected && <div className="field__hint" role="status">
-            {account.error || 'Sign in to Suno under Settings → Infrastructure → Music models.'}
-          </div>}
+          {account && !connected && <SunoConnection account={account} onChange={setAccount} inDialog />}
 
           <label className="field">
             <span className="field__label">Title</span>
@@ -142,7 +165,7 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
             </label>
             {hasVocals && <label className="field">
               <span className="field__label">Suno singing voice</span>
-              <select className="select" value={form.voice_id} onChange={change('voice_id')} disabled={!voiceList}>
+              <select className="select" value={form.voice_id} onChange={change('voice_id')} disabled={!connected || !voiceList}>
                 <option value="">Model’s own vocalist</option>
                 {unknownVoice && <option value={form.voice_id}>{form.voice_id} (saved)</option>}
                 {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
@@ -206,7 +229,9 @@ function SunoDialog({ defaults, caption, lyrics, previous, onClose, onGenerate }
           <span className="field__hint">Creates two takes using Suno credits.</span>
           <div className="row gap-8">
             <Button onClick={onClose}>Cancel</Button>
-            <Button variant="primary" type="submit" disabled={!canGenerate}>Generate two takes</Button>
+            <Button variant="primary" type="submit" disabled={!canGenerate || checking}>
+              {checking ? 'Checking Suno connection…' : 'Generate two takes'}
+            </Button>
           </div>
         </footer>
       </form>

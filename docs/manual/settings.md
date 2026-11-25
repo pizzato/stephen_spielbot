@@ -185,7 +185,8 @@ The callback returns to the controller's localhost: use a browser on the control
 or forward the callback port to it when signing in from another machine.
 
 **Generate on Suno** in the Song tab or film editor opens a settings dialog where
-you can select a Suno Voice and configure the generation. Sound is prefilled with
+you can sign in again if the connection expires, select a Suno Voice and
+configure the generation. Sound is prefilled with
 a shorter, editable version when the music prompt exceeds 1,000 characters.
 **Generate two takes**
 files both previews in the **Stephen Spielbot** workspace and the film's Style
@@ -416,8 +417,8 @@ Music generation has no default-provider picker. The [Song tab](script.md#song)
 uses **MiniMax Music 3** for its normal **Generate** action, with a separate
 **Generate on Suno** action for a Suno request. The film editor offers the same
 choice: **Regenerate music** / **Sing it again** uses MiniMax, while **Generate on
-Suno** creates previews. Download local weights or sign in to Suno under
-**Infrastructure → Music models**.
+Suno** creates previews. You can sign in directly from that dialog.
+**Infrastructure → Music models** also offers Suno sign-in and local weight downloads.
 
 The read-only **Automatic music: MiniMax Music 3** row is shown in both the style's
 audio settings and **Automation**. This engine is fixed for automatic songs and

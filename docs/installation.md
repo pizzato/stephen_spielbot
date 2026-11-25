@@ -127,15 +127,16 @@ installer asks, or set `INSTALL_SERVICE=1 make install` to install it without as
 ### Suno account connection
 
 Suno is an optional cloud music provider. It needs no music weights or GPU worker;
-the app's backend dependencies include its MCP client. Under **Settings →
-Infrastructure → Music models**, choose **Sign in to Suno** and complete the
-browser authorization. A free account can connect; the available models, voices,
-generation credits and download entitlements come from the account.
+the app's backend dependencies include its MCP client. Choose **Sign in to Suno**
+in the **Generate on Suno** dialog or under **Settings → Infrastructure → Music
+models**, then complete the browser authorization. A free account can connect.
+The available models, voices, generation credits and download entitlements come
+from the account.
 
 Spielbot has its own connection, separate from Codex's Suno MCP authorization.
 The callback returns to the controller's localhost, so complete sign-in in a
 browser on that machine or forward its callback port when using a remote browser.
-Then choose **Generate on Suno** in the Song tab or film editor to configure the
+The **Generate on Suno** dialog in the Song tab or film editor lets you configure the
 request, including a saved Suno Voice. Optional model and voice defaults are under
 **Styles → Narrator & audio**. See
 [Music models](manual/settings.md#music-models) for credits and take handling.

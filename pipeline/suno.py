@@ -180,7 +180,7 @@ async def _execute(name: str, arguments: dict, flow=None) -> dict:
 
     async def no_interaction(*args):
         storage._save({"tokens": {}, "expires_at": None})
-        raise SunoError("Reconnect Suno in Settings before generating music.")
+        raise SunoError("Sign in to Suno again before generating music.")
 
     storage = _Storage(flow.generation if flow else _generation, interactive=flow is not None)
     provider = _provider(
@@ -200,15 +200,15 @@ async def _execute(name: str, arguments: dict, flow=None) -> dict:
 def _public_error(error: Exception) -> SunoError:
     # Transport task groups wrap errors; never expose raw HTTP bodies, OAuth
     # callback parameters or validation errors (which may contain tokens).
-    if isinstance(error, SunoError):
-        return error
-    for child in getattr(error, "exceptions", ()):
-        safe = _public_error(child)
-        if isinstance(child, SunoError) or getattr(child, "exceptions", None):
-            return safe
-    if type(error).__name__ in ("OAuthFlowError", "OAuthTokenError"):
-        return SunoError("Suno sign-in expired or was declined. Reconnect Suno in Settings.")
-    return SunoError("Could not reach Suno. Please retry, or reconnect Suno in Settings.")
+    pending = [error]
+    while pending:
+        cause = pending.pop()
+        if isinstance(cause, SunoError):
+            return cause
+        if type(cause).__name__ in ("OAuthFlowError", "OAuthTokenError"):
+            return SunoError("Suno needs you to sign in again.")
+        pending.extend(reversed(getattr(cause, "exceptions", ())))
+    return SunoError("Could not reach Suno. Please try again.")
 
 
 def call_tool(name: str, arguments: dict) -> dict:
@@ -219,7 +219,7 @@ def call_tool(name: str, arguments: dict) -> dict:
     """
     with _call_lock:
         if not is_connected():
-            raise SunoError("Connect Suno in Settings before generating music.")
+            raise SunoError("Connect Suno before generating music.")
         try:
             return asyncio.run(_execute(name, arguments))
         except Exception as exc:
