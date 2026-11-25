@@ -875,10 +875,71 @@ class RerenderJournalTests(unittest.TestCase):
                                side_effect=lambda *a: started.append(a) or "tid-new"):
             backend._resume_interrupted_rerenders()
 
-        self.assertEqual(started, [(wd, 2, "video", "more dragons")])
+        self.assertEqual(started, [(wd, 2, "video", "more dragons", None)])
         # Old entries are consumed; the live requeue re-journals under its new
         # task id via the (mocked-out) dispatch.
         self.assertEqual(backend._load_rerender_journal(), [])
+
+    def test_face_targets_survive_a_restart_and_reject_a_changed_take(self):
+        from pipeline import face_repair
+
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        source = wd / "scene_15_final.mp4"
+        source.write_bytes(b"original")
+        token = face_repair.source_token(source)
+        row = {"id": 15, "metadata": {"cast": ["Amelia", "Claire"]}}
+        target = {"character": "Claire", "x": 0.76, "y": 0.30}
+        store = mock.Mock()
+        store.scene_rows.return_value = [row]
+        with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend, "_work_dir_render_active", return_value=False), \
+             mock.patch.object(backend.threading, "Thread") as thread:
+            body = backend.RerenderSceneBody(work_dir=str(wd), component="face_repair",
+                                            source_token=token, face_targets=[target])
+            backend.rerender_film_scene(15, body)
+            self.assertEqual(backend._load_rerender_journal()[0]["repair"],
+                             {"source_token": token, "targets": [target]})
+            backend._film_tasks.clear()  # A new process starts with an empty task registry.
+            backend._resume_interrupted_rerenders()
+            self.assertEqual(thread.call_count, 2)
+            worker, tid, _, _, _, jc, saved_row, instruction = thread.call_args.kwargs["args"]
+            with mock.patch.object(backend, "_shared_edit_render_pool"), \
+                 mock.patch.object(backend.gapp, "load_config", return_value={}), \
+                 mock.patch.object(face_repair, "repair_take") as repair:
+                worker(tid, wd, 15, jc, saved_row, instruction)
+                self.assertEqual(repair.call_args.kwargs["targets"], [target])
+                self.assertEqual(repair.call_args.kwargs["source_token"], token)
+                self.assertFalse(repair.call_args.kwargs["select"])
+            source.write_bytes(b"different take")
+            with self.assertRaisesRegex(backend.HTTPException, "selected take changed"):
+                backend.rerender_film_scene(15, body)
+            self.assertEqual(thread.call_count, 2)
+
+    def test_face_picker_uses_the_selected_video_and_skips_preview_for_one_reference(self):
+        from pipeline import face_repair
+
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        source = wd / "scene_15_final.mp4"
+        source.write_bytes(b"current video")
+
+        def write_frame(src, dest):
+            self.assertEqual(src, source)
+            dest.write_bytes(b"frame")
+            return dest
+
+        with mock.patch.object(backend.gapp, "_load_scenes_for_work_dir", return_value=[{"id": 15}]), \
+             mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(face_repair, "reference_pairs") as refs, \
+             mock.patch.object(backend._assembler, "extract_first_frame", side_effect=write_frame) as frame:
+            refs.return_value = [({"name": "Amelia"}, wd / "a.png")]
+            options = backend.film_face_repair_options(15, str(wd))
+            self.assertEqual(options, {"characters": ["Amelia"], "frame_url": "",
+                                       "source_token": face_repair.source_token(source)})
+            frame.assert_not_called()
+            refs.return_value += [({"name": "Claire"}, wd / "c.png")]
+            options = backend.film_face_repair_options(15, str(wd))
+            self.assertEqual(options["characters"], ["Amelia", "Claire"])
+            self.assertEqual(options["frame_url"], "data:image/jpeg;base64,ZnJhbWU=")
 
 
 if __name__ == "__main__":
